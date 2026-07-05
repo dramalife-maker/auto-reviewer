@@ -15,6 +15,8 @@ $REVIEWER_DATA_DIR/                   # 環境變數，例 /data/reviewer
 ├── reviewer.db                      # SQLite（設定、狀態、收件匣）
 ├── repos/                           # projects.repo_path 指向此下
 │   └── <slug>/
+├── runs/                            # headless manifest（spec §6.0）
+│   └── <run_id>/projects/<project_id>/manifest.json
 └── reports/
     └── <name>/                      # 通常 = projects.name
         └── <person>/                # 通常 = people.display_name
@@ -29,6 +31,7 @@ $REVIEWER_DATA_DIR/                   # 環境變數，例 /data/reviewer
 ```
 
 - **`REVIEWER_DATA_DIR`**：後端環境變數（spec §0、§9.0）。
+- **`APP_ROOT`**：部署根目錄（app repo）；headless workflow 位於 `$APP_ROOT/skills/`（spec §6.0、§9.4）。
 - **`repo_path`** 慣例：`$REVIEWER_DATA_DIR/repos/<slug>/`。
 - 週報與 1on1 長期檔以檔案為準；DB 以路徑引用週報。趨勢 API 讀檔，不查 trend 表。
 
@@ -99,7 +102,7 @@ CREATE TABLE projects (
 );
 ```
 
-> `repo_path` 為 skill 子行程 `cwd`；`glab` 於此目錄執行（spec §6.0）。
+> `repo_path` 為 headless 子行程 `cwd`；`glab` 於此目錄執行（spec §6.0）。
 
 ### 2.4 `participation` — 參與關係（物化）
 
@@ -248,13 +251,53 @@ CREATE INDEX idx_run_projects_run ON run_projects(run_id);
 > 執行面板 / 專案清單列的即時狀態由本表驅動（佇列中 / 分析中 / 完成 / 逾時跳過）。
 > 去重鎖（規格 §6.3）：插入前檢查同 `project_id` 是否已有 `state IN ('queued','running')` 的列。
 
+### 4.3 `manifest.json` — headless 執行契約（檔案，非 SQLite）
+
+後端在 spawn Claude 子行程**前**寫入；Claude 以 Read 讀取，作為本次 run 的唯一動態參數（spec §6.0）。
+
+**路徑**：
+
+```
+$REVIEWER_DATA_DIR/runs/<run_id>/projects/<project_id>/manifest.json
+```
+
+**週報（`mode: weekly_batch`）**：
+
+```json
+{
+  "mode": "weekly_batch",
+  "project_name": "game-backend",
+  "repo_path": "/data/reviewer/repos/game-backend",
+  "report_root": "/data/reviewer/reports/game-backend",
+  "run_date": "2026-07-05",
+  "since": "2026-06-28",
+  "output_contract": "output-contract.md"
+}
+```
+
+**MR 輪詢（`mode: mr_poll`）** 另含：
+
+| 欄位 | 說明 |
+|------|------|
+| `draft_dir` | MR 草稿落檔目錄（例 `runs/<run_id>/projects/<id>/drafts/`） |
+| `pending_dir` | 觀察片段根目錄（例 `reports/<name>/<person>/_pending/`） |
+| `reviewer_username` | GitLab 視角（例 `alice_w`） |
+| `since` | 可選；輪詢去重窗口 |
+
+**spawn 組裝**（後端實作；詳見 spec §6.0）：
+
+- `--append-system-prompt-file` → `$APP_ROOT/skills/<workflow>/WORKFLOW.md`（＋ `output-contract.md`）
+- `-p` → 短路徑，含 manifest 絕對路徑
+- `cwd` = `manifest.repo_path`
+- `--permission-mode dontAsk`、`--add-dir` 含 `REVIEWER_DATA_DIR` 與 `repo_path`
+
 ---
 
 ## 5. MR review 表（軌道 2）
 
 ### 5.1 `mr_reviews` — 收件匣草稿
 
-skill 產草稿檔，後端解析入庫；發佈時由後端代跑 `glab mr note`（人工按鈕觸發）。
+headless workflow 產草稿檔，後端解析入庫；發佈時由後端代跑 `glab mr note`（人工按鈕觸發）。
 
 ```sql
 CREATE TABLE mr_reviews (
@@ -291,15 +334,15 @@ CREATE INDEX idx_mr_reviews_inbox ON mr_reviews(status, created_at DESC)
 
 **可選快取（不落 SQLite）**：AI 重算的「長期觀察」可寫入 `reports/<name>/<person>/_cache/long_term.md`（spec §8 #4）。
 
-**skill 責任**：週報 / MR review 執行時維護 `index.md`、`YYYY-MM.md`（對齊既有 reviewer skill 輸出），後端只讀不寫（閉環標記除外）。
+**headless workflow 責任**：週報 / MR review 執行時維護 `index.md`、`YYYY-MM.md`（對齊既有 reviewer 輸出），後端只讀不寫（閉環標記除外）。
 
 ---
 
-## 7. summary.md 格式（skill 輸出 → API 渲染）
+## 7. summary.md 格式（workflow 輸出 → API 渲染）
 
-傾向（待決 #3）：**獨立 `summary.md`**。reviewer skill 對每位工程師每專案輸出；後端用 `pulldown-cmark` 轉 HTML / JSON 供前端。
+傾向（待決 #3）：**獨立 `summary.md`**。`reviewer-batch` workflow 對每位工程師每專案輸出；後端用 `pulldown-cmark` 轉 HTML / JSON 供前端。
 
-格式約定（供 skill 產出與後端解析一致）：
+格式約定（供 workflow 產出與後端解析一致）：
 
 ```markdown
 ---
@@ -325,9 +368,9 @@ commit_count: 42
 
 解析規則：
 - **frontmatter**（`---` 區塊）：抽 `person` / `project` / `date` / `one_line` / `mr_count` / `commit_count` → 寫入 `reports` 對應欄位。
-- **`## 待確認`** 下每個 `-` 項 → 一筆 `pending_items`（`raised_date` = frontmatter `date` 的 YYYY-MM）；skill 亦應寫入月檔 / `_notes.md` 供趨勢讀檔。
+- **`## 待確認`** 下每個 `-` 項 → 一筆 `pending_items`（`raised_date` = frontmatter `date` 的 YYYY-MM）；workflow 亦應寫入月檔 / `_notes.md` 供趨勢讀檔。
 - **`## 本週重點` / `## 成長面向`**：API 直接回傳 md 或渲染結果，不需入庫（內容已在 summary.md）。
-- heading 名稱為固定契約，skill 與後端都依賴；變更需同步雙方。
+- heading 名稱為固定契約，workflow 與後端都依賴；變更需同步雙方。
 
 > `report.md`（完整版）無格式約束，純供深讀；前端以「完整 md」連結由 API 提供 raw 內容。
 
@@ -340,19 +383,23 @@ commit_count: 42
 2. 對每個納入的專案：
    a. run_projects：插入（state='queued'）→ 去重鎖檢查
    b. 取得鎖 → state='running'
-   c. 跑 reviewer skill（cwd = projects.repo_path）
+   c. 寫 manifest.json → runs/<run_id>/projects/<project_id>/（§4.3）
+   d. spawn `claude` headless（spec §6.0）：
+      - cwd = projects.repo_path
+      - --append-system-prompt-file → $APP_ROOT/skills/reviewer-batch/...
+      - -p 含 manifest 路徑
       → 產出 reports/<name>/<person>/<date>/{report.md, summary.md}
-      → 更新 index.md / YYYY-MM.md 等（skill 寫檔；§0）
-   d. 解析每份 summary.md frontmatter + 區段：
+      → 更新 index.md / YYYY-MM.md 等（workflow 寫檔；§0）
+   e. 解析每份 summary.md frontmatter + 區段：
       - reports：upsert（UNIQUE project_id+person_id+report_date）
       - pending_items：新增 open 項（沿用未閉環的舊項則不重複）
       - 歸戶：author 命中 person_identities → person_id；未命中 → unmatched_authors
-   e. 重算 participation（該專案出現的 person_id 集合）
-   f. state='done' / 'skipped_timeout'（逾時）/ 'failed'
+   f. 重算 participation（該專案出現的 person_id 集合）
+   g. state='done' / 'skipped_timeout'（逾時）/ 'failed'
 3. runs：status='success'|'partial'|'failed'，補 finished_at / duration_sec / project_skipped
 ```
 
-**軌道 2（MR 輪詢）** 另起 `runs`（`trigger='mr_poll'`）或輕量紀錄；解析草稿 → `mr_reviews`；觀察片段 → `_pending/`。
+**軌道 2（MR 輪詢）**：manifest `mode=mr_poll`；載入 `skills/scan-mrs-headless/`；解析草稿 → `mr_reviews`；觀察片段 → `_pending/`。
 
 ---
 
@@ -451,4 +498,4 @@ projects:
 - 外鍵需啟用：連線時 `PRAGMA foreign_keys = ON;`。
 - 報告檔與 DB 分離：刪報告列不自動刪 md 檔（保留存檔）；如需清理另做維護工作。
 - 建議建立 `schema_version` 單列表，預留 migration。
-- skill 與後端**不共享 DB**；skill 只寫檔，後端讀檔 + 寫 SQLite（spec §6.0）。
+- headless workflow 與後端**不共享 DB**；workflow 只寫檔，後端寫 manifest + 讀檔 + 寫 SQLite（spec §6.0）。

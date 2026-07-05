@@ -3,7 +3,7 @@
 > 狀態：**設計階段**（尚未進 MVP）
 > 用途：作為後續 MVP 實作的依據，可直接餵給 Claude Code 當實作藍本。
 > 技術棧：**雲端集中式 web 服務**——Rust 後端（常駐服務）部署於雲端主機、瀏覽器前端；同機 clone 各專案 repo、預登入 `glab`/`claude` CLI；供多位主管共用。
-> 修訂：本版為雲端 web 服務（非桌面 app）；雙軌架構（1on1 週報 + MR review）；skill／後端邊界；**趨勢頁資料來源已定：讀既有 1on1 檔案**（`index.md` / `YYYY-MM.md`）。
+> 修訂：本版為雲端 web 服務（非桌面 app）；雙軌架構；skill／後端邊界；趨勢讀檔；**headless 執行已定：bundled prompt 檔 + manifest + `claude --append-system-prompt-file`**（不在雲端另外安裝 skill/plugin）。
 
 ---
 
@@ -29,7 +29,7 @@
 ### 部署形態
 - **後端**：Rust 常駐程序，部署於雲端主機（systemd / container），內建排程與 worker pool。
 - **前端**：瀏覽器 SPA，多位主管共用同一後端（認證機制 MVP 後再定，見 §8）。
-- **執行環境**：後端同機維護各專案 git clone 目錄；`glab` / `claude` CLI 預先於伺服器登入，skill 子行程在此環境執行。
+- **執行環境**：後端同機維護各專案 git clone；`glab` / `claude` CLI 預登入。**Workflow 規格**隨 app repo 部署（`skills/` 目錄內 markdown），**不在雲端另外安裝** Claude skill 或 plugin marketplace。
 - **資料**：設定與操作狀態存 SQLite（`reviewer.db`）；報告與**趨勢長期資料**以檔案為主。根目錄由環境變數 **`REVIEWER_DATA_DIR`** 指定（見 §9、schema §0）。
 
 ### 非目標（本階段明確排除）
@@ -200,14 +200,82 @@ Web 介面分為六個頁面。核心是「報告閱讀器」，MR review 收件
 
 ## 6. 執行模型
 
-### 6.0 skill／後端邊界原則（貫穿全案）
+### 6.0 skill／後端邊界與 headless 執行（已定）
 
-- **skill（`claude -p` 子行程跑的）只碰檔案**：讀 repo / MR，寫 `summary.md`、MR 草稿、觀察片段，以及對齊既有結構的 `index.md` / `YYYY-MM.md`。skill **不查 SQLite**（headless 下查庫不自然）。
-- **後端（Rust 常駐服務）獨佔 SQLite**（設定、執行狀態、收件匣、已讀、本週 pending），並**讀 skill 產的檔案**來渲染 API 與解析入庫。
-- **趨勢頁長期資料**：後端讀檔提供 API，**不**在 SQLite 累積 trend 快照（見 §2.6）。
-- **兩軌之間、skill 與後端之間的資料交換一律走檔案**，skill 不共享 DB。
+#### 邊界原則
 
-**執行機制**：後端以子行程呼叫 `claude -p "<觸發 skill 的 prompt>"`，`cwd` = `projects.repo_path`。`claude` / `glab` 須在伺服器 PATH 或後端設定指定。逾時對應 `schedule_config.per_project_timeout_sec`（§7.1）。
+- **Claude 子行程（headless）只碰檔案**：讀 repo / MR，寫 `summary.md`、MR 草稿、觀察片段，以及 `index.md` / `YYYY-MM.md`。**不查 SQLite**。
+- **後端（Rust）獨佔 SQLite**（設定、狀態、收件匣、已讀、本週 pending），並**讀子行程產出的檔案**解析入庫。
+- **趨勢頁長期資料**：後端讀檔提供 API，不在 SQLite 累積 trend 快照（§2.6）。
+- **資料交換一律走檔案**（manifest、reports、workflow 產出）；子行程不共享 DB。
+
+#### Workflow 來源（非雲端安裝 skill）
+
+Workflow 規格為 **app repo 內的 markdown 模組**（語意等同 skill，但不依賴 Claude Code 的 `/skill-name` 發現機制）：
+
+```
+$APP_ROOT/                          # auto-reviewer 部署根目錄
+└── skills/
+    ├── reviewer-batch/
+    │   ├── WORKFLOW.md             # 週報 headless 流程
+    │   └── output-contract.md      # summary.md 格式（對齊 schema §7）
+    └── scan-mrs-headless/
+        └── WORKFLOW.md             # MR review headless 流程（自 scan-mrs 摘出，見 §6.4）
+```
+
+雲端只需：部署 app、`claude` CLI + auth；**不需** `~/.claude/skills/` 或 plugin 另行安裝。
+
+#### 每次 run 的 manifest（後端寫、Claude 讀）
+
+後端在 spawn 前寫入 JSON manifest，作為**本次執行的唯一參數契約**：
+
+```
+$REVIEWER_DATA_DIR/runs/<run_id>/projects/<project_id>/manifest.json
+```
+
+範例（週報）：
+
+```json
+{
+  "mode": "weekly_batch",
+  "project_name": "game-backend",
+  "repo_path": "/data/reviewer/repos/game-backend",
+  "report_root": "/data/reviewer/reports/game-backend",
+  "run_date": "2026-07-05",
+  "since": "2026-06-28",
+  "output_contract": "output-contract.md"
+}
+```
+
+MR 輪詢另增欄位（`draft_dir`、`_pending_dir`、`reviewer_username` 等），詳見 schema §6。
+
+#### Claude 子行程組裝（已定）
+
+後端 spawn `claude`，**不 inline 整份 workflow**；以 CLI 傳檔 + 短路徑 prompt：
+
+```bash
+claude \
+  --bare \
+  --permission-mode dontAsk \
+  --allowedTools "Bash,Read,Glob,Grep,Write" \
+  --add-dir "$REVIEWER_DATA_DIR" \
+  --add-dir "$repo_path" \
+  --append-system-prompt-file "$APP_ROOT/skills/reviewer-batch/WORKFLOW.md" \
+  --append-system-prompt-file "$APP_ROOT/skills/reviewer-batch/output-contract.md" \
+  -p "Headless run. First Read manifest: $MANIFEST_PATH. Follow appended workflow. Non-interactive; do not ask questions. Write only under paths in manifest." \
+  --output-format stream-json \
+  --no-session-persistence
+```
+
+| 項目 | 約定 |
+|------|------|
+| `cwd` | `projects.repo_path`（git / glab 自然運作） |
+| Workflow | `--append-system-prompt-file` 指向 `$APP_ROOT/skills/...` |
+| 動態參數 | `-p` 只含 manifest **路徑**；Claude 以 Read 讀 manifest |
+| 互動 | `--permission-mode dontAsk`；逾時 kill 對應 `per_project_timeout_sec` |
+| 環境 | spawn 前 `unset CLAUDECODE`（允許巢狀子行程） |
+
+MR 軌道改載入 `skills/scan-mrs-headless/WORKFLOW.md`，manifest `mode` 為 `mr_poll`。
 
 ### 6.1 兩條軌道
 
@@ -215,7 +283,7 @@ Web 介面分為六個頁面。核心是「報告閱讀器」，MR review 收件
 |---|---|---|
 | 節奏 | 每週一次（`schedule_config`） | 輪詢（`mr_poll_interval_min`，預設 60 分鐘） |
 | 對象 | 專案 repo 的 commit | 伺服器 `glab` 抓待 review 的 MR |
-| skill | 新做 `reviewer-batch`（唯讀） | headless 改造 `cto:scan-mrs`（唯讀，見 §6.4） |
+| workflow | `skills/reviewer-batch/`（repo 內 bundled prompt） | `skills/scan-mrs-headless/`（repo 內，見 §6.4） |
 | 產出 | 結構化 `summary.md` → 閱讀器 | review 草稿 → 收件匣；觀察片段 → 打通週報 |
 | 副作用 | 無 | 唯讀；**發佈需人工按鈕** |
 
@@ -236,7 +304,7 @@ Web 介面分為六個頁面。核心是「報告閱讀器」，MR review 收件
 
 ### 6.4 軌道 2：MR review（headless 改造 scan-mrs）
 
-現有 `cto:scan-mrs` 是**互動式**（每步問確認）、**有副作用**（`glab mr note` 發佈、`glab mr merge`）、以「指派給我的 MR」為視角。後端無法直接無人值守跑它。做法：**拆出一個 headless 唯讀模式**，複用其高價值邏輯，砍掉互動與副作用。
+現有 `cto:scan-mrs` 是**互動式**、**有副作用**的 plugin skill。雲端**不部署該 plugin**；做法：將 headless 邏輯 **vendor 進** `$APP_ROOT/skills/scan-mrs-headless/WORKFLOW.md`（開發時以 `cto:scan-mrs` 為參考），砍掉互動與副作用。
 
 **保留（高價值）**：
 - **分輪判斷**（第一輪 / 第二輪）與**「無新動靜就跳過」的去重**——靠 GitLab notes 中 `By: AI Agent` 判斷。**此去重必須保留**，否則高頻輪詢每次重跑，token 燒穿。
@@ -322,6 +390,8 @@ $REVIEWER_DATA_DIR/                   # 例 /data/reviewer
 ├── reviewer.db                       # SQLite
 ├── repos/                            # projects.repo_path 指向此下
 │   └── <slug>/
+├── runs/                             # 執行 manifest（§6.0）
+│   └── <run_id>/projects/<project_id>/manifest.json
 └── reports/
     └── <name>/                       # 通常 = projects.name
         └── <person>/                 # 通常 = people.display_name
@@ -350,7 +420,7 @@ $REVIEWER_DATA_DIR/                   # 例 /data/reviewer
 
 - **commit / diff**：`projects.repo_path` 下的 git working copy。
 - **MR**：伺服器 `glab` CLI（`cwd` = `repo_path`）。
-- **本週報告 / 收件匣**：skill 落檔 → 後端解析入 **`reports`**、**`mr_reviews`**、**`pending_items`**。
+- **本週報告 / 收件匣**：headless workflow 落檔 → 後端解析入 **`reports`**、**`mr_reviews`**、**`pending_items`**。
 
 ### 9.3 MVP 設定檔（`projects.yaml`）
 
@@ -362,6 +432,20 @@ projects:
     repo_path: /data/reviewer/repos/game-backend
     git_remote_url: git@gitlab.example.com:team/game-backend.git  # 選填
 ```
+
+### 9.4 App 部署 bundle（`$APP_ROOT`）
+
+```
+$APP_ROOT/                            # auto-reviewer clone / container
+├── backend/
+├── frontend/
+├── skills/                           # headless workflow（§6.0）
+│   ├── reviewer-batch/
+│   └── scan-mrs-headless/
+└── projects.yaml                       # MVP 專案設定（§9.3）
+```
+
+環境變數：`REVIEWER_DATA_DIR`（資料）、`APP_ROOT`（部署根，預設 binary 所在 repo 根）。
 
 ---
 
