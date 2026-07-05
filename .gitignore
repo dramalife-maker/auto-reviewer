@@ -1,2 +1,7 @@
 .spectra/
 openspec/.vector-search.db*
+backend/target/
+crates/*/target/
+target/
+Cargo.lock
+.env

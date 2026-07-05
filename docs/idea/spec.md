@@ -30,7 +30,7 @@
 - **後端**：Rust 常駐程序，部署於雲端主機（systemd / container），內建排程與 worker pool。
 - **前端**：瀏覽器 SPA，多位主管共用同一後端（認證機制 MVP 後再定，見 §8）。
 - **執行環境**：後端同機維護各專案 git clone；`glab` / `claude` CLI 預登入。**Workflow 規格**隨 app repo 部署（`skills/` 目錄內 markdown），**不在雲端另外安裝** Claude skill 或 plugin marketplace。
-- **資料**：設定與操作狀態存 SQLite（`reviewer.db`）；報告與**趨勢長期資料**以檔案為主。根目錄由環境變數 **`REVIEWER_DATA_DIR`** 指定（見 §9、schema §0）。
+- **資料**：設定與操作狀態存 SQLite（`reviewer.db`）；報告與**趨勢長期資料**以檔案為主。根目錄由環境變數 **`DATA_ROOT_DIR`** 指定（見 §9、schema §0）。
 
 ### 非目標（本階段明確排除）
 - **不接 Telegram bot 雙向問答**：AI 主動向工程師發問澄清的比例低，投報率不高，且非同步狀態管理成本高。改以「待確認項目」標記，由管理者在 1on1 當面問。
@@ -163,7 +163,7 @@ Web 介面分為六個頁面。核心是「報告閱讀器」，MR review 收件
 欄位對應 **`projects` 表**（schema §2.3），UI 標籤如下：
 
 1. **專案名稱** → `name`：顯示用、報告閱讀器 Tab 名；亦作 `reports/<name>/` 目錄名。
-2. **`repo_path`**：伺服器上 git working copy 的絕對路徑。慣例：`$REVIEWER_DATA_DIR/repos/<slug>/`（例 `/data/reviewer/repos/game-backend`）。skill 子行程 `cwd` 設為此目錄；`glab` 於此執行。
+2. **`repo_path`**：伺服器上 git working copy 的絕對路徑。慣例：`$DATA_ROOT_DIR/repos/<slug>/`（例 `/data/reviewer/repos/game-backend`）。skill 子行程 `cwd` 設為此目錄；`glab` 於此執行。
 3. **`git_remote_url`**（選填）：Git remote URL；待決 #7 是否由後端自動 `clone` / `pull`。
    - 儲存後偵測：確認是 git repo（`is_git_repo`）、顯示 `default_branch`。
 4. **參與工程師**（唯讀）：由 `person_identities` 比對得出，對應 **`participation` 表**。
@@ -230,7 +230,7 @@ $APP_ROOT/                          # auto-reviewer 部署根目錄
 後端在 spawn 前寫入 JSON manifest，作為**本次執行的唯一參數契約**：
 
 ```
-$REVIEWER_DATA_DIR/runs/<run_id>/projects/<project_id>/manifest.json
+$DATA_ROOT_DIR/runs/<run_id>/projects/<project_id>/manifest.json
 ```
 
 範例（週報）：
@@ -258,7 +258,7 @@ claude \
   --bare \
   --permission-mode dontAsk \
   --allowedTools "Bash,Read,Glob,Grep,Write" \
-  --add-dir "$REVIEWER_DATA_DIR" \
+  --add-dir "$DATA_ROOT_DIR" \
   --add-dir "$repo_path" \
   --append-system-prompt-file "$APP_ROOT/skills/reviewer-batch/WORKFLOW.md" \
   --append-system-prompt-file "$APP_ROOT/skills/reviewer-batch/output-contract.md" \
@@ -317,7 +317,7 @@ MR 軌道改載入 `skills/scan-mrs-headless/WORKFLOW.md`，manifest `mode` 為 
 
 **產出（落檔）**：
 1. **MR 草稿** → 後端解析進 `mr_reviews`（收件匣）。管理者在 web 收件匣看過可**編輯 / 發佈（`glab mr note`）/ 忽略**；發佈才碰 GitLab。
-2. **觀察片段** → `$REVIEWER_DATA_DIR/reports/<name>/<person>/_pending/`（schema §0），供週報消費（§6.5）。
+2. **觀察片段** → `$DATA_ROOT_DIR/reports/<name>/<person>/_pending/`（schema §0），供週報消費（§6.5）。
 
 ### 6.5 兩軌打通（MR 觀察 → 週報）
 
@@ -383,10 +383,10 @@ MR 軌道改載入 `skills/scan-mrs-headless/WORKFLOW.md`，manifest `mode` 為 
 
 > 欄位與表結構詳見 **schema.md**；本節定義 spec 與 schema 共用的路徑與檔名約定。
 
-### 9.0 伺服器目錄（`REVIEWER_DATA_DIR`）
+### 9.0 伺服器目錄（`DATA_ROOT_DIR`）
 
 ```
-$REVIEWER_DATA_DIR/                   # 例 /data/reviewer
+$DATA_ROOT_DIR/                   # 例 /data/reviewer
 ├── reviewer.db                       # SQLite
 ├── repos/                            # projects.repo_path 指向此下
 │   └── <slug>/
@@ -445,7 +445,7 @@ $APP_ROOT/                            # auto-reviewer clone / container
 └── projects.yaml                       # MVP 專案設定（§9.3）
 ```
 
-環境變數：`REVIEWER_DATA_DIR`（資料）、`APP_ROOT`（部署根，預設 binary 所在 repo 根）。
+環境變數：`DATA_ROOT_DIR`（資料）、`APP_ROOT`（部署根，預設 binary 所在 repo 根）。
 
 ---
 
@@ -453,7 +453,7 @@ $APP_ROOT/                            # auto-reviewer clone / container
 
 | 階段 | 範圍 |
 |------|------|
-| **MVP** | Rust 後端 + 瀏覽器前端；報告閱讀器（本週）+ web 通知 + `projects.yaml`（`name` / `repo_path` / `git_remote_url`）+ `REVIEWER_DATA_DIR` + 後端排程 + 全部執行 |
+| **MVP** | Rust 後端 + 瀏覽器前端；報告閱讀器（本週）+ web 通知 + `projects.yaml`（`name` / `repo_path` / `git_remote_url`）+ `DATA_ROOT_DIR` + 後端排程 + 全部執行 |
 | **v2** | 專案 / 人員設定 UI（取代手編 yaml）+ identity 歸戶 + 單專案立即執行 + MR 收件匣 |
 | **v3** | 趨勢頁（讀檔：長期觀察 / 成長軌跡 / 歷史待確認）+ 排程 UI + 漏跑補償 + 控制台統計 + 多使用者認證 |
 

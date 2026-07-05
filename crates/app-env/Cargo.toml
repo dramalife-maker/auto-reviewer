@@ -1,0 +1,12 @@
+[package]
+name = "app-env"
+version = "0.1.0"
+edition = "2021"
+description = "Shared .env loading for local development (shell env takes precedence)"
+license = "MIT"
+
+[dependencies]
+dotenvy = "0.15"
+
+[dev-dependencies]
+tempfile = "3"

@@ -2,19 +2,19 @@
 
 ### Requirement: Server initializes data directory and database
 
-The backend SHALL read `REVIEWER_DATA_DIR` from the environment on startup. If the variable is unset, the process MUST exit with a non-zero status and emit an error message naming the variable.
+The backend SHALL read `DATA_ROOT_DIR` from the environment on startup. If the variable is unset, the process MUST exit with a non-zero status and emit an error message naming the variable.
 
-When `REVIEWER_DATA_DIR` is set, the server SHALL create the directory tree roots `repos/` and `reports/` if missing, open or create `reviewer.db` under that directory, run SQL migrations, and enable SQLite foreign keys.
+When `DATA_ROOT_DIR` is set, the server SHALL create the directory tree roots `repos/` and `reports/` if missing, open or create `reviewer.db` under that directory, run SQL migrations, and enable SQLite foreign keys.
 
 #### Scenario: Successful startup with valid data directory
 
-- **WHEN** the server starts with `REVIEWER_DATA_DIR=/data/reviewer` pointing to a writable path
+- **WHEN** the server starts with `DATA_ROOT_DIR=/data/reviewer` pointing to a writable path
 - **THEN** the server listens for HTTP requests and `reviewer.db` exists under `/data/reviewer`
 
 #### Scenario: Missing environment variable
 
-- **WHEN** the server starts without `REVIEWER_DATA_DIR`
-- **THEN** the process exits before binding a port and stderr contains `REVIEWER_DATA_DIR`
+- **WHEN** the server starts without `DATA_ROOT_DIR`
+- **THEN** the process exits before binding a port and stderr contains `DATA_ROOT_DIR`
 
 ### Requirement: Health endpoint reports readiness
 

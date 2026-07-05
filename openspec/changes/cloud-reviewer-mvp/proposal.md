@@ -4,7 +4,7 @@
 
 ## What Changes
 
-- 新增 Rust 常駐後端：SQLite 設定/狀態、`REVIEWER_DATA_DIR` 檔案布局、REST API。
+- 新增 Rust 常駐後端：SQLite 設定/狀態、`DATA_ROOT_DIR` 檔案布局、REST API。
 - 新增瀏覽器前端 SPA：本週報告閱讀器（選人 → 專案 Tab → 本週內容）。
 - 實作軌道 1 批次執行：後端以子行程呼叫 `claude -p` 跑 reviewer-batch，解析 `summary.md` 入庫。
 - 實作後端內建排程（`tokio-cron-scheduler`）與「全部執行」手動觸發。
@@ -16,7 +16,7 @@
 
 ### New Capabilities
 
-- `backend-foundation`：後端骨架、SQLite migration、`REVIEWER_DATA_DIR` 目錄初始化、健康檢查 API。
+- `backend-foundation`：後端骨架、SQLite migration、`DATA_ROOT_DIR` 目錄初始化、健康檢查 API。
 - `project-config`：載入 `projects.yaml` 至 `projects` 表、repo 路徑偵測（git / default_branch）。
 - `reviewer-execution`：runs / run_projects 佇列、worker pool、子行程執行 skill、解析 summary.md 寫入 reports / pending_items。
 - `scheduling`：`schedule_config` 單列設定、週報 cron、全部執行 API、逾時 skip。

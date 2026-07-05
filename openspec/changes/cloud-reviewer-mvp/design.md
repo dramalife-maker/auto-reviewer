@@ -1,6 +1,6 @@
 ## Context
 
-專案已有產品設計文件 `docs/idea/spec.md` 與資料 schema `docs/idea/schema.md`，定義雲端雙軌 1on1 reviewer（本 MVP 僅實作**軌道 1 週報**核心流程）。後端 Rust 常駐、SQLite + 檔案、`REVIEWER_DATA_DIR` 布局、skill 子行程邊界均已拍板。目前 repo 無應用程式碼，僅 Spectra / OpenSpec 脚手架。
+專案已有產品設計文件 `docs/idea/spec.md` 與資料 schema `docs/idea/schema.md`，定義雲端雙軌 1on1 reviewer（本 MVP 僅實作**軌道 1 週報**核心流程）。後端 Rust 常駐、SQLite + 檔案、`DATA_ROOT_DIR` 布局、skill 子行程邊界均已拍板。目前 repo 無應用程式碼，僅 Spectra / OpenSpec 脚手架。
 
 ## Goals / Non-Goals
 
@@ -54,9 +54,9 @@
 
 ### 後端啟動
 
-- **行為**：設定 `REVIEWER_DATA_DIR` 後，程序啟動 MUST 建立 `reviewer.db`、執行 migration、建立 `repos/` 與 `reports/` 根目錄（若不存在）。
+- **行為**：設定 `DATA_ROOT_DIR` 後，程序啟動 MUST 建立 `reviewer.db`、執行 migration、建立 `repos/` 與 `reports/` 根目錄（若不存在）。
 - **API**：`GET /health` 回 `{ "status": "ok", "data_dir": "<path>" }`。
-- **失敗**：`REVIEWER_DATA_DIR` 未設定 → 程序 exit code 非 0，stderr 訊息含變數名。
+- **失敗**：`DATA_ROOT_DIR` 未設定 → 程序 exit code 非 0，stderr 訊息含變數名。
 - **驗收**：`curl /health` 回 200；目錄存在。
 
 ### projects.yaml 載入
@@ -68,7 +68,7 @@
 ### 全部執行
 
 - **行為**：`POST /api/runs` body `{ "trigger": "manual_all" }` 建立 `runs` 列，對所有 `projects` 插入 `run_projects`（queued），worker 依 `max_concurrency` 執行；每專案 `cwd=repo_path` 執行 `claude -p "<固定 prompt 觸發 reviewer-batch>"`；逾時 `per_project_timeout_sec` kill 子行程。
-- **產出**：skill 寫入 `$REVIEWER_DATA_DIR/reports/<name>/<person>/<YYYY-MM-DD>/summary.md`；後端解析入 `reports`, `pending_items`。
+- **產出**：skill 寫入 `$DATA_ROOT_DIR/reports/<name>/<person>/<YYYY-MM-DD>/summary.md`；後端解析入 `reports`, `pending_items`。
 - **去重**：同 `project_id` 已有 `run_projects.state IN ('queued','running')` 時 MUST 拒絕重複排入（HTTP 409）。
 - **驗收**：mock 子行程或 fixture summary 檔；`GET /api/runs/:id` 顯示 `success|partial`；DB 有 report 列。
 
@@ -100,7 +100,7 @@
 
 ## Migration Plan
 
-1. 部署後端，設定 `REVIEWER_DATA_DIR`、準備 `projects.yaml` 與 git clone。
+1. 部署後端，設定 `DATA_ROOT_DIR`、準備 `projects.yaml` 與 git clone。
 2. 確認 `/health`。
 3. 手動 POST 全部執行驗證 pipeline。
 4. 部署 frontend static 至同域或 CORS 允許來源。

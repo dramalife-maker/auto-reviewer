@@ -33,7 +33,7 @@ On success, the worker MUST set `run_projects.state='done'` and record `duration
 
 ### Requirement: Summary files are parsed into reports and pending items
 
-After a successful project run, the backend SHALL scan `$REVIEWER_DATA_DIR/reports/<name>/<person>/<YYYY-MM-DD>/summary.md` files produced by the skill.
+After a successful project run, the backend SHALL scan `$DATA_ROOT_DIR/reports/<name>/<person>/<YYYY-MM-DD>/summary.md` files produced by the skill.
 
 For each summary file, the parser MUST read YAML frontmatter fields `person`, `project`, `date`, `one_line`, `mr_count`, `commit_count`, upsert `people` by `display_name`, upsert `reports` for `(project_id, person_id, report_date)`, and insert `pending_items` for each bullet under heading `## 待確認`.
 

@@ -1,14 +1,14 @@
 ## 1. 後端啟動與 Rust 後端框架選用 axum + sqlx + tokio（backend-foundation）
 
-- [ ] 1.1 【Requirement: Server initializes data directory and database】建立 `backend/`（axum + sqlx + tokio），未設定 `REVIEWER_DATA_DIR` 時非零 exit 且 stderr 含變數名 — 驗證：`cargo test startup_fails_without_data_dir`
-- [ ] 1.2 【Requirement: Server initializes data directory and database】migration 建立 MVP 表並啟用 foreign keys — 驗證：`cargo test migrations_apply_on_empty_db`
-- [ ] 1.3 【Requirement: Server initializes data directory and database】啟動時建立 `$REVIEWER_DATA_DIR/repos` 與 `reports` — 驗證：`cargo test data_dir_layout_created`
-- [ ] 1.4 【Requirement: Health endpoint reports readiness】實作 `GET /health` 回 `{ status: ok, data_dir }` — 驗證：`cargo test health_endpoint_returns_ok`
+- [x] 1.1 【Requirement: Server initializes data directory and database】建立 `backend/`（axum + sqlx + tokio），未設定 `DATA_ROOT_DIR` 時非零 exit 且 stderr 含變數名 — 驗證：`cargo test startup_fails_without_data_dir`
+- [x] 1.2 【Requirement: Server initializes data directory and database】migration 建立 MVP 表並啟用 foreign keys — 驗證：`cargo test migrations_apply_on_empty_db`
+- [x] 1.3 【Requirement: Server initializes data directory and database】啟動時建立 `$DATA_ROOT_DIR/repos` 與 `reports` — 驗證：`cargo test data_dir_layout_created`
+- [x] 1.4 【Requirement: Health endpoint reports readiness】實作 `GET /health` 回 `{ status: ok, data_dir }` — 驗證：`cargo test health_endpoint_returns_ok`
 
 ## 2. projects.yaml 載入（project-config）
 
-- [ ] 2.1 【Requirement: Projects load from YAML at startup】啟動讀取 `projects.yaml` 並 upsert `projects` — 驗證：`cargo test projects_yaml_loads_two_rows`
-- [ ] 2.2 【Requirement: Git repository detection updates project metadata】偵測 `repo_path` git 狀態寫入 `is_git_repo`/`default_branch` — 驗證：`cargo test git_detection_sets_default_branch`
+- [x] 2.1 【Requirement: Projects load from YAML at startup】啟動讀取 `projects.yaml` 並 upsert `projects` — 驗證：`cargo test projects_yaml_loads_two_rows`
+- [x] 2.2 【Requirement: Git repository detection updates project metadata】偵測 `repo_path` git 狀態寫入 `is_git_repo`/`default_branch` — 驗證：`cargo test git_detection_sets_default_branch`
 
 ## 3. reviewer-execution 執行引擎
 
@@ -36,6 +36,6 @@
 
 ## 7. 部署文件
 
-- [ ] 7.1 新增 `projects.yaml` 範例與 README（REVIEWER_DATA_DIR、claude CLI）— 驗證：依 README 啟動通過 `/health`
+- [ ] 7.1 新增 `projects.yaml` 範例與 README（DATA_ROOT_DIR、claude CLI）— 驗證：依 README 啟動通過 `/health`
 
 

@@ -1,0 +1,3 @@
+[workspace]
+members = ["backend", "crates/app-env"]
+resolver = "2"

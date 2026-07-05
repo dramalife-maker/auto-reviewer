@@ -1,0 +1,107 @@
+use std::process::Command;
+use std::sync::Mutex;
+
+use axum::body::Body;
+use http::{Request, StatusCode};
+use http_body_util::BodyExt;
+use reviewer_server::build_app;
+use reviewer_server::db::{foreign_keys_enabled, init_pool, table_exists};
+use serde_json::Value;
+use tower::ServiceExt;
+
+static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[test]
+fn startup_fails_without_data_dir() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let output = Command::new(env!("CARGO_BIN_EXE_reviewer-server"))
+        .env_remove("DATA_ROOT_DIR")
+        .output()
+        .expect("failed to run reviewer-server binary");
+
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit when DATA_ROOT_DIR is unset"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("DATA_ROOT_DIR"),
+        "stderr should mention DATA_ROOT_DIR, got: {stderr}"
+    );
+}
+
+#[tokio::test]
+async fn migrations_apply_on_empty_db() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pool = init_pool(temp.path())
+        .await
+        .expect("init pool on empty db");
+
+    assert!(
+        foreign_keys_enabled(&pool)
+            .await
+            .expect("foreign_keys pragma"),
+        "foreign keys should be enabled"
+    );
+
+    for table in [
+        "people",
+        "projects",
+        "schedule_config",
+        "reports",
+        "runs",
+        "run_projects",
+    ] {
+        assert!(
+            table_exists(&pool, table).await.expect("table_exists"),
+            "missing table {table}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn data_dir_layout_created() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    init_pool(temp.path())
+        .await
+        .expect("init pool creates layout");
+
+    assert!(temp.path().join("repos").is_dir());
+    assert!(temp.path().join("reports").is_dir());
+    assert!(temp.path().join("reviewer.db").is_file());
+}
+
+#[tokio::test]
+async fn health_endpoint_returns_ok() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::env::set_var("DATA_ROOT_DIR", temp.path());
+
+    let yaml_path = temp.path().join("projects.yaml");
+    std::fs::write(&yaml_path, "projects: []\n").expect("write yaml");
+    std::env::set_var("PROJECTS_CONFIG", &yaml_path);
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let json: Value = serde_json::from_slice(&body).expect("json body");
+    assert_eq!(json["status"], "ok");
+    assert_eq!(json["data_dir"], temp.path().display().to_string());
+}

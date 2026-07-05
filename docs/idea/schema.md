@@ -11,7 +11,7 @@
 ## 0. 儲存佈局
 
 ```
-$REVIEWER_DATA_DIR/                   # 環境變數，例 /data/reviewer
+$DATA_ROOT_DIR/                   # 環境變數，例 /data/reviewer
 ├── reviewer.db                      # SQLite（設定、狀態、收件匣）
 ├── repos/                           # projects.repo_path 指向此下
 │   └── <slug>/
@@ -30,9 +30,9 @@ $REVIEWER_DATA_DIR/                   # 環境變數，例 /data/reviewer
                 └── summary.md       # 本週 Tab（§7 格式）
 ```
 
-- **`REVIEWER_DATA_DIR`**：後端環境變數（spec §0、§9.0）。
+- **`DATA_ROOT_DIR`**：後端環境變數（spec §0、§9.0）。
 - **`APP_ROOT`**：部署根目錄（app repo）；headless workflow 位於 `$APP_ROOT/skills/`（spec §6.0、§9.4）。
-- **`repo_path`** 慣例：`$REVIEWER_DATA_DIR/repos/<slug>/`。
+- **`repo_path`** 慣例：`$DATA_ROOT_DIR/repos/<slug>/`。
 - 週報與 1on1 長期檔以檔案為準；DB 以路徑引用週報。趨勢 API 讀檔，不查 trend 表。
 
 ---
@@ -93,7 +93,7 @@ CREATE INDEX idx_identities_lookup ON person_identities(kind, value);
 CREATE TABLE projects (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     name           TEXT    NOT NULL UNIQUE,  -- 顯示名 / Tab 名；reports/<name>/ 目錄名
-    repo_path      TEXT    NOT NULL,         -- 伺服器 git working copy；慣例 $REVIEWER_DATA_DIR/repos/<slug>/
+    repo_path      TEXT    NOT NULL,         -- 伺服器 git working copy；慣例 $DATA_ROOT_DIR/repos/<slug>/
     git_remote_url TEXT,                     -- 選填；spec §8 #7 自動 clone / pull
     default_branch TEXT,                     -- 偵測得出，例 "main"
     is_git_repo    INTEGER NOT NULL DEFAULT 0, -- 路徑偵測結果（0/1）
@@ -166,7 +166,7 @@ CREATE TABLE reports (
     person_id      INTEGER NOT NULL REFERENCES people(id)   ON DELETE CASCADE,
     run_id         INTEGER REFERENCES runs(id) ON DELETE SET NULL,
     report_date    TEXT    NOT NULL,         -- YYYY-MM-DD，該批執行日期
-    report_md_path TEXT    NOT NULL,         -- $REVIEWER_DATA_DIR/reports/<name>/<person>/<date>/report.md
+    report_md_path TEXT    NOT NULL,         -- $DATA_ROOT_DIR/reports/<name>/<person>/<date>/report.md
     summary_md_path TEXT   NOT NULL,         -- 同目錄 summary.md
     one_line       TEXT,                     -- 總覽用「一句話摘要」（冗餘存 DB 便於列表查詢）
     mr_count       INTEGER,                  -- 該期 MR 數（僅顯示「6 MR」用，非趨勢指標）
@@ -258,7 +258,7 @@ CREATE INDEX idx_run_projects_run ON run_projects(run_id);
 **路徑**：
 
 ```
-$REVIEWER_DATA_DIR/runs/<run_id>/projects/<project_id>/manifest.json
+$DATA_ROOT_DIR/runs/<run_id>/projects/<project_id>/manifest.json
 ```
 
 **週報（`mode: weekly_batch`）**：
@@ -289,7 +289,7 @@ $REVIEWER_DATA_DIR/runs/<run_id>/projects/<project_id>/manifest.json
 - `--append-system-prompt-file` → `$APP_ROOT/skills/<workflow>/WORKFLOW.md`（＋ `output-contract.md`）
 - `-p` → 短路徑，含 manifest 絕對路徑
 - `cwd` = `manifest.repo_path`
-- `--permission-mode dontAsk`、`--add-dir` 含 `REVIEWER_DATA_DIR` 與 `repo_path`
+- `--permission-mode dontAsk`、`--add-dir` 含 `DATA_ROOT_DIR` 與 `repo_path`
 
 ---
 
@@ -452,7 +452,7 @@ SELECT MAX(started_at) AS last_run FROM runs WHERE trigger = 'schedule';
 -- 與 schedule_config 推算的「上次應執行時間」比較，若無對應紀錄則提示補跑
 ```
 
-**趨勢 Tab**：無固定 SQL；後端讀 `$REVIEWER_DATA_DIR/reports/<name>/<person>/` 下檔案組 API（§6，spec §2.6）。
+**趨勢 Tab**：無固定 SQL；後端讀 `$DATA_ROOT_DIR/reports/<name>/<person>/` 下檔案組 API（§6，spec §2.6）。
 
 ---
 
@@ -475,7 +475,7 @@ projects:
 
 | spec # | 議題 | 本 schema 的處理 |
 |--------|------|------------------|
-| — | 部署形態 | `REVIEWER_DATA_DIR` + `repo_path`；spec §0、§9.0 |
+| — | 部署形態 | `DATA_ROOT_DIR` + `repo_path`；spec §0、§9.0 |
 | 1 | 排程器 | `schedule_config` + 後端 cron；`runs.trigger='schedule'` |
 | 2 | 趨勢資料 | 讀檔 §0、§6；**無** trend 表 |
 
