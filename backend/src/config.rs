@@ -39,6 +39,12 @@ impl AppConfig {
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("projects.yaml"))
     }
+
+    pub fn app_root(&self) -> PathBuf {
+        std::env::var("APP_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default())
+    }
 }
 
 fn parse_port() -> Result<u16> {

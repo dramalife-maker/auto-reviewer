@@ -14,7 +14,9 @@ static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
 #[test]
 fn startup_fails_without_data_dir() {
     let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
     let output = Command::new(env!("CARGO_BIN_EXE_reviewer-server"))
+        .current_dir(temp.path())
         .env_remove("DATA_ROOT_DIR")
         .output()
         .expect("failed to run reviewer-server binary");

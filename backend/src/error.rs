@@ -10,6 +10,12 @@ pub enum Error {
     InvalidPort(String),
     #[error("projects config not found: {0}")]
     ProjectsConfigNotFound(String),
+    #[error("a project is already queued or running")]
+    RunConflict,
+    #[error("unsupported run trigger: {0}")]
+    UnsupportedRunTrigger(String),
+    #[error("failed to parse summary.md: {0}")]
+    SummaryParse(String),
     #[error(transparent)]
     Yaml(#[from] serde_yaml::Error),
     #[error(transparent)]

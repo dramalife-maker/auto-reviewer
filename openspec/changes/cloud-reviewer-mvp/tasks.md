@@ -12,9 +12,9 @@
 
 ## 3. reviewer-execution 執行引擎
 
-- [ ] 3.1 【Requirement: Manual batch run enqueues all projects】`POST /api/runs` manual_all 建立佇列；重複專案回 409 — 驗證：`cargo test manual_all_run_enqueues_projects` / `duplicate_project_run_returns_409`
-- [ ] 3.2 【Requirement: Worker executes reviewer skill subprocess per project】worker pool 執行 `claude -p`；逾時 kill 標 `skipped_timeout` — 驗證：`cargo test worker_marks_skipped_timeout`
-- [ ] 3.3 【Requirement: Summary files are parsed into reports and pending items】【summary.md 格式】【MVP 人員來源】解析 frontmatter 自動 upsert people、寫 reports/pending_items — 驗證：`cargo test summary_parser_creates_report_and_pending`
+- [x] 3.1 【Requirement: Manual batch run enqueues all projects】`POST /api/runs` manual_all 建立佇列；重複專案回 409 — 驗證：`cargo test manual_all_run_enqueues_projects` / `duplicate_project_run_returns_409`
+- [x] 3.2 【Requirement: Worker executes reviewer skill subprocess per project】worker pool 執行 `claude -p`；逾時 kill 標 `skipped_timeout` — 驗證：`cargo test worker_marks_skipped_timeout`
+- [x] 3.3 【Requirement: Summary files are parsed into reports and pending items】【summary.md 格式】【MVP 人員來源】解析 frontmatter 自動 upsert people、寫 reports/pending_items — 驗證：`cargo test summary_parser_creates_report_and_pending`
 
 ## 4. 排程實作（scheduling）
 

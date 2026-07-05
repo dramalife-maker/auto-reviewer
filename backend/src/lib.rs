@@ -1,9 +1,13 @@
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod executor;
 pub mod projects;
+pub mod runs;
 pub mod server;
 pub mod state;
+pub mod summary;
+pub mod worker;
 
 pub use error::{Error, Result};
 
@@ -19,7 +23,7 @@ pub async fn run() -> Result<()> {
 
     let config = config::AppConfig::from_env()?;
     let addr = config.listen_addr();
-    let state = init_app(config).await?;
+    let state = init_app(config, true).await?;
     let app = server::router(state);
 
     tracing::info!("listening on {addr}");
@@ -33,12 +37,23 @@ pub async fn build_app() -> Result<axum::Router> {
     app_env::load();
 
     let config = config::AppConfig::from_env()?;
-    let state = init_app(config).await?;
+    let state = init_app(config, false).await?;
     Ok(server::router(state))
 }
 
-async fn init_app(config: config::AppConfig) -> Result<state::AppState> {
+async fn init_app(config: config::AppConfig, start_worker: bool) -> Result<state::AppState> {
     let pool = db::init_pool(config.data_dir()).await?;
     projects::load_from_yaml(&pool, &config.projects_config_path()).await?;
-    Ok(state::AppState { config, pool })
+
+    let worker = if start_worker {
+        Some(worker::RunWorker::spawn(config.clone(), pool.clone()))
+    } else {
+        None
+    };
+
+    Ok(state::AppState {
+        config,
+        pool,
+        worker,
+    })
 }
