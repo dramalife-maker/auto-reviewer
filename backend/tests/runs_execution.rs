@@ -5,9 +5,11 @@ use http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use reviewer_server::build_app;
 use reviewer_server::db::init_pool;
+use reviewer_server::projects::load_from_yaml;
 use reviewer_server::runs;
 use reviewer_server::summary::{count_pending_for_person, count_reports_for_run, ingest_project_summaries, parse_summary_file};
-use reviewer_server::worker::process_run_project;
+use reviewer_server::worker::{process_run_project, resolve_working_dir};
+use reviewer_server::worktree::provision_all;
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -199,6 +201,71 @@ async fn worker_marks_skipped_timeout() {
     assert_eq!(state, "skipped_timeout");
 
     std::env::remove_var("REVIEWER_EXECUTOR");
+}
+
+fn init_source_repo(path: &std::path::Path) {
+    use std::process::Command;
+    std::fs::create_dir_all(path).expect("source dir");
+    let p = path.display().to_string();
+    for args in [
+        vec!["init", "-b", "main", &p],
+        vec!["-C", &p, "config", "user.email", "t@e.com"],
+        vec!["-C", &p, "config", "user.name", "T"],
+        vec!["-C", &p, "commit", "--allow-empty", "-m", "init"],
+    ] {
+        let out = Command::new("git").args(&args).output().expect("git");
+        assert!(out.status.success(), "git {args:?}");
+    }
+}
+
+#[tokio::test]
+async fn resolve_working_dir_returns_resident_worktree() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    std::env::remove_var("REVIEWER_EXECUTOR");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("source");
+    init_source_repo(&source);
+    let container = temp.path().join("repos/svc");
+    let container_display = container.display().to_string().replace('\\', "/");
+    let source_url = source.display().to_string().replace('\\', "/");
+
+    let yaml_path = temp.path().join("projects.yaml");
+    std::fs::write(
+        &yaml_path,
+        format!(
+            "projects:\n  - name: svc\n    repo_path: {container_display}\n    git_remote_url: {source_url}\n    default_branches:\n      - main\n"
+        ),
+    )
+    .expect("write yaml");
+
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let resolved = load_from_yaml(&pool, temp.path(), &yaml_path).await.expect("load");
+    provision_all(&pool, &resolved).await;
+
+    let project_id: i64 = sqlx::query_scalar("SELECT id FROM projects WHERE name = 'svc'")
+        .fetch_one(&pool)
+        .await
+        .expect("project id");
+    let job = runs::RunProjectRow {
+        id: 1,
+        run_id: 1,
+        project_id,
+        name: "svc".into(),
+        repo_path: container.display().to_string(),
+    };
+
+    let dir = resolve_working_dir(&pool, &job).await.expect("resolve dir");
+    assert_eq!(dir, container.join("main"), "resident worktree path");
+
+    // An unhealthy / unprovisioned project cannot supply a worktree.
+    let bad_job = runs::RunProjectRow {
+        id: 2,
+        run_id: 1,
+        project_id: 999,
+        name: "missing".into(),
+        repo_path: container.display().to_string(),
+    };
+    assert!(resolve_working_dir(&pool, &bad_job).await.is_err());
 }
 
 #[tokio::test]

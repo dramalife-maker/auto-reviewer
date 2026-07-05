@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
@@ -8,9 +9,10 @@ use crate::config::AppConfig;
 use crate::executor::{ExecuteOutcome, execute_weekly_batch};
 use crate::runs::{
     fetch_next_queued_run_project, finalize_run_if_complete, finish_run_project,
-    load_schedule_settings, mark_run_project_running,
+    load_schedule_settings, mark_run_project_running, RunProjectRow,
 };
 use crate::summary::ingest_project_summaries;
+use crate::worktree::{supply_worktree, WorktreeKind};
 
 #[derive(Clone)]
 pub struct RunWorker {
@@ -74,6 +76,33 @@ impl RunWorker {
     }
 }
 
+/// Resolve the working directory the reviewer subprocess runs in.
+///
+/// In test-executor mode the raw `repo_path` is used (no real tree needed).
+/// Otherwise the resident worktree of the project's first default branch is
+/// supplied (created / fetched / reset). An unhealthy project or a supply
+/// failure yields `Err(reason)` so the caller skips the subprocess.
+pub async fn resolve_working_dir(
+    pool: &SqlitePool,
+    job: &RunProjectRow,
+) -> Result<PathBuf, String> {
+    if std::env::var("REVIEWER_EXECUTOR").is_ok() {
+        return Ok(PathBuf::from(&job.repo_path));
+    }
+
+    let (is_git_repo, default_branch) = crate::projects::get_project(pool, &job.name)
+        .await
+        .map_err(|e| e.to_string())?;
+    if is_git_repo == 0 {
+        return Err("project is unhealthy or not provisioned".to_string());
+    }
+    let branch = default_branch.ok_or_else(|| "no default branch to review".to_string())?;
+
+    supply_worktree(std::path::Path::new(&job.repo_path), &branch, WorktreeKind::Resident)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 pub async fn process_run_project(
     pool: &SqlitePool,
     config: &AppConfig,
@@ -88,8 +117,18 @@ pub async fn process_run_project(
         repo_path: job.repo_path.clone(),
     };
 
+    let working_dir = match resolve_working_dir(pool, &job).await {
+        Ok(dir) => dir,
+        Err(reason) => {
+            finish_run_project(pool, job.id, "failed", 0, Some(&reason)).await?;
+            finalize_run_if_complete(pool, job.run_id).await?;
+            info!(run_id = job.run_id, project = %project.name, "run project skipped: {reason}");
+            return Ok(());
+        }
+    };
+
     let (outcome, duration_sec, error) =
-        execute_weekly_batch(config, job.run_id, &project, timeout_sec).await?;
+        execute_weekly_batch(config, job.run_id, &project, &working_dir, timeout_sec).await?;
 
     let state = match outcome {
         ExecuteOutcome::Success => {

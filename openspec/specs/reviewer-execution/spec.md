@@ -76,7 +76,9 @@ tests:
 ---
 ### Requirement: Worker executes reviewer skill subprocess per project
 
-For each dequeued project, the worker SHALL set subprocess working directory to `projects.repo_path`, execute `claude -p` with the configured reviewer-batch prompt, and enforce timeout using `schedule_config.per_project_timeout_sec`.
+For each dequeued project, the worker SHALL set the subprocess working directory to the target worktree path supplied by the `repo-worktree` capability — the resident worktree of the first `default_branches` entry for a weekly batch, or the merge-request worktree for an MR review — rather than to `projects.repo_path` directly. The worker SHALL execute `claude -p` with the configured reviewer-batch prompt and enforce timeout using `schedule_config.per_project_timeout_sec`.
+
+If the worktree cannot be supplied (for example, the branch was deleted on the remote or fetch failed after retries), the worker MUST NOT start the subprocess for that project and MUST record the failure without aborting remaining projects.
 
 On timeout, the worker MUST kill the subprocess, set `run_projects.state='skipped_timeout'`, and continue remaining projects.
 
@@ -92,58 +94,35 @@ On success, the worker MUST set `run_projects.state='done'` and record `duration
 - **WHEN** the subprocess runs longer than `per_project_timeout_sec`
 - **THEN** the subprocess is terminated and `run_projects.state` becomes `skipped_timeout`
 
+#### Scenario: Subprocess runs inside the supplied worktree
+
+- **WHEN** a project is dequeued and its target worktree path is supplied
+- **THEN** the subprocess working directory is that worktree path, not `projects.repo_path`
+
+#### Scenario: Unavailable worktree skips the subprocess
+
+- **WHEN** the target worktree cannot be supplied because the remote branch was deleted or fetch failed after retries
+- **THEN** the worker does not start the subprocess and records the failure while continuing remaining projects
+
 
 <!-- @trace
-source: cloud-reviewer-mvp
+source: repo-worktree-layout
 updated: 2026-07-05
 code:
-  - README.md
-  - backend/src/main.rs
-  - frontend/src/main.ts
-  - backend/src/server.rs
-  - backend/src/runs.rs
-  - crates/app-env/Cargo.toml
-  - backend/src/projects.rs
-  - frontend/src/types.ts
-  - frontend/src/app.ts
-  - backend/Cargo.toml
-  - docs/idea/schema.md
-  - Cargo.toml
-  - frontend/src/api.ts
-  - backend/migrations/001_initial.sql
-  - .env.example
-  - frontend/index.html
-  - backend/src/state.rs
-  - frontend/public/favicon.svg
-  - crates/app-env/src/lib.rs
-  - docs/idea/spec.md
-  - backend/src/reports.rs
-  - backend/src/schedule.rs
-  - frontend/src/assets/typescript.svg
-  - frontend/src/assets/hero.png
-  - skills/reviewer-batch/WORKFLOW.md
-  - backend/src/error.rs
-  - backend/src/lib.rs
-  - frontend/src/assets/vite.svg
-  - frontend/src/style.css
-  - frontend/vite.config.ts
-  - backend/src/executor.rs
-  - frontend/package.json
-  - backend/src/summary.rs
-  - projects.yaml
-  - frontend/public/icons.svg
-  - backend/src/db.rs
   - backend/src/worker.rs
-  - frontend/tsconfig.json
-  - skills/reviewer-batch/output-contract.md
-  - backend/src/config.rs
+  - backend/src/runs.rs
+  - backend/migrations/002_project_health.sql
+  - backend/src/lib.rs
+  - backend/src/executor.rs
+  - projects.yaml
+  - backend/src/projects.rs
+  - backend/src/worktree.rs
+  - .env.example
+  - README.md
 tests:
-  - backend/tests/fixtures/slow_executor.cmd
-  - backend/tests/runs_execution.rs
-  - backend/tests/scheduling.rs
   - backend/tests/project_config.rs
-  - backend/tests/foundation.rs
-  - backend/tests/report_reader.rs
+  - backend/tests/worktree.rs
+  - backend/tests/runs_execution.rs
 -->
 
 ---

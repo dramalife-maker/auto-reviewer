@@ -7,7 +7,7 @@
 - Rust（stable）與 Cargo
 - Node.js 20+（前端 build / dev）
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)（`claude` 已登入；實際批次執行時需要）
-- 各專案 git clone 已放在 `DATA_ROOT_DIR/repos/<project-name>/`
+- `git` 已在 PATH（後端啟動時會 bare clone 各專案並建立 worktree）
 
 ## 快速開始
 
@@ -31,21 +31,38 @@ copy .env.example .env
 | `PROJECTS_CONFIG` | `projects.yaml` 路徑，預設 repo 根目錄 |
 | `APP_ROOT` | 部署根目錄，預設為 process 工作目錄；headless workflow 在 `$APP_ROOT/skills/` |
 | `REVIEWER_EXECUTOR` | 測試用 mock 執行檔，取代 `claude` |
+| `REVIEWER_MIN_FREE_BYTES` | clone / worktree add 前要求的最小可用空間，預設 2GiB |
 
 ### 2. 專案設定
 
-編輯 repo 根目錄的 `projects.yaml`。`repo_path` 建議使用 **repo slug**（自動對應到 `$DATA_ROOT_DIR/repos/<slug>`）：
+編輯 repo 根目錄的 `projects.yaml`。每個 project 需填 `git_remote_url`（必填）與 `default_branches`（必填、非空）：
 
 ```yaml
 projects:
   - name: game-backend
-    repo_path: game-backend
+    repo_path: game-backend                 # → $DATA_ROOT_DIR/repos/game-backend
     git_remote_url: git@gitlab.example.com:team/game-backend.git
+    default_branches:
+      - main
   - name: web-portal
-    repo_path: test/web-portal   # → $DATA_ROOT_DIR/repos/test/web-portal
+    repo_path: test/web-portal
+    git_remote_url: git@gitlab.example.com:team/web-portal.git
+    default_branches:
+      - main
+      - develop
 ```
 
-解析規則：
+`repo_path` 是一個 **bare+worktree 容器目錄**，不是已 checkout 的工作副本。後端啟動時會在其中建立：
+
+```text
+$DATA_ROOT_DIR/repos/<repo_path>/
+  .bare/            # git clone --bare
+  .git              # 檔案，內容 gitdir: ./.bare
+  main/             # 常駐 worktree（每個 default_branches 一個）
+  <mr-branch>/      # MR review 時按需建立
+```
+
+`repo_path` 解析規則：
 
 | `repo_path` 寫法 | 實際目錄 |
 |------------------|----------|
@@ -54,7 +71,7 @@ projects:
 | `/srv/git/foo` | 絕對路徑，不變 |
 | `./custom/path` | 相對 process cwd，不變（相容舊寫法） |
 
-請將 git clone 放在解析後的目錄下。
+無需手動 clone；後端會 provision。若 project 缺 `git_remote_url`、`default_branches` 為空、clone 失敗或磁碟不足，該 project 會被標記 **unhealthy**（`is_git_repo=0`、記錄原因）並隔離，不影響其他 project、也不會使啟動失敗。
 
 ### 3. 啟動後端
 
@@ -114,7 +131,7 @@ claude --bare ... --append-system-prompt-file $APP_ROOT/skills/reviewer-batch/WO
 
 1. `claude` 已在 PATH 且已 auth
 2. 從 repo 根目錄啟動後端（或設定 `APP_ROOT` 指向含 `skills/` 的目錄）
-3. 各專案 `repo_path` 為有效 git 目錄
+3. 各專案 `git_remote_url` 可達，且啟動時已成功 provision（`is_git_repo=1`）
 
 本地測試 pipeline 時可設 `REVIEWER_EXECUTOR` 指向 mock script，無需真實 `claude`。
 

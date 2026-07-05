@@ -1,10 +1,4 @@
-# project-config Specification
-
-## Purpose
-
-TBD - created by archiving change 'cloud-reviewer-mvp'. Update Purpose after archive.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Projects load from YAML at startup
 
@@ -47,28 +41,6 @@ On load, the server SHALL upsert rows in the `projects` table keyed by unique `n
 - **WHEN** an entry omits `git_remote_url`
 - **THEN** the project row is stored and the project is marked unhealthy, and other entries still load
 
-
-<!-- @trace
-source: repo-worktree-layout
-updated: 2026-07-05
-code:
-  - backend/src/worker.rs
-  - backend/src/runs.rs
-  - backend/migrations/002_project_health.sql
-  - backend/src/lib.rs
-  - backend/src/executor.rs
-  - projects.yaml
-  - backend/src/projects.rs
-  - backend/src/worktree.rs
-  - .env.example
-  - README.md
-tests:
-  - backend/tests/project_config.rs
-  - backend/tests/worktree.rs
-  - backend/tests/runs_execution.rs
--->
-
----
 ### Requirement: Git repository detection updates project metadata
 
 For each loaded project, the backend SHALL provision the bare repository and resident worktrees (see the `repo-worktree` capability) and record whether provisioning succeeded. When the bare repository is present, the backend SHALL store `is_git_repo=1` and `default_branch` set to the first entry of `default_branches`. When provisioning fails or the project is unhealthy, the backend SHALL store `is_git_repo=0` and keep the project stored for later correction.
@@ -82,23 +54,3 @@ For each loaded project, the backend SHALL provision the bare repository and res
 
 - **WHEN** provisioning fails for a project (for example, unreachable remote)
 - **THEN** the project row has `is_git_repo=0` and the project remains stored
-
-<!-- @trace
-source: repo-worktree-layout
-updated: 2026-07-05
-code:
-  - backend/src/worker.rs
-  - backend/src/runs.rs
-  - backend/migrations/002_project_health.sql
-  - backend/src/lib.rs
-  - backend/src/executor.rs
-  - projects.yaml
-  - backend/src/projects.rs
-  - backend/src/worktree.rs
-  - .env.example
-  - README.md
-tests:
-  - backend/tests/project_config.rs
-  - backend/tests/worktree.rs
-  - backend/tests/runs_execution.rs
--->

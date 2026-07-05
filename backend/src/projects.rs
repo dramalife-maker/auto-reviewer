@@ -1,5 +1,4 @@
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
 
 use serde::Deserialize;
 use sqlx::{Row, SqlitePool};
@@ -16,13 +15,30 @@ struct ProjectEntry {
     name: String,
     repo_path: String,
     git_remote_url: Option<String>,
+    #[serde(default)]
+    default_branches: Vec<String>,
 }
 
+/// A project entry after `repo_path` resolution, ready for provisioning.
+#[derive(Debug, Clone)]
+pub struct ResolvedProject {
+    pub name: String,
+    pub repo_path: PathBuf,
+    pub git_remote_url: Option<String>,
+    pub default_branches: Vec<String>,
+}
+
+/// Load and upsert project rows, returning the resolved entries for provisioning.
+///
+/// Rows start with `is_git_repo=0`; provisioning (see [`crate::worktree`]) flips
+/// it and finalizes health. Static failures — missing `git_remote_url` or empty
+/// `default_branches` — are recorded as unhealthy here so provisioning can skip
+/// them without a clone attempt.
 pub async fn load_from_yaml(
     pool: &SqlitePool,
     data_dir: &Path,
     config_path: &Path,
-) -> Result<()> {
+) -> Result<Vec<ResolvedProject>> {
     if !config_path.exists() {
         return Err(Error::ProjectsConfigNotFound(
             config_path.display().to_string(),
@@ -32,36 +48,95 @@ pub async fn load_from_yaml(
     let content = std::fs::read_to_string(config_path)?;
     let file: ProjectsFile = serde_yaml::from_str(&content)?;
 
+    let mut resolved = Vec::with_capacity(file.projects.len());
     for entry in file.projects {
         let repo_path = resolve_repo_path(data_dir, &entry.repo_path);
         let repo_path_str = repo_path.display().to_string();
-        let (is_git_repo, default_branch) = detect_git(&repo_path);
+
+        let (health, health_reason) = if entry.git_remote_url.is_none() {
+            ("unhealthy", Some("missing git_remote_url"))
+        } else if entry.default_branches.is_empty() {
+            ("unhealthy", Some("missing default_branches"))
+        } else {
+            ("healthy", None)
+        };
+        let default_branch = entry.default_branches.first().cloned();
 
         sqlx::query(
             r#"
             INSERT INTO projects (
-                name, repo_path, git_remote_url, is_git_repo, default_branch, updated_at
+                name, repo_path, git_remote_url, is_git_repo, default_branch,
+                health, health_reason, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, datetime('now'))
+            VALUES (?, ?, ?, 0, ?, ?, ?, datetime('now'))
             ON CONFLICT(name) DO UPDATE SET
                 repo_path = excluded.repo_path,
                 git_remote_url = excluded.git_remote_url,
-                is_git_repo = excluded.is_git_repo,
+                is_git_repo = 0,
                 default_branch = excluded.default_branch,
+                health = excluded.health,
+                health_reason = excluded.health_reason,
                 updated_at = datetime('now')
             "#,
         )
         .bind(&entry.name)
         .bind(&repo_path_str)
         .bind(&entry.git_remote_url)
-        .bind(is_git_repo)
-        .bind(default_branch)
+        .bind(&default_branch)
+        .bind(health)
+        .bind(health_reason)
         .execute(pool)
         .await
         .map_err(Error::Database)?;
+
+        resolved.push(ResolvedProject {
+            name: entry.name,
+            repo_path,
+            git_remote_url: entry.git_remote_url,
+            default_branches: entry.default_branches,
+        });
     }
 
+    Ok(resolved)
+}
+
+/// Finalize a project's provisioning outcome: `is_git_repo`, `default_branch`,
+/// and health. Called by [`crate::worktree::provision_all`].
+pub async fn set_project_health(
+    pool: &SqlitePool,
+    name: &str,
+    is_git_repo: i64,
+    default_branch: Option<&str>,
+    health: &str,
+    health_reason: Option<&str>,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE projects
+         SET is_git_repo = ?, default_branch = ?, health = ?, health_reason = ?,
+             updated_at = datetime('now')
+         WHERE name = ?",
+    )
+    .bind(is_git_repo)
+    .bind(default_branch)
+    .bind(health)
+    .bind(health_reason)
+    .bind(name)
+    .execute(pool)
+    .await
+    .map_err(Error::Database)?;
     Ok(())
+}
+
+pub async fn get_project_health(
+    pool: &SqlitePool,
+    name: &str,
+) -> Result<(String, Option<String>)> {
+    let row = sqlx::query("SELECT health, health_reason FROM projects WHERE name = ?")
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .map_err(Error::Database)?;
+    Ok((row.get(0), row.get(1)))
 }
 
 /// Resolves `repo_path` from projects.yaml before persistence.
@@ -78,37 +153,6 @@ pub fn resolve_repo_path(data_dir: &Path, raw: &str) -> PathBuf {
     match path.components().next() {
         Some(Component::CurDir) | Some(Component::ParentDir) => path.to_path_buf(),
         _ => data_dir.join("repos").join(path),
-    }
-}
-
-fn detect_git(repo_path: &Path) -> (i64, Option<String>) {
-    if !repo_path.is_dir() {
-        return (0, None);
-    }
-
-    let git_dir = repo_path.join(".git");
-    if !(git_dir.is_dir() || git_dir.is_file()) {
-        return (0, None);
-    }
-
-    let Some(repo_str) = repo_path.to_str() else {
-        return (1, None);
-    };
-
-    let output = Command::new("git")
-        .args(["-C", repo_str, "rev-parse", "--abbrev-ref", "HEAD"])
-        .output();
-
-    match output {
-        Ok(result) if result.status.success() => {
-            let branch = String::from_utf8_lossy(&result.stdout).trim().to_string();
-            if branch.is_empty() {
-                (1, None)
-            } else {
-                (1, Some(branch))
-            }
-        }
-        _ => (1, None),
     }
 }
 

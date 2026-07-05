@@ -10,6 +10,7 @@ pub mod server;
 pub mod state;
 pub mod summary;
 pub mod worker;
+pub mod worktree;
 
 pub use error::{Error, Result};
 
@@ -45,7 +46,9 @@ pub async fn build_app() -> Result<axum::Router> {
 
 async fn init_app(config: config::AppConfig, start_worker: bool) -> Result<state::AppState> {
     let pool = db::init_pool(config.data_dir()).await?;
-    projects::load_from_yaml(&pool, config.data_dir(), &config.projects_config_path()).await?;
+    let resolved =
+        projects::load_from_yaml(&pool, config.data_dir(), &config.projects_config_path()).await?;
+    worktree::provision_all(&pool, &resolved).await;
 
     let worker = if start_worker {
         let worker = worker::RunWorker::spawn(config.clone(), pool.clone());

@@ -20,12 +20,15 @@ pub async fn execute_weekly_batch(
     config: &AppConfig,
     run_id: i64,
     project: &ProjectRow,
+    working_dir: &Path,
     timeout_sec: u64,
 ) -> Result<(ExecuteOutcome, i64, Option<String>), Error> {
-    let manifest_path = write_weekly_manifest(config.data_dir(), run_id, project).await?;
+    let working_dir_str = working_dir.display().to_string();
+    let manifest_path =
+        write_weekly_manifest(config.data_dir(), run_id, project, &working_dir_str).await?;
     let started = Instant::now();
 
-    let mut command = build_command(config, project, &manifest_path)?;
+    let mut command = build_command(config, working_dir, &manifest_path)?;
     command.stdout(Stdio::null()).stderr(Stdio::null());
 
     let mut child = command.spawn().map_err(Error::Io)?;
@@ -54,7 +57,7 @@ pub async fn execute_weekly_batch(
 
 fn build_command(
     config: &AppConfig,
-    project: &ProjectRow,
+    working_dir: &Path,
     manifest_path: &Path,
 ) -> Result<Command, Error> {
     if std::env::var("REVIEWER_EXECUTOR").is_ok() {
@@ -78,7 +81,7 @@ fn build_command(
 
     let mut command = Command::new("claude");
     command
-        .current_dir(&project.repo_path)
+        .current_dir(working_dir)
         .arg("--bare")
         .arg("--permission-mode")
         .arg("dontAsk")
@@ -87,7 +90,7 @@ fn build_command(
         .arg("--add-dir")
         .arg(config.data_dir())
         .arg("--add-dir")
-        .arg(&project.repo_path)
+        .arg(working_dir)
         .arg("--append-system-prompt-file")
         .arg(&workflow)
         .arg("--append-system-prompt-file")

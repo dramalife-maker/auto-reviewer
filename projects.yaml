@@ -1,11 +1,20 @@
 # Example project list for reviewer-server.
-# repo_path: repo slug under $DATA_ROOT_DIR/repos/ (or absolute / explicit relative path).
-# git_remote_url: optional metadata; MVP does not auto-clone.
+# repo_path: bare+worktree container dir under $DATA_ROOT_DIR/repos/
+#   (or absolute / explicit relative path). It holds .bare/ and one worktree
+#   per branch — it is NOT itself a checked-out working copy.
+# git_remote_url: REQUIRED. Cloned as a bare repo at startup.
+# default_branches: REQUIRED, non-empty. Resident worktrees provisioned at
+#   startup; the first entry is the branch weekly batches review.
 
 projects:
   - name: game-backend
     repo_path: game-backend
     git_remote_url: git@gitlab.example.com:team/game-backend.git
+    default_branches:
+      - main
   - name: web-portal
     repo_path: web-portal
     git_remote_url: git@gitlab.example.com:team/web-portal.git
+    default_branches:
+      - main
+      - develop

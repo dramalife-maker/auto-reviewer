@@ -260,6 +260,7 @@ pub async fn write_weekly_manifest(
     data_root: &Path,
     run_id: i64,
     project: &ProjectRow,
+    repo_path: &str,
 ) -> crate::Result<PathBuf> {
     let path = manifest_path(data_root, run_id, project.id);
     if let Some(parent) = path.parent() {
@@ -280,7 +281,7 @@ pub async fn write_weekly_manifest(
     let manifest = RunManifest {
         mode: "weekly_batch",
         project_name: &project.name,
-        repo_path: &project.repo_path,
+        repo_path,
         report_root,
         run_date,
         since,
