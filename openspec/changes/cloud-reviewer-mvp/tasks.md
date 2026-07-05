@@ -36,6 +36,6 @@
 
 ## 7. 部署文件
 
-- [ ] 7.1 新增 `projects.yaml` 範例與 README（DATA_ROOT_DIR、claude CLI）— 驗證：依 README 啟動通過 `/health`
+- [x] 7.1 新增 `projects.yaml` 範例與 README（DATA_ROOT_DIR、claude CLI）— 驗證：依 README 啟動通過 `/health`
 
 
