@@ -8,14 +8,16 @@ TBD - created by archiving change 'cloud-reviewer-mvp'. Update Purpose after arc
 
 ### Requirement: Schedule configuration is stored as a single row
 
-The database SHALL contain table `schedule_config` with exactly one row (`id=1`) holding fields `enabled`, `cadence`, `weekday`, `run_time`, `per_project_timeout_sec`, and `max_concurrency` as defined in `docs/idea/schema.md`.
+The database SHALL contain table `schedule_config` with exactly one row (`id=1`) holding fields `enabled`, `cadence`, `weekday`, `run_time`, `tz_offset_min`, `per_project_timeout_sec`, and `max_concurrency` as defined in `docs/idea/schema.md`.
 
-On first startup after migration, the server MUST seed defaults: `enabled=1`, `cadence='weekly'`, `weekday=0`, `run_time='09:00'`, `per_project_timeout_sec=600`, `max_concurrency=2`.
+On first startup after migration, the server MUST seed defaults: `enabled=1`, `cadence='weekly'`, `weekday=0`, `run_time='09:00'`, `tz_offset_min=480`, `per_project_timeout_sec=600`, `max_concurrency=2`.
+
+The `tz_offset_min` field is the timezone offset from UTC in minutes; the default `480` corresponds to Asia/Taipei (UTC+8).
 
 #### Scenario: Fresh database receives default schedule
 
 - **WHEN** migrations run on an empty database
-- **THEN** `schedule_config` contains one row with `run_time='09:00'` and `max_concurrency=2`
+- **THEN** `schedule_config` contains one row with `run_time='09:00'`, `tz_offset_min=480`, and `max_concurrency=2`
 
 
 <!-- @trace
@@ -74,7 +76,7 @@ tests:
 ---
 ### Requirement: Enabled schedule triggers weekly batch runs
 
-When `schedule_config.enabled=1`, the backend SHALL register a cron job matching `cadence`, `weekday`, and `run_time` that starts the same batch pipeline as `manual_all` with `runs.trigger='schedule'`.
+When `schedule_config.enabled=1`, the backend SHALL register a cron job matching `cadence`, `weekday`, and `run_time` that starts the same batch pipeline as `manual_all` with `runs.trigger='schedule'`. The backend MUST interpret `run_time` in the timezone given by `tz_offset_min` (offset from UTC in minutes), not in UTC.
 
 When `enabled=0`, the cron job MUST NOT enqueue runs.
 
@@ -82,6 +84,11 @@ When `enabled=0`, the cron job MUST NOT enqueue runs.
 
 - **WHEN** the cron fires while `enabled=1` and no duplicate project lock exists
 - **THEN** a new `runs` row exists with `trigger='schedule'`
+
+#### Scenario: Run time is interpreted in the configured timezone
+
+- **WHEN** `tz_offset_min=480` and `run_time='09:00'`
+- **THEN** the cron job fires at 09:00 UTC+8 (01:00 UTC), not 09:00 UTC
 
 #### Scenario: Disabled schedule does not enqueue
 

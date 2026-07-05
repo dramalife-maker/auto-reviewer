@@ -146,7 +146,7 @@ claude --bare ... --append-system-prompt-file $APP_ROOT/skills/reviewer-batch/WO
 | GET | `/api/people/{id}/reports/latest` | 最新週報 |
 | PATCH | `/api/reports/{id}/read` | 標記已讀 |
 
-排程預設：每週一 09:00（`schedule_config` 表，enabled=1）。
+排程預設：每週一 09:00 台北時間（`schedule_config` 表，enabled=1）。時區由 `schedule_config.tz_offset_min` 設定（UTC 偏移分鐘數，預設 `480` = UTC+8）；`run_time` 依此時區解讀。
 
 ## 測試
 

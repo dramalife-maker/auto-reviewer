@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use chrono::FixedOffset;
 use sqlx::SqlitePool;
 use tokio_cron_scheduler::{Job, JobScheduler};
 use tracing::{error, info};
@@ -14,18 +15,28 @@ pub struct ScheduleConfigRow {
     pub cadence: String,
     pub weekday: Option<i64>,
     pub run_time: String,
+    pub tz_offset_min: i64,
     pub per_project_timeout_sec: i64,
     pub max_concurrency: i64,
 }
 
 pub async fn load_schedule_config(pool: &SqlitePool) -> Result<ScheduleConfigRow, Error> {
     sqlx::query_as::<_, ScheduleConfigRow>(
-        "SELECT enabled, cadence, weekday, run_time, per_project_timeout_sec, max_concurrency
+        "SELECT enabled, cadence, weekday, run_time, tz_offset_min,
+                per_project_timeout_sec, max_concurrency
          FROM schedule_config WHERE id = 1",
     )
     .fetch_one(pool)
     .await
     .map_err(Error::Database)
+}
+
+/// The timezone `run_time` is interpreted in (offset from UTC).
+fn schedule_timezone(config: &ScheduleConfigRow) -> Result<FixedOffset, Error> {
+    let secs = (config.tz_offset_min as i32) * 60;
+    FixedOffset::east_opt(secs).ok_or_else(|| {
+        Error::SummaryParse(format!("invalid tz_offset_min: {}", config.tz_offset_min))
+    })
 }
 
 pub async fn trigger_scheduled_run(pool: &SqlitePool) -> Result<Option<i64>, Error> {
@@ -49,6 +60,7 @@ pub async fn start_scheduler(pool: SqlitePool, worker: Arc<RunWorker>) -> Result
     }
 
     let cron = build_cron_expression(&config)?;
+    let tz = schedule_timezone(&config)?;
     let scheduler = JobScheduler::new().await.map_err(|err| {
         Error::SummaryParse(format!("scheduler init: {err}"))
     })?;
@@ -56,7 +68,7 @@ pub async fn start_scheduler(pool: SqlitePool, worker: Arc<RunWorker>) -> Result
     let job_pool = pool.clone();
     let job_worker = worker.clone();
     scheduler
-        .add(Job::new_async(cron.as_str(), move |_uuid, _lock| {
+        .add(Job::new_async_tz(cron.as_str(), tz, move |_uuid, _lock| {
             let pool = job_pool.clone();
             let worker = job_worker.clone();
             Box::pin(async move {
@@ -75,7 +87,7 @@ pub async fn start_scheduler(pool: SqlitePool, worker: Arc<RunWorker>) -> Result
         .await
         .map_err(|err| Error::SummaryParse(format!("scheduler start: {err}")))?;
 
-    info!("schedule cron registered: {cron}");
+    info!("schedule cron registered: {cron} (UTC offset {} min)", config.tz_offset_min);
     Ok(())
 }
 
@@ -125,16 +137,36 @@ fn spec_weekday_to_cron(weekday: i64) -> u32 {
 mod tests {
     use super::*;
 
-    #[test]
-    fn build_weekly_cron_from_defaults() {
-        let config = ScheduleConfigRow {
+    fn sample_config() -> ScheduleConfigRow {
+        ScheduleConfigRow {
             enabled: 1,
             cadence: "weekly".into(),
             weekday: Some(0),
             run_time: "09:00".into(),
+            tz_offset_min: 480,
             per_project_timeout_sec: 600,
             max_concurrency: 2,
-        };
-        assert_eq!(build_cron_expression(&config).expect("cron"), "0 0 9 * * 1");
+        }
+    }
+
+    #[test]
+    fn build_weekly_cron_from_defaults() {
+        assert_eq!(
+            build_cron_expression(&sample_config()).expect("cron"),
+            "0 0 9 * * 1"
+        );
+    }
+
+    #[test]
+    fn default_timezone_is_taipei() {
+        let tz = schedule_timezone(&sample_config()).expect("tz");
+        assert_eq!(tz, FixedOffset::east_opt(8 * 3600).unwrap());
+    }
+
+    #[test]
+    fn invalid_timezone_offset_is_rejected() {
+        let mut config = sample_config();
+        config.tz_offset_min = 100_000; // out of ±24h range
+        assert!(schedule_timezone(&config).is_err());
     }
 }

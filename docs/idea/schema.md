@@ -125,7 +125,8 @@ CREATE TABLE schedule_config (
     enabled         INTEGER NOT NULL DEFAULT 1,
     cadence         TEXT    NOT NULL DEFAULT 'weekly',   -- 'daily' | 'weekly' | 'biweekly'
     weekday         INTEGER,                              -- 0=週一 ... 6=週日（daily 時為 NULL）
-    run_time        TEXT    NOT NULL DEFAULT '09:00',     -- HH:MM，24h
+    run_time        TEXT    NOT NULL DEFAULT '09:00',     -- HH:MM，24h（依 tz_offset_min 時區解讀）
+    tz_offset_min   INTEGER NOT NULL DEFAULT 480,         -- run_time 時區，UTC 偏移分鐘，480=UTC+8 台北
     mr_poll_interval_min INTEGER NOT NULL DEFAULT 60,    -- 軌道 2 MR 輪詢間隔（分鐘）
     per_project_timeout_sec INTEGER NOT NULL DEFAULT 600, -- 單專案逾時，預設 10 分鐘
     max_concurrency INTEGER NOT NULL DEFAULT 2,           -- worker pool 並發上限
