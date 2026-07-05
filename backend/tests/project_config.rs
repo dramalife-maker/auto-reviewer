@@ -1,7 +1,11 @@
 use reviewer_server::db::init_pool;
-use reviewer_server::projects::{count_projects, get_project, load_from_yaml};
+use reviewer_server::projects::{count_projects, get_project, get_project_repo_path, load_from_yaml};
 use std::fs;
 use std::process::Command;
+
+fn normalize_path(path: &std::path::Path) -> String {
+    path.display().to_string().replace('\\', "/")
+}
 
 #[tokio::test]
 async fn projects_yaml_loads_two_rows() {
@@ -20,11 +24,36 @@ async fn projects_yaml_loads_two_rows() {
     .expect("write yaml");
 
     let pool = init_pool(temp.path()).await.expect("init pool");
-    load_from_yaml(&pool, &yaml_path)
+    load_from_yaml(&pool, temp.path(), &yaml_path)
         .await
         .expect("load projects yaml");
 
     assert_eq!(count_projects(&pool).await.expect("count"), 2);
+}
+
+#[tokio::test]
+async fn repo_slug_loads_resolved_path() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let yaml_path = temp.path().join("projects.yaml");
+    fs::write(
+        &yaml_path,
+        r#"projects:
+  - name: project-a
+    repo_path: test/projectA
+"#,
+    )
+    .expect("write yaml");
+
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    load_from_yaml(&pool, temp.path(), &yaml_path)
+        .await
+        .expect("load projects yaml");
+
+    let stored = get_project_repo_path(&pool, "project-a")
+        .await
+        .expect("repo path");
+    let expected = temp.path().join("repos").join("test").join("projectA");
+    assert_eq!(normalize_path(std::path::Path::new(&stored)), normalize_path(&expected));
 }
 
 #[tokio::test]
@@ -69,7 +98,7 @@ async fn git_detection_sets_default_branch() {
     .expect("write yaml");
 
     let pool = init_pool(temp.path()).await.expect("init pool");
-    load_from_yaml(&pool, &yaml_path)
+    load_from_yaml(&pool, temp.path(), &yaml_path)
         .await
         .expect("load projects yaml");
 

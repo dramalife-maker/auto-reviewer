@@ -34,18 +34,27 @@ copy .env.example .env
 
 ### 2. 專案設定
 
-編輯 repo 根目錄的 `projects.yaml`，將 `repo_path` 指向 `$DATA_ROOT_DIR/repos/` 下的 clone：
+編輯 repo 根目錄的 `projects.yaml`。`repo_path` 建議使用 **repo slug**（自動對應到 `$DATA_ROOT_DIR/repos/<slug>`）：
 
 ```yaml
 projects:
   - name: game-backend
-    repo_path: ./data/reviewer/repos/game-backend
+    repo_path: game-backend
     git_remote_url: git@gitlab.example.com:team/game-backend.git
   - name: web-portal
-    repo_path: ./data/reviewer/repos/web-portal
+    repo_path: test/web-portal   # → $DATA_ROOT_DIR/repos/test/web-portal
 ```
 
-`repo_path` 可為相對路徑（相對於 process 工作目錄）或絕對路徑。
+解析規則：
+
+| `repo_path` 寫法 | 實際目錄 |
+|------------------|----------|
+| `game-backend` | `$DATA_ROOT_DIR/repos/game-backend` |
+| `test/projectA` | `$DATA_ROOT_DIR/repos/test/projectA` |
+| `/srv/git/foo` | 絕對路徑，不變 |
+| `./custom/path` | 相對 process cwd，不變（相容舊寫法） |
+
+請將 git clone 放在解析後的目錄下。
 
 ### 3. 啟動後端
 

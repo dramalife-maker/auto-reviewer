@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 use serde::Deserialize;
@@ -18,7 +18,11 @@ struct ProjectEntry {
     git_remote_url: Option<String>,
 }
 
-pub async fn load_from_yaml(pool: &SqlitePool, config_path: &Path) -> Result<()> {
+pub async fn load_from_yaml(
+    pool: &SqlitePool,
+    data_dir: &Path,
+    config_path: &Path,
+) -> Result<()> {
     if !config_path.exists() {
         return Err(Error::ProjectsConfigNotFound(
             config_path.display().to_string(),
@@ -29,8 +33,9 @@ pub async fn load_from_yaml(pool: &SqlitePool, config_path: &Path) -> Result<()>
     let file: ProjectsFile = serde_yaml::from_str(&content)?;
 
     for entry in file.projects {
-        let repo_path = Path::new(&entry.repo_path);
-        let (is_git_repo, default_branch) = detect_git(repo_path);
+        let repo_path = resolve_repo_path(data_dir, &entry.repo_path);
+        let repo_path_str = repo_path.display().to_string();
+        let (is_git_repo, default_branch) = detect_git(&repo_path);
 
         sqlx::query(
             r#"
@@ -47,7 +52,7 @@ pub async fn load_from_yaml(pool: &SqlitePool, config_path: &Path) -> Result<()>
             "#,
         )
         .bind(&entry.name)
-        .bind(&entry.repo_path)
+        .bind(&repo_path_str)
         .bind(&entry.git_remote_url)
         .bind(is_git_repo)
         .bind(default_branch)
@@ -57,6 +62,23 @@ pub async fn load_from_yaml(pool: &SqlitePool, config_path: &Path) -> Result<()>
     }
 
     Ok(())
+}
+
+/// Resolves `repo_path` from projects.yaml before persistence.
+///
+/// - Absolute paths are unchanged.
+/// - Relative paths starting with `.` or `..` are unchanged (cwd-relative).
+/// - Other relative values are treated as repo slugs under `{data_dir}/repos/`.
+pub fn resolve_repo_path(data_dir: &Path, raw: &str) -> PathBuf {
+    let path = Path::new(raw);
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+
+    match path.components().next() {
+        Some(Component::CurDir) | Some(Component::ParentDir) => path.to_path_buf(),
+        _ => data_dir.join("repos").join(path),
+    }
 }
 
 fn detect_git(repo_path: &Path) -> (i64, Option<String>) {
@@ -107,4 +129,38 @@ pub async fn get_project(pool: &SqlitePool, name: &str) -> Result<(i64, Option<S
     let is_git_repo: i64 = row.get(0);
     let default_branch: Option<String> = row.get(1);
     Ok((is_git_repo, default_branch))
+}
+
+pub async fn get_project_repo_path(pool: &SqlitePool, name: &str) -> Result<String> {
+    sqlx::query_scalar("SELECT repo_path FROM projects WHERE name = ?")
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .map_err(Error::Database)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_repo_path_slug() {
+        let data_dir = Path::new("/data/reviewer");
+        let resolved = resolve_repo_path(data_dir, "test/projectA");
+        assert_eq!(resolved, PathBuf::from("/data/reviewer/repos/test/projectA"));
+    }
+
+    #[test]
+    fn resolve_repo_path_absolute() {
+        let data_dir = Path::new("/data/reviewer");
+        let resolved = resolve_repo_path(data_dir, "/srv/git/projectA");
+        assert_eq!(resolved, PathBuf::from("/srv/git/projectA"));
+    }
+
+    #[test]
+    fn resolve_repo_path_explicit_relative() {
+        let data_dir = Path::new("/data/reviewer");
+        let resolved = resolve_repo_path(data_dir, "./custom/repos/projectA");
+        assert_eq!(resolved, PathBuf::from("./custom/repos/projectA"));
+    }
 }

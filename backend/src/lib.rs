@@ -45,7 +45,7 @@ pub async fn build_app() -> Result<axum::Router> {
 
 async fn init_app(config: config::AppConfig, start_worker: bool) -> Result<state::AppState> {
     let pool = db::init_pool(config.data_dir()).await?;
-    projects::load_from_yaml(&pool, &config.projects_config_path()).await?;
+    projects::load_from_yaml(&pool, config.data_dir(), &config.projects_config_path()).await?;
 
     let worker = if start_worker {
         let worker = worker::RunWorker::spawn(config.clone(), pool.clone());

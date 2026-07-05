@@ -1,11 +1,11 @@
 # Example project list for reviewer-server.
-# repo_path: local git clone directory (relative to process cwd or absolute).
+# repo_path: repo slug under $DATA_ROOT_DIR/repos/ (or absolute / explicit relative path).
 # git_remote_url: optional metadata; MVP does not auto-clone.
 
 projects:
   - name: game-backend
-    repo_path: ./data/reviewer/repos/game-backend
+    repo_path: game-backend
     git_remote_url: git@gitlab.example.com:team/game-backend.git
   - name: web-portal
-    repo_path: ./data/reviewer/repos/web-portal
+    repo_path: web-portal
     git_remote_url: git@gitlab.example.com:team/web-portal.git
