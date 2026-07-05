@@ -18,15 +18,15 @@
 
 ## 4. 排程實作（scheduling）
 
-- [ ] 4.1 【Requirement: Schedule configuration is stored as a single row】seed `schedule_config` 單列預設 — 驗證：`cargo test schedule_config_seeded`
-- [ ] 4.2 【Requirement: Enabled schedule triggers weekly batch runs】【排程實作】tokio-cron-scheduler 在 enabled=1 時觸發 schedule run — 驗證：`cargo test scheduled_run_creates_schedule_trigger`
+- [x] 4.1 【Requirement: Schedule configuration is stored as a single row】seed `schedule_config` 單列預設 — 驗證：`cargo test schedule_config_seeded`
+- [x] 4.2 【Requirement: Enabled schedule triggers weekly batch runs】【排程實作】tokio-cron-scheduler 在 enabled=1 時觸發 schedule run — 驗證：`cargo test scheduled_run_creates_schedule_trigger`
 
 ## 5. 報告閱讀 API（report-reader）
 
-- [ ] 5.1 【Requirement: People list API exposes read and pending status】`GET /api/people` — 驗證：`cargo test people_list_includes_unread`
-- [ ] 5.2 【Requirement: Latest weekly report content is served per person】`GET /api/people/:id/reports/latest` — 驗證：`cargo test latest_reports_returns_sections`
-- [ ] 5.3 【Requirement: Reports can be marked read】`PATCH /api/reports/:id/read` — 驗證：`cargo test mark_report_read`
-- [ ] 5.4 `GET /api/runs/:id` 供前端輪詢 — 驗證：`cargo test get_run_by_id_returns_terminal_status`
+- [x] 5.1 【Requirement: People list API exposes read and pending status】`GET /api/people` — 驗證：`cargo test people_list_includes_unread`
+- [x] 5.2 【Requirement: Latest weekly report content is served per person】`GET /api/people/:id/reports/latest` — 驗證：`cargo test latest_reports_returns_sections`
+- [x] 5.3 【Requirement: Reports can be marked read】`PATCH /api/reports/:id/read` — 驗證：`cargo test mark_report_read`
+- [x] 5.4 `GET /api/runs/:id` 供前端輪詢 — 驗證：`cargo test get_run_by_id_returns_terminal_status`
 
 ## 6. 前端 MVP（report-reader）
 

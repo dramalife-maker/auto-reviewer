@@ -14,6 +14,8 @@ pub enum Error {
     RunConflict,
     #[error("unsupported run trigger: {0}")]
     UnsupportedRunTrigger(String),
+    #[error("not found")]
+    NotFound,
     #[error("failed to parse summary.md: {0}")]
     SummaryParse(String),
     #[error(transparent)]

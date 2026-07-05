@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 use crate::Error;
@@ -19,7 +19,27 @@ pub struct SummaryFrontmatter {
 pub struct ParsedSummary {
     pub frontmatter: SummaryFrontmatter,
     pub pending_questions: Vec<String>,
+    pub highlights: Vec<String>,
+    pub growth: Vec<String>,
     pub summary_path: PathBuf,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SummarySections {
+    pub highlights: Vec<String>,
+    pub growth: Vec<String>,
+    pub pending: Vec<String>,
+}
+
+impl SummarySections {
+    pub fn from_summary_file(path: &Path) -> Result<Self, Error> {
+        let parsed = parse_summary_file(path)?;
+        Ok(Self {
+            highlights: parsed.highlights,
+            growth: parsed.growth,
+            pending: parsed.pending_questions,
+        })
+    }
 }
 
 pub fn parse_summary_file(path: &Path) -> Result<ParsedSummary, Error> {
@@ -27,10 +47,11 @@ pub fn parse_summary_file(path: &Path) -> Result<ParsedSummary, Error> {
     let (yaml, body) = split_frontmatter(&content)?;
     let frontmatter: SummaryFrontmatter =
         serde_yaml::from_str(yaml).map_err(|err| Error::SummaryParse(err.to_string()))?;
-    let pending_questions = extract_pending_questions(body);
     Ok(ParsedSummary {
+        pending_questions: extract_bullet_section(body, "## 待確認"),
+        highlights: extract_bullet_section(body, "## 本週重點"),
+        growth: extract_bullet_section(body, "## 成長面向"),
         frontmatter,
-        pending_questions,
         summary_path: path.to_path_buf(),
     })
 }
@@ -183,24 +204,24 @@ fn split_frontmatter(content: &str) -> Result<(&str, &str), Error> {
     Ok((yaml.trim(), body))
 }
 
-fn extract_pending_questions(body: &str) -> Vec<String> {
+fn extract_bullet_section(body: &str, heading: &str) -> Vec<String> {
     let mut in_section = false;
-    let mut questions = Vec::new();
+    let mut items = Vec::new();
 
     for line in body.lines() {
         if line.starts_with("## ") {
-            in_section = line.trim() == "## 待確認";
+            in_section = line.trim() == heading;
             continue;
         }
         if in_section {
             let item = line.trim();
-            if let Some(question) = item.strip_prefix("- ") {
-                questions.push(question.trim().to_string());
+            if let Some(text) = item.strip_prefix("- ") {
+                items.push(text.trim().to_string());
             }
         }
     }
 
-    questions
+    items
 }
 
 pub async fn count_reports_for_run(pool: &SqlitePool, run_id: i64) -> Result<i64, Error> {

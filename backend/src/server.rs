@@ -1,12 +1,13 @@
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
-use crate::runs;
+use crate::reports;
+use crate::runs::{self, RunRow};
 use crate::state::AppState;
 
 #[derive(Serialize)]
@@ -25,10 +26,39 @@ pub struct CreateRunResponse {
     pub run_id: i64,
 }
 
+#[derive(Serialize)]
+pub struct RunStatusResponse {
+    pub id: i64,
+    pub trigger: String,
+    pub status: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub project_total: Option<i64>,
+    pub project_skipped: i64,
+}
+
+impl From<RunRow> for RunStatusResponse {
+    fn from(row: RunRow) -> Self {
+        Self {
+            id: row.id,
+            trigger: row.trigger,
+            status: row.status,
+            started_at: row.started_at,
+            finished_at: row.finished_at,
+            project_total: row.project_total,
+            project_skipped: row.project_skipped,
+        }
+    }
+}
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/api/runs", post(create_run))
+        .route("/api/runs/{id}", get(get_run))
+        .route("/api/people", get(list_people))
+        .route("/api/people/{id}/reports/latest", get(latest_reports))
+        .route("/api/reports/{id}/read", patch(mark_report_read))
         .with_state(state)
 }
 
@@ -55,10 +85,50 @@ async fn create_run(
         worker.wake();
     }
 
-    Ok((
-        StatusCode::CREATED,
-        Json(CreateRunResponse { run_id }),
-    ))
+    Ok((StatusCode::CREATED, Json(CreateRunResponse { run_id })))
+}
+
+async fn get_run(
+    State(state): State<AppState>,
+    Path(run_id): Path<i64>,
+) -> Result<Json<RunStatusResponse>, ApiError> {
+    let run = runs::get_run(&state.pool, run_id)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or(Error::NotFound)?;
+    Ok(Json(run.into()))
+}
+
+async fn list_people(State(state): State<AppState>) -> Result<Json<Vec<reports::PersonListItem>>, ApiError> {
+    let people = reports::list_people(&state.pool)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(people))
+}
+
+async fn latest_reports(
+    State(state): State<AppState>,
+    Path(person_id): Path<i64>,
+) -> Result<Json<reports::LatestReportsResponse>, ApiError> {
+    let response = reports::latest_reports_for_person(&state.pool, person_id)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or(Error::NotFound)?;
+    Ok(Json(response))
+}
+
+async fn mark_report_read(
+    State(state): State<AppState>,
+    Path(report_id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    let updated = reports::mark_report_read(&state.pool, report_id)
+        .await
+        .map_err(ApiError::from)?;
+    if updated {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::from(Error::NotFound))
+    }
 }
 
 #[derive(Debug)]
@@ -75,6 +145,7 @@ impl IntoResponse for ApiError {
         let status = match &self.0 {
             Error::RunConflict => StatusCode::CONFLICT,
             Error::UnsupportedRunTrigger(_) => StatusCode::BAD_REQUEST,
+            Error::NotFound => StatusCode::NOT_FOUND,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (status, self.0.to_string()).into_response()

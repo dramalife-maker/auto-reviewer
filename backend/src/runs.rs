@@ -39,18 +39,25 @@ pub async fn has_active_run_projects(pool: &sqlx::SqlitePool) -> crate::Result<b
 }
 
 pub async fn create_manual_all_run(pool: &sqlx::SqlitePool) -> crate::Result<i64> {
+    create_batch_run(pool, "manual_all").await
+}
+
+pub async fn create_scheduled_run(pool: &sqlx::SqlitePool) -> crate::Result<i64> {
+    create_batch_run(pool, "schedule").await
+}
+
+pub async fn create_batch_run(pool: &sqlx::SqlitePool, trigger: &str) -> crate::Result<i64> {
     if has_active_run_projects(pool).await? {
         return Err(crate::Error::RunConflict);
     }
 
     let mut tx = pool.begin().await.map_err(crate::Error::Database)?;
 
-    let result = sqlx::query(
-        "INSERT INTO runs (trigger, status, project_total) VALUES ('manual_all', 'running', 0)",
-    )
-    .execute(&mut *tx)
-    .await
-    .map_err(crate::Error::Database)?;
+    let result = sqlx::query("INSERT INTO runs (trigger, status, project_total) VALUES (?, 'running', 0)")
+        .bind(trigger)
+        .execute(&mut *tx)
+        .await
+        .map_err(crate::Error::Database)?;
     let run_id = result.last_insert_rowid();
 
     let projects = sqlx::query_as::<_, ProjectRow>(
@@ -205,6 +212,28 @@ pub async fn count_run_projects_by_state(
         .await
         .map_err(crate::Error::Database)?;
     Ok(row.get(0))
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct RunRow {
+    pub id: i64,
+    pub trigger: String,
+    pub status: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub project_total: Option<i64>,
+    pub project_skipped: i64,
+}
+
+pub async fn get_run(pool: &sqlx::SqlitePool, run_id: i64) -> crate::Result<Option<RunRow>> {
+    sqlx::query_as::<_, RunRow>(
+        "SELECT id, trigger, status, started_at, finished_at, project_total, project_skipped
+         FROM runs WHERE id = ?",
+    )
+    .bind(run_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(crate::Error::Database)
 }
 
 #[derive(Serialize)]

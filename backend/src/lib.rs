@@ -3,7 +3,9 @@ pub mod db;
 pub mod error;
 pub mod executor;
 pub mod projects;
+pub mod reports;
 pub mod runs;
+pub mod schedule;
 pub mod server;
 pub mod state;
 pub mod summary;
@@ -46,7 +48,9 @@ async fn init_app(config: config::AppConfig, start_worker: bool) -> Result<state
     projects::load_from_yaml(&pool, &config.projects_config_path()).await?;
 
     let worker = if start_worker {
-        Some(worker::RunWorker::spawn(config.clone(), pool.clone()))
+        let worker = worker::RunWorker::spawn(config.clone(), pool.clone());
+        schedule::start_scheduler(pool.clone(), worker.clone()).await?;
+        Some(worker)
     } else {
         None
     };

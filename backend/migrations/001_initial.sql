@@ -54,7 +54,7 @@ CREATE TABLE schedule_config (
     updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
-INSERT INTO schedule_config (id) VALUES (1);
+INSERT INTO schedule_config (id, weekday) VALUES (1, 0);
 
 CREATE TABLE unmatched_authors (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
