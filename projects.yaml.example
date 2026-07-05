@@ -1,4 +1,4 @@
-# Example project list for reviewer-server.
+# Copy to `projects.yaml` (git-ignored) and fill in real values.
 # repo_path: bare+worktree container dir under $DATA_ROOT_DIR/repos/
 #   (or absolute / explicit relative path). It holds .bare/ and one worktree
 #   per branch — it is NOT itself a checked-out working copy.

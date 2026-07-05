@@ -35,7 +35,13 @@ copy .env.example .env
 
 ### 2. 專案設定
 
-編輯 repo 根目錄的 `projects.yaml`。每個 project 需填 `git_remote_url`（必填）與 `default_branches`（必填、非空）：
+複製範本後編輯（`projects.yaml` 已被 git 忽略，不會提交）：
+
+```powershell
+copy projects.yaml.example projects.yaml
+```
+
+每個 project 需填 `git_remote_url`（必填）與 `default_branches`（必填、非空）：
 
 ```yaml
 projects:
