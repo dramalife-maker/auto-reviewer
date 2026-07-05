@@ -17,6 +17,8 @@ pub struct PersonListItem {
 
 #[derive(Debug, Serialize)]
 pub struct LatestReportItem {
+    pub id: i64,
+    pub is_read: bool,
     pub project_name: String,
     pub one_line: Option<String>,
     pub mr_count: Option<i64>,
@@ -65,7 +67,7 @@ pub async fn latest_reports_for_person(
     };
 
     let rows = sqlx::query_as::<_, ReportSummaryRow>(
-        "SELECT pr.name AS project_name, r.one_line, r.mr_count, r.commit_count, r.summary_md_path
+        "SELECT r.id, r.is_read, pr.name AS project_name, r.one_line, r.mr_count, r.commit_count, r.summary_md_path
          FROM reports r
          INNER JOIN projects pr ON pr.id = r.project_id
          WHERE r.person_id = ? AND r.report_date = ?
@@ -81,6 +83,8 @@ pub async fn latest_reports_for_person(
     for row in rows {
         let sections = SummarySections::from_summary_file(Path::new(&row.summary_md_path))?;
         projects.push(LatestReportItem {
+            id: row.id,
+            is_read: row.is_read != 0,
             project_name: row.project_name,
             one_line: row.one_line,
             mr_count: row.mr_count,
@@ -99,6 +103,8 @@ pub async fn latest_reports_for_person(
 
 #[derive(Debug, sqlx::FromRow)]
 struct ReportSummaryRow {
+    id: i64,
+    is_read: i64,
     project_name: String,
     one_line: Option<String>,
     mr_count: Option<i64>,

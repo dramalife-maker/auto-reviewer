@@ -5,3 +5,5 @@ crates/*/target/
 target/
 Cargo.lock
 .env
+node_modules/
+frontend/dist/

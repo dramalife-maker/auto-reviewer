@@ -30,9 +30,9 @@
 
 ## 6. 前端 MVP（report-reader）
 
-- [ ] 6.1 【前後端目錄結構】建立 `frontend/` Vite SPA 並連線 `/health` — 驗證：`npm run build`
-- [ ] 6.2 【Requirement: Web UI displays weekly reader and run controls】左欄人員 + 本週面板 + mark-read — 驗證：Playwright 或手動 smoke
-- [ ] 6.3 【Requirement: Web UI displays weekly reader and run controls】全部執行按鈕 + run 完成 banner — 驗證：手動 smoke POST /api/runs
+- [x] 6.1 【前後端目錄結構】建立 `frontend/` Vite SPA 並連線 `/health` — 驗證：`npm run build`
+- [x] 6.2 【Requirement: Web UI displays weekly reader and run controls】左欄人員 + 本週面板 + mark-read — 驗證：Playwright 或手動 smoke
+- [x] 6.3 【Requirement: Web UI displays weekly reader and run controls】全部執行按鈕 + run 完成 banner — 驗證：手動 smoke POST /api/runs
 
 ## 7. 部署文件
 
