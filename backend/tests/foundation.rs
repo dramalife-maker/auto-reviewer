@@ -107,3 +107,17 @@ async fn health_endpoint_returns_ok() {
     assert_eq!(json["status"], "ok");
     assert_eq!(json["data_dir"], temp.path().display().to_string());
 }
+
+#[test]
+fn reviewer_batch_skill_files_exist() {
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let skill_dir = repo_root.join("skills/reviewer-batch");
+    assert!(
+        skill_dir.join("WORKFLOW.md").is_file(),
+        "missing skills/reviewer-batch/WORKFLOW.md"
+    );
+    assert!(
+        skill_dir.join("output-contract.md").is_file(),
+        "missing skills/reviewer-batch/output-contract.md"
+    );
+}

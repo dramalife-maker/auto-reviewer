@@ -92,10 +92,19 @@ Worker 對每個專案 spawn：
 claude --bare ... --append-system-prompt-file $APP_ROOT/skills/reviewer-batch/WORKFLOW.md ...
 ```
 
+### Bundled workflow（`skills/reviewer-batch/`）
+
+| 檔案 | 用途 |
+|------|------|
+| `WORKFLOW.md` | 週報 headless 流程（讀 manifest → git 分析 → 寫 report/summary → 更新長期檔） |
+| `output-contract.md` | `summary.md` 格式契約（frontmatter + 三個固定 heading） |
+
+後端 spawn 時以 `--append-system-prompt-file` 載入上述兩檔；動態參數僅 manifest 路徑（見 `docs/idea/spec.md` §6.0）。
+
 執行前請確認：
 
 1. `claude` 已在 PATH 且已 auth
-2. `$APP_ROOT/skills/reviewer-batch/` 含 `WORKFLOW.md` 與 `output-contract.md`（詳見 `docs/idea/spec.md` §6）
+2. 從 repo 根目錄啟動後端（或設定 `APP_ROOT` 指向含 `skills/` 的目錄）
 3. 各專案 `repo_path` 為有效 git 目錄
 
 本地測試 pipeline 時可設 `REVIEWER_EXECUTOR` 指向 mock script，無需真實 `claude`。
