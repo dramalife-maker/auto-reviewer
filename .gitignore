@@ -1,4 +1,5 @@
 .spectra/
+.codegraph/
 openspec/.vector-search.db*
 backend/target/
 crates/*/target/
