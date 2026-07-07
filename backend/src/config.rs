@@ -7,6 +7,8 @@ const DATA_ROOT_DIR_ENV: &str = "DATA_ROOT_DIR";
 const PORT_ENV: &str = "PORT";
 const PROJECTS_CONFIG_ENV: &str = "PROJECTS_CONFIG";
 const APP_ROOT_ENV: &str = "APP_ROOT";
+const CORS_ALLOW_ORIGINS_ENV: &str = "CORS_ALLOW_ORIGINS";
+const CORS_ALLOW_ANY: &str = "*";
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {
@@ -14,6 +16,7 @@ pub struct AppConfig {
     pub port: u16,
     pub projects_config_path: PathBuf,
     pub app_root: PathBuf,
+    pub cors_allow_origins: Vec<String>,
 }
 
 impl AppConfig {
@@ -23,6 +26,7 @@ impl AppConfig {
             port: 8080,
             projects_config_path: PathBuf::from("projects.yaml"),
             app_root: PathBuf::new(),
+            cors_allow_origins: Vec::new(),
         }
     }
 
@@ -54,6 +58,45 @@ impl AppConfig {
             .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default())
     }
 
+    fn cors_allow_origins_from_env() -> Result<Vec<String>> {
+        let raw = std::env::var(CORS_ALLOW_ORIGINS_ENV).unwrap_or_default();
+        let origins: Vec<String> = raw
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .collect();
+
+        if origins.is_empty() {
+            #[cfg(debug_assertions)]
+            {
+                return Ok(vec![CORS_ALLOW_ANY.to_string()]);
+            }
+            #[cfg(not(debug_assertions))]
+            {
+                return Ok(Vec::new());
+            }
+        }
+
+        if origins.iter().any(|origin| origin == CORS_ALLOW_ANY) {
+            if origins.len() > 1 {
+                return Err(Error::InvalidCorsOrigin(CORS_ALLOW_ANY.to_string()));
+            }
+            return Ok(origins);
+        }
+
+        for origin in &origins {
+            if !origin.starts_with("http://") && !origin.starts_with("https://") {
+                return Err(Error::InvalidCorsOrigin(origin.clone()));
+            }
+            origin
+                .parse::<http::HeaderValue>()
+                .map_err(|_| Error::InvalidCorsOrigin(origin.clone()))?;
+        }
+
+        Ok(origins)
+    }
+
     pub fn from_env() -> Result<Self> {
         let data_dir = std::env::var(DATA_ROOT_DIR_ENV).map_err(|_| Error::MissingDataDir)?;
         Ok(Self {
@@ -61,6 +104,7 @@ impl AppConfig {
             port: Self::port_from_env()?,
             projects_config_path: Self::projects_config_path_from_env(),
             app_root: Self::app_root_from_env(),
+            cors_allow_origins: Self::cors_allow_origins_from_env()?,
         })
     }
 
@@ -82,6 +126,10 @@ impl AppConfig {
 
     pub fn app_root(&self) -> &Path {
         &self.app_root
+    }
+
+    pub fn cors_allow_origins(&self) -> &[String] {
+        &self.cors_allow_origins
     }
 }
 
@@ -136,5 +184,92 @@ mod tests {
         ));
 
         restore_port_env(previous);
+    }
+
+    fn restore_cors_env(previous: Option<String>) {
+        match previous {
+            Some(value) => std::env::set_var(CORS_ALLOW_ORIGINS_ENV, value),
+            None => std::env::remove_var(CORS_ALLOW_ORIGINS_ENV),
+        }
+    }
+
+    #[test]
+    fn cors_origins_default_when_unset() {
+        let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+        let previous = std::env::var(CORS_ALLOW_ORIGINS_ENV).ok();
+        std::env::remove_var(CORS_ALLOW_ORIGINS_ENV);
+
+        let origins = AppConfig::cors_allow_origins_from_env().expect("default cors");
+        #[cfg(debug_assertions)]
+        assert_eq!(origins, vec![CORS_ALLOW_ANY.to_string()]);
+        #[cfg(not(debug_assertions))]
+        assert!(origins.is_empty());
+
+        restore_cors_env(previous);
+    }
+
+    #[test]
+    fn cors_origins_accepts_wildcard() {
+        let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+        let previous = std::env::var(CORS_ALLOW_ORIGINS_ENV).ok();
+        std::env::set_var(CORS_ALLOW_ORIGINS_ENV, CORS_ALLOW_ANY);
+
+        assert_eq!(
+            AppConfig::cors_allow_origins_from_env().expect("wildcard cors"),
+            vec![CORS_ALLOW_ANY.to_string()]
+        );
+
+        restore_cors_env(previous);
+    }
+
+    #[test]
+    fn cors_origins_reject_wildcard_with_other_origins() {
+        let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+        let previous = std::env::var(CORS_ALLOW_ORIGINS_ENV).ok();
+        std::env::set_var(
+            CORS_ALLOW_ORIGINS_ENV,
+            "*,https://reviewer.example.com",
+        );
+
+        assert!(matches!(
+            AppConfig::cors_allow_origins_from_env(),
+            Err(Error::InvalidCorsOrigin(_))
+        ));
+
+        restore_cors_env(previous);
+    }
+
+    #[test]
+    fn cors_origins_parse_comma_separated() {
+        let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+        let previous = std::env::var(CORS_ALLOW_ORIGINS_ENV).ok();
+        std::env::set_var(
+            CORS_ALLOW_ORIGINS_ENV,
+            "https://reviewer.example.com, http://localhost:5173",
+        );
+
+        assert_eq!(
+            AppConfig::cors_allow_origins_from_env().expect("cors origins"),
+            vec![
+                "https://reviewer.example.com".to_string(),
+                "http://localhost:5173".to_string(),
+            ]
+        );
+
+        restore_cors_env(previous);
+    }
+
+    #[test]
+    fn cors_origins_reject_invalid_value() {
+        let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+        let previous = std::env::var(CORS_ALLOW_ORIGINS_ENV).ok();
+        std::env::set_var(CORS_ALLOW_ORIGINS_ENV, "not-a-url");
+
+        assert!(matches!(
+            AppConfig::cors_allow_origins_from_env(),
+            Err(Error::InvalidCorsOrigin(_))
+        ));
+
+        restore_cors_env(previous);
     }
 }

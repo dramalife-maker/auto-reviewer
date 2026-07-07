@@ -32,6 +32,7 @@ copy .env.example .env
 | `APP_ROOT` | 部署根目錄，預設為 process 工作目錄；headless workflow 在 `$APP_ROOT/skills/` |
 | `REVIEWER_EXECUTOR` | 測試用 mock 執行檔，取代 `claude` |
 | `REVIEWER_MIN_FREE_BYTES` | clone / worktree add 前要求的最小可用空間，預設 2GiB |
+| `CORS_ALLOW_ORIGINS` | 允許的前端來源（逗號分隔）。開發建置（`cargo run`）未設定時預設 `*`；正式建置未設定則不啟用 CORS。可明確設 `*` 或例 `https://reviewer.example.com` |
 
 ### 2. 專案設定
 
@@ -105,7 +106,7 @@ npm install
 npm run dev
 ```
 
-Vite dev server 會將 `/health` 與 `/api/*` proxy 到 `http://127.0.0.1:8080`。
+Vite dev server 會將 `/health` 與 `/api/*` proxy 到 repo 根目錄 `.env` 的 `PORT`（預設 `8080`）。本地開發請保持 `frontend/.env` 的 `VITE_API_BASE` 留空。
 
 Production build：
 
@@ -114,9 +115,23 @@ cd frontend
 npm run build
 ```
 
-靜態檔輸出至 `frontend/dist/`，可交由 reverse proxy 與後端同域部署。
+靜態檔輸出至 `frontend/dist/`。可同域 proxy，或前後端分離部署。
 
-#### 子路徑部署（nginx）
+#### 前後端分離部署（跨域）
+
+前端 `https://reviewer.example.com`、後端 `https://api.example.com`：
+
+```env
+# 後端 .env
+CORS_ALLOW_ORIGINS=https://reviewer.example.com
+
+# frontend/.env.production
+VITE_API_BASE=https://api.example.com
+```
+
+建置後前端會直接向後端 API 發請求。正式環境請設定 `CORS_ALLOW_ORIGINS` 為前端網址；開發建置（`cargo run`）未設定時預設允許所有來源（`*`）。
+
+#### 子路徑部署（nginx，同域）
 
 若前端掛在子路徑（例 `https://example.com/reviewer/`），編譯前設定：
 

@@ -108,6 +108,50 @@ async fn health_endpoint_returns_ok() {
     assert_eq!(json["data_dir"], temp.path().display().to_string());
 }
 
+#[tokio::test]
+async fn cors_allows_configured_origin() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let previous_cors = std::env::var("CORS_ALLOW_ORIGINS").ok();
+    std::env::set_var("DATA_ROOT_DIR", temp.path());
+
+    let yaml_path = temp.path().join("projects.yaml");
+    std::fs::write(&yaml_path, "projects: []\n").expect("write yaml");
+    std::env::set_var("PROJECTS_CONFIG", &yaml_path);
+    std::env::set_var(
+        "CORS_ALLOW_ORIGINS",
+        "https://reviewer.example.com,http://localhost:5173",
+    );
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/health")
+                .header("Origin", "https://reviewer.example.com")
+                .header("Access-Control-Request-Method", "GET")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|value| value.to_str().ok()),
+        Some("https://reviewer.example.com")
+    );
+
+    match previous_cors {
+        Some(value) => std::env::set_var("CORS_ALLOW_ORIGINS", value),
+        None => std::env::remove_var("CORS_ALLOW_ORIGINS"),
+    }
+}
+
 #[test]
 fn reviewer_batch_skill_files_exist() {
     let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");

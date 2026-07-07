@@ -262,7 +262,7 @@ export class ReviewerApp {
       <div class="layout error-state">
         <h1>1on1 Reviewer</h1>
         <p class="error">無法連線後端：${escapeHtml(message)}</p>
-        <p class="hint">請確認 reviewer-server 已啟動，且 Vite proxy 指向正確的 PORT。</p>
+        <p class="hint">請確認 reviewer-server 已啟動。本地開發請保持 VITE_API_BASE 留空（走 Vite proxy）；跨域部署請設定 VITE_API_BASE 並在後端設定 CORS_ALLOW_ORIGINS。</p>
       </div>
     `
   }

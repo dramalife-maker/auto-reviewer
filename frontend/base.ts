@@ -14,6 +14,9 @@ export function normalizeApiBase(raw: string | undefined): string {
   if (!value || value === '/') {
     return ''
   }
+  if (/^https?:\/\//i.test(value)) {
+    return value.endsWith('/') ? value.slice(0, -1) : value
+  }
   const withLeading = value.startsWith('/') ? value : `/${value}`
   return withLeading.endsWith('/') ? withLeading.slice(0, -1) : withLeading
 }

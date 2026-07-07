@@ -8,6 +8,8 @@ pub enum Error {
     MissingDataDir,
     #[error("invalid PORT value: {0}")]
     InvalidPort(String),
+    #[error("invalid CORS_ALLOW_ORIGINS entry: {0}")]
+    InvalidCorsOrigin(String),
     #[error("projects config not found: {0}")]
     ProjectsConfigNotFound(String),
     #[error("a project is already queued or running")]

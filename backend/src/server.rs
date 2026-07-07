@@ -1,9 +1,10 @@
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{header, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::error::Error;
 use crate::reports;
@@ -52,14 +53,48 @@ impl From<RunRow> for RunStatusResponse {
 }
 
 pub fn router(state: AppState) -> Router {
-    Router::new()
+    let cors_origins = state.config.cors_allow_origins().to_vec();
+    let router = Router::new()
         .route("/health", get(health))
         .route("/api/runs", post(create_run))
         .route("/api/runs/{id}", get(get_run))
         .route("/api/people", get(list_people))
         .route("/api/people/{id}/reports/latest", get(latest_reports))
         .route("/api/reports/{id}/read", patch(mark_report_read))
-        .with_state(state)
+        .with_state(state);
+
+    apply_cors(router, &cors_origins)
+}
+
+fn apply_cors(router: Router, origins: &[String]) -> Router {
+    if origins.is_empty() {
+        return router;
+    }
+
+    let allow_origin = if origins.iter().any(|origin| origin == "*") {
+        AllowOrigin::any()
+    } else {
+        let allowed: Vec<http::HeaderValue> = origins
+            .iter()
+            .filter_map(|origin| origin.parse().ok())
+            .collect();
+        if allowed.is_empty() {
+            return router;
+        }
+        AllowOrigin::list(allowed)
+    };
+
+    router.layer(
+        CorsLayer::new()
+            .allow_origin(allow_origin)
+            .allow_methods([
+                Method::GET,
+                Method::POST,
+                Method::PATCH,
+                Method::OPTIONS,
+            ])
+            .allow_headers([header::CONTENT_TYPE]),
+    )
 }
 
 async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
