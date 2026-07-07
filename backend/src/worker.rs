@@ -128,7 +128,7 @@ pub async fn process_run_project(
     };
 
     let (outcome, duration_sec, error) =
-        execute_weekly_batch(config, job.run_id, &project, &working_dir, timeout_sec).await?;
+        execute_weekly_batch(pool, config, job.run_id, &project, &working_dir, timeout_sec).await?;
 
     let state = match outcome {
         ExecuteOutcome::Success => {

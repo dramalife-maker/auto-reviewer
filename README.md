@@ -175,6 +175,24 @@ VITE_API_BASE=/reviewer
 
 並在 nginx 將 `/reviewer/api/` proxy 到後端。詳見 `frontend/.env.example`。
 
+## 人員歸戶（git email）
+
+同一工程師可能有多個 git email（同 repo 不同帳號、跨 GitLab/GitHub）。系統以 `git_email` identity 將 commit 歸到單一 `people` 列。**未綁定的 email 不會產出週報**，也不會自動建立人員。
+
+### 建議流程（預先綁定）
+
+1. `POST /api/people` 建立人員（`display_name` 即週報目錄名）
+2. `POST /api/people/{id}/identities` 綁定已知 email（`kind: "git_email"`）
+3. 執行 review（全部執行或排程）
+
+### 事後指認（未歸戶佇列）
+
+1. 先執行 review → 未綁定 email 進入 `unmatched_authors`
+2. Web UI header「未歸戶」面板：建立新人員並綁定，或綁定到既有人員
+3. 重新執行 review，該工程師才會出現在左欄並產出週報
+
+`summary.md` frontmatter 的 `person` 必須等於 canonical `display_name`；後端 ingestion 不再自動 INSERT 新人員。
+
 ## Headless 執行
 
 Worker 對每個專案 spawn：
@@ -214,7 +232,11 @@ claude --bare ... --append-system-prompt-file $APP_ROOT/skills/reviewer-batch/WO
 | GET | `/health` | 健康檢查 |
 | POST | `/api/runs` | `{ "trigger": "manual_all" }` 全部執行 |
 | GET | `/api/runs/{id}` | 查詢 run 狀態 |
-| GET | `/api/people` | 人員列表（含未讀數） |
+| GET | `/api/people` | 人員列表（含未讀數、`identity_count`） |
+| POST | `/api/people` | 建立人員 `{ "display_name": "..." }` |
+| GET | `/api/people/{id}/identities` | 列出已綁 identity |
+| POST | `/api/people/{id}/identities` | 綁定 identity `{ "kind", "value", "label?" }` |
+| GET | `/api/unmatched-authors` | 未歸戶 git author 列表 |
 | GET | `/api/people/{id}/reports/latest` | 最新週報 |
 | PATCH | `/api/reports/{id}/read` | 標記已讀 |
 

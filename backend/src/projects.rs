@@ -1,6 +1,6 @@
 use std::path::{Component, Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 
 use crate::error::{Error, Result};
@@ -48,6 +48,12 @@ pub async fn load_from_yaml(
     let content = std::fs::read_to_string(config_path)?;
     let file: ProjectsFile = serde_yaml::from_str(&content)?;
 
+    tracing::info!(
+        config = %config_path.display(),
+        project_count = file.projects.len(),
+        "loaded projects.yaml"
+    );
+
     let mut resolved = Vec::with_capacity(file.projects.len());
     for entry in file.projects {
         let repo_path = resolve_repo_path(data_dir, &entry.repo_path);
@@ -61,6 +67,16 @@ pub async fn load_from_yaml(
             ("healthy", None)
         };
         let default_branch = entry.default_branches.first().cloned();
+
+        tracing::info!(
+            name = %entry.name,
+            repo_path = %repo_path_str,
+            git_remote_url = ?entry.git_remote_url,
+            default_branches = ?entry.default_branches,
+            health,
+            health_reason = ?health_reason,
+            "project entry resolved"
+        );
 
         sqlx::query(
             r#"
@@ -98,6 +114,24 @@ pub async fn load_from_yaml(
     }
 
     Ok(resolved)
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct ProjectHealth {
+    pub name: String,
+    pub health: String,
+    pub health_reason: Option<String>,
+    pub is_git_repo: i64,
+}
+
+/// List all projects with their current provisioning health, for the reload UI.
+pub async fn list_projects(pool: &SqlitePool) -> Result<Vec<ProjectHealth>> {
+    sqlx::query_as::<_, ProjectHealth>(
+        "SELECT name, health, health_reason, is_git_repo FROM projects ORDER BY name",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)
 }
 
 /// Finalize a project's provisioning outcome: `is_git_repo`, `default_branch`,

@@ -18,6 +18,14 @@ pub enum Error {
     UnsupportedRunTrigger(String),
     #[error("not found")]
     NotFound,
+    #[error("person display_name already exists")]
+    DuplicateDisplayName,
+    #[error("identity is already bound to another person")]
+    IdentityConflict,
+    #[error("invalid person display_name")]
+    InvalidPersonName,
+    #[error("invalid identity value")]
+    InvalidIdentityValue,
     #[error("failed to parse summary.md: {0}")]
     SummaryParse(String),
     #[error(transparent)]

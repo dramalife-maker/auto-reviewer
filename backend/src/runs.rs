@@ -4,6 +4,8 @@ use chrono::Utc;
 use serde::Serialize;
 use sqlx::Row;
 
+use crate::identity::{self, ManifestAuthor};
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ProjectRow {
     pub id: i64,
@@ -245,6 +247,7 @@ pub struct RunManifest<'a> {
     pub run_date: String,
     pub since: String,
     pub output_contract: &'static str,
+    pub authors: Vec<ManifestAuthor>,
 }
 
 pub fn manifest_path(data_root: &Path, run_id: i64, project_id: i64) -> PathBuf {
@@ -257,6 +260,7 @@ pub fn manifest_path(data_root: &Path, run_id: i64, project_id: i64) -> PathBuf 
 }
 
 pub async fn write_weekly_manifest(
+    pool: &sqlx::SqlitePool,
     data_root: &Path,
     run_id: i64,
     project: &ProjectRow,
@@ -278,6 +282,15 @@ pub async fn write_weekly_manifest(
         .to_string()
         .replace('\\', "/");
 
+    let authors = identity::prepare_manifest_authors(
+        pool,
+        Path::new(repo_path),
+        project.id,
+        &since,
+        &run_date,
+    )
+    .await?;
+
     let manifest = RunManifest {
         mode: "weekly_batch",
         project_name: &project.name,
@@ -286,6 +299,7 @@ pub async fn write_weekly_manifest(
         run_date,
         since,
         output_contract: "output-contract.md",
+        authors,
     };
 
     let json = serde_json::to_string_pretty(&manifest).map_err(|err| {

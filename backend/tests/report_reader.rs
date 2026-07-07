@@ -109,6 +109,7 @@ async fn people_list_includes_unread() {
     let alice = &json[0];
     assert_eq!(alice["display_name"], "Alice");
     assert!(alice["unread_count"].as_i64().unwrap_or(0) > 0);
+    assert_eq!(alice["identity_count"].as_i64().unwrap_or(-1), 0);
 }
 
 #[tokio::test]

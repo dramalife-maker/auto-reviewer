@@ -15,6 +15,7 @@
    - `report_root`（本專案報告根目錄，例 `$DATA_ROOT_DIR/reports/game-backend`）
    - `run_date`（本次報告日期，`YYYY-MM-DD`）
    - `since`（分析窗口起日，`YYYY-MM-DD`，含當日）
+   - `authors`（已歸戶工程師陣列：`email`, `git_name`, `person_id`, `display_name`）
    - `output_contract`（固定為 `output-contract.md`，格式見同目錄 appended 規格）
 3. 若 `mode` 不是 `weekly_batch`，停止並在 stderr 說明（仍 exit 0 除非無法讀 manifest）。
 
@@ -28,21 +29,20 @@
 
 ## 1. 盤點本週活躍工程師
 
-在 `repo_path` 用 git 找出 `since` 至 `run_date` 有 commit 的作者：
+**不要**自行執行 `git log` 決定人員列表。改為讀 manifest 的 `authors` 陣列：
 
-```bash
-git log --since="${since}T00:00:00" --until="${run_date}T23:59:59" \
-  --format='%an|%ae' --no-merges
+```json
+"authors": [
+  { "email": "alice@co.com", "git_name": "Alice", "person_id": 1, "display_name": "Alice Chen" }
+]
 ```
 
 規則：
 
-- 以 **display name**（`%an`）作為 `person` 目錄名與 summary frontmatter 的 `person` 欄位。
-- 同一 `%ae` 若對應多個 `%an`，合併為同一 `person`（取最常見的 `%an`）。
-- **略過** merge commit 本身；若僅 merge、無實質 commit，可不產報告。
-- 若窗口內 **無任何作者**，寫完 manifest 後正常結束（不視為錯誤）。
-
-統計每位作者的 `commit_count`（窗口內非 merge commit 數）。`mr_count` 若無法從 git 可靠取得，填 `0` 或省略（後端接受 null）。
+- 僅為 `authors` 中每位已歸戶工程師產出報告（後端已過濾未歸戶 email）。
+- 目錄名與 summary frontmatter 的 `person` 欄位 **必須** 使用 `authors[].display_name`（canonical 名稱），**不可** 使用 `%an` 或 email。
+- 若 `authors` 為空陣列，寫完 manifest 後正常結束（不視為錯誤）。
+- 統計每位作者的 `commit_count`：在 `repo_path` 對該 author 的 email 執行 `git log`（`since`～`run_date`，`--no-merges`）。`mr_count` 若無法從 git 可靠取得，填 `0` 或省略（後端接受 null）。
 
 ---
 
@@ -155,6 +155,7 @@ Read 若已存在：
 ## 7. 快速檢查清單
 
 - [ ] 已 Read manifest.json
+- [ ] 已依 manifest `authors` 處理每位工程師（非自行 git 歸戶）
 - [ ] 每份 `summary.md` frontmatter 與三個 heading 正確
 - [ ] 路徑均在 `{report_root}/{person}/{run_date}/`
 - [ ] 已更新 `index.md` / `YYYY-MM.md` / `_notes.md`（若有產 report）

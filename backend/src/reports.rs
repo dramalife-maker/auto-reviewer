@@ -13,6 +13,7 @@ pub struct PersonListItem {
     pub project_count: i64,
     pub unread_count: i64,
     pub open_pending_count: i64,
+    pub identity_count: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -40,7 +41,9 @@ pub async fn list_people(pool: &SqlitePool) -> Result<Vec<PersonListItem>, Error
                 COUNT(DISTINCT r.project_id) AS project_count,
                 COALESCE(SUM(CASE WHEN r.is_read = 0 THEN 1 ELSE 0 END), 0) AS unread_count,
                 (SELECT COUNT(*) FROM pending_items pi
-                   WHERE pi.person_id = p.id AND pi.status = 'open') AS open_pending_count
+                   WHERE pi.person_id = p.id AND pi.status = 'open') AS open_pending_count,
+                (SELECT COUNT(*) FROM person_identities pi2
+                   WHERE pi2.person_id = p.id) AS identity_count
          FROM people p
          LEFT JOIN reports r ON r.person_id = p.id
          GROUP BY p.id, p.display_name

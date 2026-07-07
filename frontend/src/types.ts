@@ -9,6 +9,23 @@ export interface Person {
   project_count: number
   unread_count: number
   open_pending_count: number
+  identity_count: number
+}
+
+export interface UnmatchedAuthor {
+  id: number
+  kind: string
+  value: string
+  project_id: number | null
+  project_name: string | null
+  commit_count: number
+  first_seen: string
+  last_seen: string
+}
+
+export interface CreatePersonResponse {
+  id: number
+  display_name: string
 }
 
 export interface LatestReportItem {
@@ -40,4 +57,18 @@ export interface RunStatus {
 
 export interface CreateRunResponse {
   run_id: number
+}
+
+export interface ProjectHealth {
+  name: string
+  health: string
+  health_reason: string | null
+  is_git_repo: number
+}
+
+export interface ReloadProjectsResponse {
+  total: number
+  healthy: number
+  unhealthy: number
+  projects: ProjectHealth[]
 }

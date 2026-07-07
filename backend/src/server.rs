@@ -7,9 +7,12 @@ use serde::{Deserialize, Serialize};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::error::Error;
+use crate::identity;
+use crate::projects;
 use crate::reports;
 use crate::runs::{self, RunRow};
 use crate::state::AppState;
+use crate::worktree;
 
 #[derive(Serialize)]
 pub struct HealthResponse {
@@ -25,6 +28,14 @@ pub struct CreateRunRequest {
 #[derive(Serialize)]
 pub struct CreateRunResponse {
     pub run_id: i64,
+}
+
+#[derive(Serialize)]
+pub struct ReloadProjectsResponse {
+    pub total: usize,
+    pub healthy: usize,
+    pub unhealthy: usize,
+    pub projects: Vec<projects::ProjectHealth>,
 }
 
 #[derive(Serialize)]
@@ -58,9 +69,12 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/api/runs", post(create_run))
         .route("/api/runs/{id}", get(get_run))
-        .route("/api/people", get(list_people))
+        .route("/api/people", get(list_people).post(create_person))
         .route("/api/people/{id}/reports/latest", get(latest_reports))
+        .route("/api/people/{id}/identities", get(list_person_identities).post(bind_person_identity))
+        .route("/api/unmatched-authors", get(list_unmatched_authors))
         .route("/api/reports/{id}/read", patch(mark_report_read))
+        .route("/api/projects/reload", post(reload_projects))
         .with_state(state);
 
     apply_cors(router, &cors_origins)
@@ -134,11 +148,112 @@ async fn get_run(
     Ok(Json(run.into()))
 }
 
+async fn reload_projects(
+    State(state): State<AppState>,
+) -> Result<Json<ReloadProjectsResponse>, ApiError> {
+    let resolved = projects::load_from_yaml(
+        &state.pool,
+        state.config.data_dir(),
+        state.config.projects_config_path(),
+    )
+    .await
+    .map_err(ApiError::from)?;
+
+    worktree::provision_all(&state.pool, &resolved).await;
+
+    let projects = projects::list_projects(&state.pool)
+        .await
+        .map_err(ApiError::from)?;
+    let healthy = projects
+        .iter()
+        .filter(|project| project.health == "healthy")
+        .count();
+    let unhealthy = projects.len() - healthy;
+
+    Ok(Json(ReloadProjectsResponse {
+        total: projects.len(),
+        healthy,
+        unhealthy,
+        projects,
+    }))
+}
+
 async fn list_people(State(state): State<AppState>) -> Result<Json<Vec<reports::PersonListItem>>, ApiError> {
     let people = reports::list_people(&state.pool)
         .await
         .map_err(ApiError::from)?;
     Ok(Json(people))
+}
+
+#[derive(Deserialize)]
+struct CreatePersonRequest {
+    display_name: String,
+}
+
+#[derive(Serialize)]
+struct CreatePersonResponse {
+    id: i64,
+    display_name: String,
+}
+
+async fn create_person(
+    State(state): State<AppState>,
+    Json(body): Json<CreatePersonRequest>,
+) -> Result<(StatusCode, Json<CreatePersonResponse>), ApiError> {
+    let display_name = body.display_name.trim().to_string();
+    let person_id = identity::create_person(&state.pool, &display_name)
+        .await
+        .map_err(ApiError::from)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(CreatePersonResponse {
+            id: person_id,
+            display_name,
+        }),
+    ))
+}
+
+async fn list_unmatched_authors(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<identity::UnmatchedAuthorItem>>, ApiError> {
+    let items = identity::list_unmatched_authors(&state.pool)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(items))
+}
+
+#[derive(Deserialize)]
+struct BindIdentityRequest {
+    kind: String,
+    value: String,
+    label: Option<String>,
+}
+
+async fn bind_person_identity(
+    State(state): State<AppState>,
+    Path(person_id): Path<i64>,
+    Json(body): Json<BindIdentityRequest>,
+) -> Result<StatusCode, ApiError> {
+    identity::bind_identity(
+        &state.pool,
+        person_id,
+        &body.kind,
+        &body.value,
+        body.label.as_deref(),
+    )
+    .await
+    .map_err(ApiError::from)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_person_identities(
+    State(state): State<AppState>,
+    Path(person_id): Path<i64>,
+) -> Result<Json<Vec<identity::IdentityItem>>, ApiError> {
+    let items = identity::list_identities_for_person(&state.pool, person_id)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(items))
 }
 
 async fn latest_reports(
@@ -178,8 +293,12 @@ impl From<Error> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match &self.0 {
-            Error::RunConflict => StatusCode::CONFLICT,
-            Error::UnsupportedRunTrigger(_) => StatusCode::BAD_REQUEST,
+            Error::RunConflict | Error::DuplicateDisplayName | Error::IdentityConflict => {
+                StatusCode::CONFLICT
+            }
+            Error::UnsupportedRunTrigger(_) | Error::InvalidPersonName | Error::InvalidIdentityValue => {
+                StatusCode::BAD_REQUEST
+            }
             Error::NotFound => StatusCode::NOT_FOUND,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };

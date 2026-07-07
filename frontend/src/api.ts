@@ -1,9 +1,12 @@
 import type {
+  CreatePersonResponse,
   CreateRunResponse,
   HealthResponse,
   LatestReportsResponse,
   Person,
+  ReloadProjectsResponse,
   RunStatus,
+  UnmatchedAuthor,
 } from './types'
 import { apiUrl } from './config'
 
@@ -45,4 +48,33 @@ export function startManualRun(): Promise<CreateRunResponse> {
 
 export function fetchRun(runId: number): Promise<RunStatus> {
   return request(`/api/runs/${runId}`)
+}
+
+export function reloadProjects(): Promise<ReloadProjectsResponse> {
+  return request('/api/projects/reload', { method: 'POST' })
+}
+
+export function fetchUnmatchedAuthors(): Promise<UnmatchedAuthor[]> {
+  return request('/api/unmatched-authors')
+}
+
+export function createPerson(displayName: string): Promise<CreatePersonResponse> {
+  return request('/api/people', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ display_name: displayName }),
+  })
+}
+
+export function bindIdentity(
+  personId: number,
+  kind: string,
+  value: string,
+  label?: string,
+): Promise<void> {
+  return request(`/api/people/${personId}/identities`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind, value, label }),
+  })
 }

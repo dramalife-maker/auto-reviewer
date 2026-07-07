@@ -2,6 +2,7 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod executor;
+pub mod identity;
 pub mod projects;
 pub mod reports;
 pub mod runs;

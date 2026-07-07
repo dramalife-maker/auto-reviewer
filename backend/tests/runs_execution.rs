@@ -273,6 +273,11 @@ async fn summary_parser_creates_report_and_pending() {
     let temp = tempfile::tempdir().expect("tempdir");
     let pool = init_pool(temp.path()).await.expect("init pool");
 
+    sqlx::query("INSERT INTO people (display_name) VALUES ('Alice')")
+        .execute(&pool)
+        .await
+        .expect("insert person");
+
     sqlx::query(
         "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('game-backend', ?, 0)",
     )

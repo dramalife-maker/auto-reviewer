@@ -59,6 +59,98 @@ body {
   cursor: wait;
 }
 
+.header-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.secondary {
+  border: 1px solid #374151;
+  border-radius: 0.5rem;
+  padding: 0.625rem 1rem;
+  background: transparent;
+  color: #e5e7eb;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.secondary:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.unmatched-panel {
+  margin: 0 1.5rem 1rem;
+  padding: 1rem 1.25rem;
+  background: #fff7ed;
+  border: 1px solid #fdba74;
+  border-radius: 0.75rem;
+}
+
+.unmatched-panel header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.unmatched-panel h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.unmatched-panel .hint {
+  margin: 0.5rem 0 1rem;
+  color: #9a3412;
+  font-size: 0.875rem;
+}
+
+.unmatched-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.unmatched-row {
+  padding: 0.75rem;
+  background: white;
+  border: 1px solid #fed7aa;
+  border-radius: 0.5rem;
+}
+
+.unmatched-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.unmatched-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.unmatched-actions input,
+.unmatched-actions select {
+  min-width: 10rem;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid #d1d5db;
+  border-radius: 0.375rem;
+}
+
+.unmatched-actions button {
+  border: 0;
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  background: #ea580c;
+  color: white;
+  cursor: pointer;
+}
+
 .banner {
   padding: 0.75rem 1.5rem;
   background: #ecfdf5;

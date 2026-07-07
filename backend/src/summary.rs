@@ -3,6 +3,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
+use tracing::warn;
+
+use crate::identity;
 use crate::Error;
 
 #[derive(Debug, Deserialize)]
@@ -89,7 +92,16 @@ async fn upsert_summary(
     run_id: i64,
     parsed: &ParsedSummary,
 ) -> Result<(), Error> {
-    let person_id = upsert_person(pool, &parsed.frontmatter.person).await?;
+    let Some(person_id) =
+        identity::resolve_person_id_by_display_name(pool, &parsed.frontmatter.person).await?
+    else {
+        warn!(
+            person = %parsed.frontmatter.person,
+            summary = %parsed.summary_path.display(),
+            "skipping summary: unknown person"
+        );
+        return Ok(());
+    };
 
     let report_date = parsed.frontmatter.date.clone();
     let report_dir = parsed
@@ -152,24 +164,6 @@ async fn upsert_summary(
     }
 
     Ok(())
-}
-
-async fn upsert_person(pool: &SqlitePool, display_name: &str) -> Result<i64, Error> {
-    if let Some(person_id) = sqlx::query_scalar("SELECT id FROM people WHERE display_name = ?")
-        .bind(display_name)
-        .fetch_optional(pool)
-        .await
-        .map_err(Error::Database)?
-    {
-        return Ok(person_id);
-    }
-
-    let result = sqlx::query("INSERT INTO people (display_name) VALUES (?)")
-        .bind(display_name)
-        .execute(pool)
-        .await
-        .map_err(Error::Database)?;
-    Ok(result.last_insert_rowid())
 }
 
 fn find_summary_files(person_dir: &Path) -> Result<Vec<PathBuf>, Error> {

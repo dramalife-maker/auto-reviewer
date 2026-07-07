@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
+use sqlx::SqlitePool;
 use tokio::process::Command;
 use tokio::time;
 
@@ -26,6 +27,7 @@ enum AgentProvider {
 }
 
 pub async fn execute_weekly_batch(
+    pool: &SqlitePool,
     config: &AppConfig,
     run_id: i64,
     project: &ProjectRow,
@@ -34,7 +36,7 @@ pub async fn execute_weekly_batch(
 ) -> Result<(ExecuteOutcome, i64, Option<String>), Error> {
     let working_dir_str = working_dir.display().to_string();
     let manifest_path =
-        write_weekly_manifest(config.data_dir(), run_id, project, &working_dir_str).await?;
+        write_weekly_manifest(pool, config.data_dir(), run_id, project, &working_dir_str).await?;
     let started = Instant::now();
 
     let mut command = build_command(config, working_dir, &manifest_path)?;

@@ -12,7 +12,7 @@
 ```
 
 - `{report_root}` ← manifest `report_root`
-- `{person}` ← frontmatter `person`（與目錄名一致）
+- `{person}` ← manifest `authors[].display_name`（canonical 顯示名；與目錄名一致）
 - `{run_date}` ← manifest `run_date`（與 frontmatter `date` 一致）
 
 同目錄必須另有 `report.md`（完整版，格式自由）。
@@ -49,7 +49,7 @@ commit_count: 42
 
 | 鍵 | 必填 | 型別 | 說明 |
 |----|------|------|------|
-| `person` | 是 | string | 工程師顯示名；與 `{person}` 目錄名相同 |
+| `person` | 是 | string | 工程師 canonical 顯示名；**必須**等於 manifest `authors[].display_name` 與 `{person}` 目錄名 |
 | `project` | 是 | string | 必須等於 manifest `project_name` |
 | `date` | 是 | string | `YYYY-MM-DD`；必須等於 manifest `run_date` |
 | `one_line` | 是 | string | 一兩句話摘要 |
@@ -86,7 +86,7 @@ Bullet 規則：
 | 產出 | 寫入 |
 |------|------|
 | frontmatter | `reports.one_line`, `mr_count`, `commit_count`, 路徑 |
-| `person` | upsert `people.display_name` |
+| `person` | 查既有 `people.display_name`；未知則跳過該 summary |
 | `## 待確認` bullets | `pending_items`（`raised_date` = `date` 的 `YYYY-MM`） |
 | 檔案路徑 | `reports.summary_md_path`, `reports.report_md_path` |
 
