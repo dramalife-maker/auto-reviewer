@@ -116,6 +116,45 @@ npm run build
 
 靜態檔輸出至 `frontend/dist/`，可交由 reverse proxy 與後端同域部署。
 
+#### 子路徑部署（nginx）
+
+若前端掛在子路徑（例 `https://example.com/reviewer/`），編譯前設定：
+
+```powershell
+# frontend/.env.production
+VITE_BASE_PATH=/reviewer
+```
+
+```powershell
+cd frontend
+npm run build
+```
+
+建置產物中的 JS/CSS 會帶 `/reviewer/` 前綴。nginx 範例：
+
+```nginx
+location /reviewer/ {
+    alias /var/www/reviewer/dist/;
+    try_files $uri $uri/ /reviewer/index.html;
+}
+
+# API 若在網域根（常見）
+location /api/ {
+    proxy_pass http://127.0.0.1:8080;
+}
+location = /health {
+    proxy_pass http://127.0.0.1:8080/health;
+}
+```
+
+若 API 也掛在同一前綴下（`/reviewer/api/`），額外設定：
+
+```env
+VITE_API_BASE=/reviewer
+```
+
+並在 nginx 將 `/reviewer/api/` proxy 到後端。詳見 `frontend/.env.example`。
+
 ## Headless 執行
 
 Worker 對每個專案 spawn：

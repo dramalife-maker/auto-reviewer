@@ -5,9 +5,10 @@ import type {
   Person,
   RunStatus,
 } from './types'
+import { apiUrl } from './config'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init)
+  const response = await fetch(apiUrl(path), init)
   if (!response.ok) {
     const text = await response.text()
     throw new Error(text || response.statusText)
