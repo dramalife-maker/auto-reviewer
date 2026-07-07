@@ -6,7 +6,9 @@
 
 - Rust（stable）與 Cargo
 - Node.js 20+（前端 build / dev）
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)（`claude` 已登入；實際批次執行時需要）
+- AI agent CLI（擇一，見 `REVIEWER_AGENT`）：
+  - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)（`claude` 已登入；設 `REVIEWER_AGENT=claude`）
+  - [Cursor Agent CLI](https://cursor.com/docs/cli)（`cursor-agent` 已安裝；預設，headless 需 `CURSOR_API_KEY`）
 - `git` 已在 PATH（後端啟動時會 bare clone 各專案並建立 worktree）
 
 ## 快速開始
@@ -30,7 +32,10 @@ copy .env.example .env
 |------|------|
 | `PROJECTS_CONFIG` | `projects.yaml` 路徑，預設 repo 根目錄 |
 | `APP_ROOT` | 部署根目錄，預設為 process 工作目錄；headless workflow 在 `$APP_ROOT/skills/` |
-| `REVIEWER_EXECUTOR` | 測試用 mock 執行檔，取代 `claude` |
+| `REVIEWER_AGENT` | 批次執行用的 agent：`cursor`（預設）或 `claude` |
+| `REVIEWER_CURSOR_MODEL` | `REVIEWER_AGENT=cursor` 時可選的 model（對應 `cursor-agent --model`） |
+| `CURSOR_API_KEY` | Cursor headless 認證（`--print` 子進程需能讀到此 env） |
+| `REVIEWER_EXECUTOR` | 測試用 mock 執行檔，取代真實 agent CLI |
 | `REVIEWER_MIN_FREE_BYTES` | clone / worktree add 前要求的最小可用空間，預設 2GiB |
 | `CORS_ALLOW_ORIGINS` | 允許的前端來源（逗號分隔）。開發建置（`cargo run`）未設定時預設 `*`；正式建置未設定則不啟用 CORS。可明確設 `*` 或例 `https://reviewer.example.com` |
 
@@ -185,15 +190,22 @@ claude --bare ... --append-system-prompt-file $APP_ROOT/skills/reviewer-batch/WO
 | `WORKFLOW.md` | 週報 headless 流程（讀 manifest → git 分析 → 寫 report/summary → 更新長期檔） |
 | `output-contract.md` | `summary.md` 格式契約（frontmatter + 三個固定 heading） |
 
-後端 spawn 時以 `--append-system-prompt-file` 載入上述兩檔；動態參數僅 manifest 路徑（見 `docs/idea/spec.md` §6.0）。
+後端依 `REVIEWER_AGENT` 載入 workflow：
+
+| `REVIEWER_AGENT` | 載入方式 |
+|------------------|----------|
+| `cursor`（預設） | 將兩檔內容內嵌至 prompt，並以 `cursor-agent --print --trust --force` 執行 |
+| `claude` | `--append-system-prompt-file` 載入 `WORKFLOW.md` 與 `output-contract.md` |
+
+動態參數僅 manifest 路徑（見 `docs/idea/spec.md` §6.0）。
 
 執行前請確認：
 
-1. `claude` 已在 PATH 且已 auth
+1. 所選 agent CLI 已在 PATH 且已 auth（Cursor headless 請設 `CURSOR_API_KEY`）
 2. 從 repo 根目錄啟動後端（或設定 `APP_ROOT` 指向含 `skills/` 的目錄）
 3. 各專案 `git_remote_url` 可達，且啟動時已成功 provision（`is_git_repo=1`）
 
-本地測試 pipeline 時可設 `REVIEWER_EXECUTOR` 指向 mock script，無需真實 `claude`。
+本地測試 pipeline 時可設 `REVIEWER_EXECUTOR` 指向 mock script，無需真實 agent CLI。
 
 ## API 摘要
 
