@@ -1,7 +1,7 @@
 use axum::extract::{Path, State};
 use axum::http::{header, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, post};
+use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -97,7 +97,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/people/{id}/identities", get(list_person_identities).post(bind_person_identity))
         .route("/api/unmatched-authors", get(list_unmatched_authors))
         .route("/api/reports/{id}/read", patch(mark_report_read))
+        .route("/api/projects", get(list_projects).post(create_project))
         .route("/api/projects/reload", post(reload_projects))
+        .route("/api/projects/{name}", put(update_project).delete(delete_project))
         .with_state(state);
 
     apply_cors(router, &cors_origins)
@@ -127,7 +129,9 @@ fn apply_cors(router: Router, origins: &[String]) -> Router {
             .allow_methods([
                 Method::GET,
                 Method::POST,
+                Method::PUT,
                 Method::PATCH,
+                Method::DELETE,
                 Method::OPTIONS,
             ])
             .allow_headers([header::CONTENT_TYPE]),
@@ -183,16 +187,74 @@ async fn get_run(
     }))
 }
 
+async fn list_projects(
+    State(state): State<AppState>,
+) -> Result<Json<projects::ProjectListResponse>, ApiError> {
+    let response = projects::list_project_details(&state.pool, state.config.data_dir())
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(response))
+}
+
+async fn create_project(
+    State(state): State<AppState>,
+    Json(body): Json<projects::ProjectInput>,
+) -> Result<(StatusCode, Json<projects::ProjectListItem>), ApiError> {
+    let project = projects::create_project(&state.pool, state.config.data_dir(), body)
+        .await
+        .map_err(ApiError::from)?;
+    let resolved = projects::load_resolved_from_db(&state.pool)
+        .await
+        .map_err(ApiError::from)?;
+    worktree::provision_all(&state.pool, &resolved).await;
+    let refreshed = projects::list_project_details(&state.pool, state.config.data_dir())
+        .await
+        .map_err(ApiError::from)?
+        .projects
+        .into_iter()
+        .find(|item| item.name == project.name)
+        .unwrap_or(project);
+    Ok((StatusCode::CREATED, Json(refreshed)))
+}
+
+async fn update_project(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<projects::ProjectUpdateInput>,
+) -> Result<Json<projects::ProjectListItem>, ApiError> {
+    let project = projects::update_project(&state.pool, state.config.data_dir(), &name, body)
+        .await
+        .map_err(ApiError::from)?;
+    let resolved = projects::load_resolved_from_db(&state.pool)
+        .await
+        .map_err(ApiError::from)?;
+    worktree::provision_all(&state.pool, &resolved).await;
+    let refreshed = projects::list_project_details(&state.pool, state.config.data_dir())
+        .await
+        .map_err(ApiError::from)?
+        .projects
+        .into_iter()
+        .find(|item| item.name == project.name)
+        .unwrap_or(project);
+    Ok(Json(refreshed))
+}
+
+async fn delete_project(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    projects::delete_project(&state.pool, &name)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn reload_projects(
     State(state): State<AppState>,
 ) -> Result<Json<ReloadProjectsResponse>, ApiError> {
-    let resolved = projects::load_from_yaml(
-        &state.pool,
-        state.config.data_dir(),
-        state.config.projects_config_path(),
-    )
-    .await
-    .map_err(ApiError::from)?;
+    let resolved = projects::load_resolved_from_db(&state.pool)
+        .await
+        .map_err(ApiError::from)?;
 
     worktree::provision_all(&state.pool, &resolved).await;
 
@@ -352,12 +414,15 @@ impl From<Error> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match &self.0 {
-            Error::RunConflict | Error::DuplicateDisplayName | Error::IdentityConflict => {
-                StatusCode::CONFLICT
-            }
-            Error::UnsupportedRunTrigger(_) | Error::InvalidPersonName | Error::InvalidIdentityValue => {
-                StatusCode::BAD_REQUEST
-            }
+            Error::RunConflict
+            | Error::DuplicateDisplayName
+            | Error::DuplicateProjectName
+            | Error::IdentityConflict => StatusCode::CONFLICT,
+            Error::UnsupportedRunTrigger(_)
+            | Error::InvalidPersonName
+            | Error::InvalidIdentityValue
+            | Error::InvalidProjectName
+            | Error::InvalidProjectConfig(_) => StatusCode::BAD_REQUEST,
             Error::NotFound => StatusCode::NOT_FOUND,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };

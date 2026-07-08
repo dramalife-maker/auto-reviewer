@@ -125,7 +125,7 @@ async fn provisioning_sets_git_repo_and_default_branch() {
 }
 
 #[tokio::test]
-async fn missing_remote_url_marks_unhealthy_and_isolates() {
+async fn missing_remote_url_marks_local_and_isolates() {
     let temp = tempfile::tempdir().expect("tempdir");
     let source = temp.path().join("source-repo");
     init_source_repo(&source);
@@ -155,10 +155,10 @@ async fn missing_remote_url_marks_unhealthy_and_isolates() {
     provision_all(&pool, &resolved).await;
 
     let (health, reason) = get_project_health(&pool, "no-url").await.expect("health");
-    assert_eq!(health, "unhealthy");
-    assert_eq!(reason.as_deref(), Some("missing git_remote_url"));
+    assert_eq!(health, "healthy");
+    assert!(reason.is_none());
 
-    // The healthy project is still provisioned despite the unhealthy sibling.
+    // Local projects skip provisioning; the gitlab sibling still provisions.
     let (is_git_repo, _) = get_project(&pool, "good").await.expect("get good");
     assert_eq!(is_git_repo, 1);
 }

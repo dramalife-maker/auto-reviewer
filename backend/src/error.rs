@@ -26,6 +26,12 @@ pub enum Error {
     InvalidPersonName,
     #[error("invalid identity value")]
     InvalidIdentityValue,
+    #[error("project name already exists")]
+    DuplicateProjectName,
+    #[error("invalid project name")]
+    InvalidProjectName,
+    #[error("invalid project configuration: {0}")]
+    InvalidProjectConfig(String),
     #[error("failed to parse summary.md: {0}")]
     SummaryParse(String),
     #[error(transparent)]

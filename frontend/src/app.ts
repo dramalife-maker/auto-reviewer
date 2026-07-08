@@ -1,16 +1,20 @@
 import {
   bindIdentity,
   createPerson,
+  createProject,
+  deleteProject,
   fetchDashboard,
   fetchHealth,
   fetchLatestReports,
   fetchPeople,
   fetchPersonTrends,
+  fetchProjects,
   fetchRun,
   fetchUnmatchedAuthors,
   markReportRead,
   reloadProjects,
   startManualRun,
+  updateProject,
 } from './api'
 import type {
   DashboardResponse,
@@ -18,12 +22,24 @@ import type {
   LatestReportsResponse,
   Person,
   PersonTrendsResponse,
+  ProjectListItem,
   RunStatus,
   UnmatchedAuthor,
 } from './types'
 
 const TERMINAL_STATUSES = new Set(['success', 'partial', 'failed'])
-type AppView = 'dashboard' | 'reports'
+type AppView = 'dashboard' | 'reports' | 'projects'
+type SourceType = 'gitlab' | 'local'
+
+interface ProjectDraft {
+  name: string
+  source_type: SourceType
+  gitlab_project_id: string
+  repo_path: string
+  git_remote_url: string
+  default_branches: string
+  isNew: boolean
+}
 
 export class ReviewerApp {
   private root: HTMLElement
@@ -41,6 +57,10 @@ export class ReviewerApp {
   private showUnmatchedPanel = false
   private appView: AppView = 'dashboard'
   private dashboard: DashboardResponse | null = null
+  private projects: ProjectListItem[] = []
+  private selectedProjectName: string | null = null
+  private projectDraft: ProjectDraft | null = null
+  private isCreatingProject = false
 
   constructor(root: HTMLElement) {
     this.root = root
@@ -50,7 +70,12 @@ export class ReviewerApp {
     try {
       const health = await fetchHealth()
       this.bannerMessage = null
-      await Promise.all([this.loadPeople(), this.loadUnmatchedAuthors(), this.loadDashboard()])
+      await Promise.all([
+        this.loadPeople(),
+        this.loadUnmatchedAuthors(),
+        this.loadDashboard(),
+        this.loadProjects(),
+      ])
       this.render(`已連線 · ${health.data_dir}`)
     } catch (error) {
       this.renderError(error)
@@ -84,6 +109,28 @@ export class ReviewerApp {
       this.dashboard = await fetchDashboard()
     } catch {
       this.dashboard = null
+    }
+  }
+
+  private async loadProjects(): Promise<void> {
+    try {
+      const response = await fetchProjects()
+      this.projects = response.projects
+      if (this.selectedProjectName === null && this.projects.length > 0) {
+        this.selectedProjectName = this.projects[0].name
+      }
+      if (
+        this.selectedProjectName !== null &&
+        !this.projects.some((project) => project.name === this.selectedProjectName)
+      ) {
+        this.selectedProjectName = this.projects[0]?.name ?? null
+      }
+      if (!this.isCreatingProject) {
+        this.syncProjectDraft()
+      }
+    } catch {
+      this.projects = []
+      this.selectedProjectName = null
     }
   }
 
@@ -139,11 +186,20 @@ export class ReviewerApp {
               <button type="button" class="nav-item ${this.appView === 'reports' ? 'active' : ''}" data-nav="reports">
                 報告閱讀器
               </button>
+              <button type="button" class="nav-item ${this.appView === 'projects' ? 'active' : ''}" data-nav="projects">
+                專案設定
+              </button>
             </nav>
             ${this.appView === 'reports' ? `<h2>人員</h2>${this.renderPeopleList()}` : ''}
           </aside>
           <section class="content">
-            ${this.appView === 'dashboard' ? this.renderDashboard() : this.renderContent()}
+            ${
+              this.appView === 'dashboard'
+                ? this.renderDashboard()
+                : this.appView === 'projects'
+                  ? this.renderProjectSettings()
+                  : this.renderContent()
+            }
           </section>
         </div>
       </div>
@@ -225,6 +281,64 @@ export class ReviewerApp {
         const tab = (element as HTMLElement).dataset.viewTab as 'weekly' | 'trends'
         void this.switchViewTab(tab)
       })
+    })
+
+    this.root.querySelectorAll('[data-project-name]').forEach((element) => {
+      element.addEventListener('click', () => {
+        this.isCreatingProject = false
+        this.selectedProjectName = (element as HTMLElement).dataset.projectName ?? null
+        this.syncProjectDraft()
+        void this.renderWithStatus()
+      })
+    })
+
+    this.root.querySelectorAll('[data-source-type]').forEach((element) => {
+      element.addEventListener('click', () => {
+        const sourceType = (element as HTMLElement).dataset.sourceType as SourceType
+        if (!this.projectDraft) {
+          return
+        }
+        this.projectDraft.source_type = sourceType
+        void this.renderWithStatus()
+      })
+    })
+
+    this.root.querySelector('#project-add')?.addEventListener('click', () => {
+      this.isCreatingProject = true
+      this.selectedProjectName = null
+      this.projectDraft = {
+        name: '',
+        source_type: 'gitlab',
+        gitlab_project_id: '',
+        repo_path: '',
+        git_remote_url: '',
+        default_branches: 'main',
+        isNew: true,
+      }
+      void this.renderWithStatus()
+    })
+
+    this.root.querySelector('#project-remove')?.addEventListener('click', () => {
+      void this.handleProjectDelete()
+    })
+
+    this.root.querySelector('#project-save')?.addEventListener('click', () => {
+      void this.handleProjectSave()
+    })
+
+    this.root.querySelector('#project-cancel')?.addEventListener('click', () => {
+      this.isCreatingProject = false
+      if (this.projects.length > 0) {
+        this.selectedProjectName = this.projects[0]?.name ?? null
+      }
+      this.syncProjectDraft()
+      void this.renderWithStatus()
+    })
+
+    this.root.querySelector('#project-engineer-add')?.addEventListener('click', () => {
+      this.bannerMessage = '工程師對應請至人員設定管理 identity'
+      this.bannerIsError = false
+      void this.renderWithStatus()
     })
   }
 
@@ -313,6 +427,256 @@ export class ReviewerApp {
         </section>
       </div>
     </div>`
+  }
+
+  private renderProjectSettings(): string {
+    const draft = this.projectDraft ?? this.emptyProjectDraft()
+    const selected = this.selectedProject
+    const listItems = this.projects
+      .map((project) => {
+        const active =
+          !this.isCreatingProject && project.name === this.selectedProjectName ? ' active' : ''
+        const icon = project.source_type === 'gitlab' ? 'gitlab' : 'folder'
+        return `<button type="button" class="project-list-item${active}" data-project-name="${escapeHtml(project.name)}">
+          <span class="project-list-icon ${icon}" aria-hidden="true"></span>
+          <span class="project-list-name">${escapeHtml(project.name)}</span>
+        </button>`
+      })
+      .join('')
+
+    const sourceGitlab = draft.source_type === 'gitlab' ? ' active' : ''
+    const sourceLocal = draft.source_type === 'local' ? ' active' : ''
+    const headerIcon = draft.source_type === 'gitlab' ? 'gitlab' : 'folder'
+    const title = draft.isNew ? '新增專案' : escapeHtml(draft.name)
+    const healthNote =
+      !draft.isNew && selected?.health === 'unhealthy' && selected.health_reason
+        ? `<p class="project-health-warning">狀態異常：${escapeHtml(selected.health_reason)}</p>`
+        : ''
+
+    const engineerRows =
+      selected && selected.engineers.length > 0
+        ? selected.engineers
+            .map((engineer) => {
+              const initial = engineer.display_name.trim().charAt(0).toUpperCase() || '?'
+              const username = engineer.gitlab_username ?? '—'
+              return `<div class="project-engineer-row">
+                <span class="project-engineer-avatar" aria-hidden="true">${escapeHtml(initial)}</span>
+                <span class="project-engineer-username">${escapeHtml(username)}</span>
+                <span class="project-engineer-arrow" aria-hidden="true">→</span>
+                <span>${escapeHtml(engineer.display_name)}</span>
+              </div>`
+            })
+            .join('')
+        : '<p class="project-engineers-empty">尚無工程師對應（執行 review 後會依 commit 歸戶）</p>'
+
+    const gitlabFields =
+      draft.source_type === 'gitlab'
+        ? `<div class="project-field">
+            <label for="project-gitlab-id">GitLab Project ID</label>
+            <input id="project-gitlab-id" class="project-input" type="text" value="${escapeHtml(draft.gitlab_project_id)}" placeholder="例：123" />
+          </div>
+          <div class="project-field">
+            <label for="project-git-remote">Git Remote URL</label>
+            <input id="project-git-remote" class="project-input mono" type="text" value="${escapeHtml(draft.git_remote_url)}" placeholder="git@gitlab.example.com:team/repo.git" />
+          </div>
+          <div class="project-field">
+            <label for="project-default-branches">常駐分支 <span class="muted">(逗號分隔)</span></label>
+            <input id="project-default-branches" class="project-input mono" type="text" value="${escapeHtml(draft.default_branches)}" placeholder="main, develop" />
+          </div>`
+        : ''
+
+    const nameField = draft.isNew
+      ? `<div class="project-field">
+          <label for="project-name">專案名稱</label>
+          <input id="project-name" class="project-input" type="text" value="${escapeHtml(draft.name)}" placeholder="game-backend" />
+        </div>`
+      : ''
+
+    return `<div class="project-settings">
+      <h2 class="sr-only">專案設定頁，左側為專案清單，右側為選定專案的詳細設定</h2>
+      <div class="project-settings-shell">
+        <aside class="project-settings-list">
+          <div class="project-settings-list-header">
+            <span>專案</span>
+            <button id="project-add" class="project-settings-add" type="button">＋ 新增</button>
+          </div>
+          <div class="project-settings-list-items">
+            ${listItems || '<p class="project-list-empty">尚無專案</p>'}
+          </div>
+        </aside>
+        <div class="project-settings-detail">
+          <div class="project-settings-detail-header">
+            <div class="project-settings-title">
+              <span class="project-list-icon ${headerIcon}" aria-hidden="true"></span>
+              <h2>${title}</h2>
+            </div>
+            ${
+              draft.isNew
+                ? ''
+                : '<button id="project-remove" class="project-settings-remove" type="button">移除</button>'
+            }
+          </div>
+          ${healthNote}
+          ${nameField}
+          <div class="project-field">
+            <label>來源類型</label>
+            <div class="project-source-types">
+              <button type="button" class="project-source-pill${sourceGitlab}" data-source-type="gitlab">GitLab</button>
+              <button type="button" class="project-source-pill${sourceLocal}" data-source-type="local">本地</button>
+            </div>
+          </div>
+          ${gitlabFields}
+          <div class="project-field">
+            <label for="project-repo-path">本地路徑 <span class="muted">(slug 或絕對路徑，供 skill 讀取程式碼)</span></label>
+            <input id="project-repo-path" class="project-input mono" type="text" value="${escapeHtml(draft.repo_path)}" placeholder="game-backend" />
+          </div>
+          <div class="project-field">
+            <div class="project-field-header">
+              <label>工程師對應 <span class="muted">(GitLab username → 顯示名，唯讀)</span></label>
+              <button id="project-engineer-add" class="project-engineer-add" type="button" aria-label="新增工程師對應">＋</button>
+            </div>
+            <div class="project-engineer-list">${engineerRows}</div>
+          </div>
+          <div class="project-settings-actions">
+            <button id="project-cancel" class="project-settings-cancel" type="button">取消</button>
+            <button id="project-save" class="project-settings-save" type="button">儲存</button>
+          </div>
+        </div>
+      </div>
+    </div>`
+  }
+
+  private get selectedProject(): ProjectListItem | null {
+    if (this.selectedProjectName === null) {
+      return null
+    }
+    return this.projects.find((project) => project.name === this.selectedProjectName) ?? null
+  }
+
+  private emptyProjectDraft(): ProjectDraft {
+    return {
+      name: '',
+      source_type: 'gitlab',
+      gitlab_project_id: '',
+      repo_path: '',
+      git_remote_url: '',
+      default_branches: 'main',
+      isNew: true,
+    }
+  }
+
+  private syncProjectDraft(): void {
+    const selected = this.selectedProject
+    if (!selected) {
+      this.projectDraft = this.emptyProjectDraft()
+      this.isCreatingProject = true
+      return
+    }
+    this.projectDraft = {
+      name: selected.name,
+      source_type: selected.source_type,
+      gitlab_project_id: selected.gitlab_project_id ?? '',
+      repo_path: selected.repo_path,
+      git_remote_url: selected.git_remote_url ?? '',
+      default_branches: (selected.default_branches.length > 0
+        ? selected.default_branches
+        : selected.default_branch
+          ? [selected.default_branch]
+          : ['main']
+      ).join(', '),
+      isNew: false,
+    }
+  }
+
+  private readProjectDraftFromForm(): ProjectDraft | null {
+    const draft = this.projectDraft
+    if (!draft) {
+      return null
+    }
+    const nameInput = this.root.querySelector('#project-name') as HTMLInputElement | null
+    const repoPathInput = this.root.querySelector('#project-repo-path') as HTMLInputElement | null
+    const gitlabIdInput = this.root.querySelector('#project-gitlab-id') as HTMLInputElement | null
+    const gitRemoteInput = this.root.querySelector('#project-git-remote') as HTMLInputElement | null
+    const branchesInput = this.root.querySelector('#project-default-branches') as HTMLInputElement | null
+
+    return {
+      ...draft,
+      name: (nameInput?.value ?? draft.name).trim(),
+      repo_path: (repoPathInput?.value ?? draft.repo_path).trim(),
+      gitlab_project_id: (gitlabIdInput?.value ?? draft.gitlab_project_id).trim(),
+      git_remote_url: (gitRemoteInput?.value ?? draft.git_remote_url).trim(),
+      default_branches: (branchesInput?.value ?? draft.default_branches).trim(),
+    }
+  }
+
+  private parseDefaultBranches(value: string): string[] {
+    return value
+      .split(',')
+      .map((branch) => branch.trim())
+      .filter(Boolean)
+  }
+
+  private async handleProjectSave(): Promise<void> {
+    const draft = this.readProjectDraftFromForm()
+    if (!draft) {
+      return
+    }
+
+    const payload = {
+      source_type: draft.source_type,
+      repo_path: draft.repo_path,
+      git_remote_url: draft.source_type === 'gitlab' ? draft.git_remote_url || null : null,
+      default_branches:
+        draft.source_type === 'gitlab' ? this.parseDefaultBranches(draft.default_branches) : [],
+      gitlab_project_id: draft.gitlab_project_id || null,
+    }
+
+    try {
+      if (draft.isNew) {
+        if (!draft.name) {
+          throw new Error('請輸入專案名稱')
+        }
+        const created = await createProject({ name: draft.name, ...payload })
+        this.isCreatingProject = false
+        this.selectedProjectName = created.name
+        this.bannerMessage = `已新增專案 ${created.name}`
+        this.bannerIsError = false
+      } else {
+        const updated = await updateProject(draft.name, payload)
+        this.selectedProjectName = updated.name
+        this.bannerMessage = `已儲存專案 ${updated.name}`
+        this.bannerIsError = false
+      }
+      await Promise.all([this.loadProjects(), this.loadDashboard()])
+      this.syncProjectDraft()
+    } catch (error) {
+      this.bannerMessage = error instanceof Error ? error.message : '儲存失敗'
+      this.bannerIsError = true
+    }
+    await this.renderWithStatus()
+  }
+
+  private async handleProjectDelete(): Promise<void> {
+    const draft = this.projectDraft
+    if (!draft || draft.isNew) {
+      return
+    }
+    if (!window.confirm(`確定要移除專案「${draft.name}」？`)) {
+      return
+    }
+
+    try {
+      await deleteProject(draft.name)
+      this.bannerMessage = `已移除專案 ${draft.name}`
+      this.bannerIsError = false
+      this.isCreatingProject = false
+      await Promise.all([this.loadProjects(), this.loadDashboard()])
+      this.syncProjectDraft()
+    } catch (error) {
+      this.bannerMessage = error instanceof Error ? error.message : '移除失敗'
+      this.bannerIsError = true
+    }
+    await this.renderWithStatus()
   }
 
   private renderUnmatchedPanel(): string {
@@ -498,6 +862,14 @@ export class ReviewerApp {
     if (view === 'dashboard' && this.dashboard === null) {
       await this.loadDashboard()
     }
+    if (view === 'projects') {
+      if (this.projects.length === 0) {
+        await this.loadProjects()
+      }
+      if (!this.projectDraft) {
+        this.syncProjectDraft()
+      }
+    }
     this.render(await this.statusLine())
   }
 
@@ -587,8 +959,13 @@ export class ReviewerApp {
     try {
       const result = await reloadProjects()
       const unhealthyNote = result.unhealthy > 0 ? ` · 異常 ${result.unhealthy}` : ''
-      this.bannerMessage = `已重新載入 ${result.total} 個專案（正常 ${result.healthy}${unhealthyNote}）`
-      await Promise.all([this.loadPeople(), this.loadUnmatchedAuthors(), this.loadDashboard()])
+      this.bannerMessage = `已重新佈建 ${result.total} 個專案（正常 ${result.healthy}${unhealthyNote}）`
+      await Promise.all([
+        this.loadPeople(),
+        this.loadUnmatchedAuthors(),
+        this.loadDashboard(),
+        this.loadProjects(),
+      ])
     } catch (error) {
       this.bannerMessage = error instanceof Error ? error.message : '重新載入失敗'
     } finally {
@@ -639,7 +1016,12 @@ export class ReviewerApp {
       const { message, isError } = formatRunCompleteBanner(run)
       this.bannerMessage = message
       this.bannerIsError = isError
-      await Promise.all([this.loadPeople(), this.loadUnmatchedAuthors(), this.loadDashboard()])
+      await Promise.all([
+        this.loadPeople(),
+        this.loadUnmatchedAuthors(),
+        this.loadDashboard(),
+        this.loadProjects(),
+      ])
       this.render(await this.statusLine())
     } catch (error) {
       if (this.pollTimer !== null) {

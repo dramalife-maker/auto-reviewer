@@ -86,6 +86,46 @@ export interface ProjectHealth {
   is_git_repo: number
 }
 
+export interface ProjectEngineer {
+  display_name: string
+  gitlab_username: string | null
+}
+
+export interface ProjectListItem {
+  name: string
+  repo_path: string
+  git_remote_url: string | null
+  default_branch: string | null
+  default_branches: string[]
+  health: string
+  health_reason: string | null
+  is_git_repo: number
+  source_type: 'gitlab' | 'local'
+  gitlab_project_id: string | null
+  engineers: ProjectEngineer[]
+}
+
+export interface ProjectListResponse {
+  projects: ProjectListItem[]
+}
+
+export interface ProjectInput {
+  name: string
+  source_type: 'gitlab' | 'local'
+  repo_path: string
+  git_remote_url?: string | null
+  default_branches?: string[]
+  gitlab_project_id?: string | null
+}
+
+export interface ProjectUpdateInput {
+  source_type: 'gitlab' | 'local'
+  repo_path: string
+  git_remote_url?: string | null
+  default_branches?: string[]
+  gitlab_project_id?: string | null
+}
+
 export interface ReloadProjectsResponse {
   total: number
   healthy: number

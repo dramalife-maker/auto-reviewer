@@ -6,6 +6,10 @@ import type {
   LatestReportsResponse,
   Person,
   PersonTrendsResponse,
+  ProjectListResponse,
+  ProjectInput,
+  ProjectListItem,
+  ProjectUpdateInput,
   ReloadProjectsResponse,
   RunStatus,
   UnmatchedAuthor,
@@ -62,6 +66,30 @@ export function fetchRun(runId: number): Promise<RunStatus> {
 
 export function reloadProjects(): Promise<ReloadProjectsResponse> {
   return request('/api/projects/reload', { method: 'POST' })
+}
+
+export function fetchProjects(): Promise<ProjectListResponse> {
+  return request('/api/projects')
+}
+
+export function createProject(body: ProjectInput): Promise<ProjectListItem> {
+  return request('/api/projects', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+export function updateProject(name: string, body: ProjectUpdateInput): Promise<ProjectListItem> {
+  return request(`/api/projects/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+export function deleteProject(name: string): Promise<void> {
+  return request(`/api/projects/${encodeURIComponent(name)}`, { method: 'DELETE' })
 }
 
 export function fetchUnmatchedAuthors(): Promise<UnmatchedAuthor[]> {
