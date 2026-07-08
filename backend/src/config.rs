@@ -8,7 +8,16 @@ const PORT_ENV: &str = "PORT";
 const PROJECTS_CONFIG_ENV: &str = "PROJECTS_CONFIG";
 const APP_ROOT_ENV: &str = "APP_ROOT";
 const CORS_ALLOW_ORIGINS_ENV: &str = "CORS_ALLOW_ORIGINS";
+const REVIEWER_AGENT_ENV: &str = "REVIEWER_AGENT";
+const REVIEWER_MODEL_ENV: &str = "REVIEWER_MODEL";
+const REVIEWER_EXECUTOR_ENV: &str = "REVIEWER_EXECUTOR";
 const CORS_ALLOW_ANY: &str = "*";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewerAgent {
+    Claude,
+    Cursor,
+}
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {
@@ -17,6 +26,9 @@ pub struct AppConfig {
     pub projects_config_path: PathBuf,
     pub app_root: PathBuf,
     pub cors_allow_origins: Vec<String>,
+    pub reviewer_agent: ReviewerAgent,
+    pub reviewer_model: Option<String>,
+    pub reviewer_executor: Option<PathBuf>,
 }
 
 impl AppConfig {
@@ -27,6 +39,9 @@ impl AppConfig {
             projects_config_path: PathBuf::from("projects.yaml"),
             app_root: PathBuf::new(),
             cors_allow_origins: Vec::new(),
+            reviewer_agent: ReviewerAgent::Cursor,
+            reviewer_model: None,
+            reviewer_executor: None,
         }
     }
 
@@ -97,6 +112,26 @@ impl AppConfig {
         Ok(origins)
     }
 
+    fn reviewer_agent_from_env() -> ReviewerAgent {
+        match std::env::var(REVIEWER_AGENT_ENV) {
+            Ok(value) if value.eq_ignore_ascii_case("claude") => ReviewerAgent::Claude,
+            _ => ReviewerAgent::Cursor,
+        }
+    }
+
+    fn reviewer_model_from_env() -> Option<String> {
+        std::env::var(REVIEWER_MODEL_ENV)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    }
+
+    fn reviewer_executor_from_env() -> Option<PathBuf> {
+        std::env::var(REVIEWER_EXECUTOR_ENV)
+            .ok()
+            .map(PathBuf::from)
+    }
+
     pub fn from_env() -> Result<Self> {
         let data_dir = std::env::var(DATA_ROOT_DIR_ENV).map_err(|_| Error::MissingDataDir)?;
         Ok(Self {
@@ -105,6 +140,9 @@ impl AppConfig {
             projects_config_path: Self::projects_config_path_from_env(),
             app_root: Self::app_root_from_env(),
             cors_allow_origins: Self::cors_allow_origins_from_env()?,
+            reviewer_agent: Self::reviewer_agent_from_env(),
+            reviewer_model: Self::reviewer_model_from_env(),
+            reviewer_executor: Self::reviewer_executor_from_env(),
         })
     }
 
@@ -130,6 +168,18 @@ impl AppConfig {
 
     pub fn cors_allow_origins(&self) -> &[String] {
         &self.cors_allow_origins
+    }
+
+    pub fn reviewer_agent(&self) -> ReviewerAgent {
+        self.reviewer_agent
+    }
+
+    pub fn reviewer_model(&self) -> Option<&str> {
+        self.reviewer_model.as_deref()
+    }
+
+    pub fn reviewer_executor(&self) -> Option<&Path> {
+        self.reviewer_executor.as_deref()
     }
 }
 
@@ -271,5 +321,54 @@ mod tests {
         ));
 
         restore_cors_env(previous);
+    }
+
+    fn restore_reviewer_agent_env(previous: Option<String>) {
+        match previous {
+            Some(value) => std::env::set_var(REVIEWER_AGENT_ENV, value),
+            None => std::env::remove_var(REVIEWER_AGENT_ENV),
+        }
+    }
+
+    #[test]
+    fn reviewer_agent_defaults_to_cursor() {
+        let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+        let previous = std::env::var(REVIEWER_AGENT_ENV).ok();
+        std::env::remove_var(REVIEWER_AGENT_ENV);
+
+        assert_eq!(
+            AppConfig::reviewer_agent_from_env(),
+            ReviewerAgent::Cursor
+        );
+
+        restore_reviewer_agent_env(previous);
+    }
+
+    #[test]
+    fn reviewer_agent_reads_claude() {
+        let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+        let previous = std::env::var(REVIEWER_AGENT_ENV).ok();
+        std::env::set_var(REVIEWER_AGENT_ENV, "claude");
+
+        assert_eq!(
+            AppConfig::reviewer_agent_from_env(),
+            ReviewerAgent::Claude
+        );
+
+        restore_reviewer_agent_env(previous);
+    }
+
+    #[test]
+    fn reviewer_agent_reads_cursor() {
+        let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+        let previous = std::env::var(REVIEWER_AGENT_ENV).ok();
+        std::env::set_var(REVIEWER_AGENT_ENV, "cursor");
+
+        assert_eq!(
+            AppConfig::reviewer_agent_from_env(),
+            ReviewerAgent::Cursor
+        );
+
+        restore_reviewer_agent_env(previous);
     }
 }

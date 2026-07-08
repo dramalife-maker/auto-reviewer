@@ -45,6 +45,12 @@ export interface LatestReportsResponse {
   projects: LatestReportItem[]
 }
 
+export interface RunProjectStatus {
+  name: string
+  state: string
+  error: string | null
+}
+
 export interface RunStatus {
   id: number
   trigger: string
@@ -53,6 +59,7 @@ export interface RunStatus {
   finished_at: string | null
   project_total: number | null
   project_skipped: number
+  projects: RunProjectStatus[]
 }
 
 export interface CreateRunResponse {

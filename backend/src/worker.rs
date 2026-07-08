@@ -67,8 +67,10 @@ impl RunWorker {
         }
 
         for handle in handles {
-            if let Err(err) = handle.await {
-                error!("run project task join error: {err}");
+            match handle.await {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => error!("run project error: {err}"),
+                Err(err) => error!("run project task join error: {err}"),
             }
         }
 
@@ -84,9 +86,10 @@ impl RunWorker {
 /// failure yields `Err(reason)` so the caller skips the subprocess.
 pub async fn resolve_working_dir(
     pool: &SqlitePool,
+    config: &AppConfig,
     job: &RunProjectRow,
 ) -> Result<PathBuf, String> {
-    if std::env::var("REVIEWER_EXECUTOR").is_ok() {
+    if config.reviewer_executor().is_some() {
         return Ok(PathBuf::from(&job.repo_path));
     }
 
@@ -117,7 +120,7 @@ pub async fn process_run_project(
         repo_path: job.repo_path.clone(),
     };
 
-    let working_dir = match resolve_working_dir(pool, &job).await {
+    let working_dir = match resolve_working_dir(pool, config, &job).await {
         Ok(dir) => dir,
         Err(reason) => {
             finish_run_project(pool, job.id, "failed", 0, Some(&reason)).await?;
@@ -128,22 +131,38 @@ pub async fn process_run_project(
     };
 
     let (outcome, duration_sec, error) =
-        execute_weekly_batch(pool, config, job.run_id, &project, &working_dir, timeout_sec).await?;
+        match execute_weekly_batch(pool, config, job.run_id, &project, &working_dir, timeout_sec)
+            .await
+        {
+            Ok(result) => result,
+            Err(err) => {
+                // A spawn / execution error must not leave the project stuck in
+                // `running`; mark it failed and let the run finalize.
+                let reason = err.to_string();
+                finish_run_project(pool, job.id, "failed", 0, Some(&reason)).await?;
+                finalize_run_if_complete(pool, job.run_id).await?;
+                error!(run_id = job.run_id, project = %project.name, "run project execute failed: {reason}");
+                return Ok(());
+            }
+        };
 
-    let state = match outcome {
+    let (state, error) = match outcome {
         ExecuteOutcome::Success => {
-            ingest_project_summaries(
+            match ingest_project_summaries(
                 pool,
                 config.data_dir(),
                 &project.name,
                 project.id,
                 job.run_id,
             )
-            .await?;
-            "done"
+            .await
+            {
+                Ok(()) => ("done", error),
+                Err(err) => ("failed", Some(err.to_string())),
+            }
         }
-        ExecuteOutcome::SkippedTimeout => "skipped_timeout",
-        ExecuteOutcome::Failed => "failed",
+        ExecuteOutcome::SkippedTimeout => ("skipped_timeout", error),
+        ExecuteOutcome::Failed => ("failed", error),
     };
 
     finish_run_project(pool, job.id, state, duration_sec, error.as_deref()).await?;

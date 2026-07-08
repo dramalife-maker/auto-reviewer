@@ -158,6 +158,12 @@ body {
   border-bottom: 1px solid #a7f3d0;
 }
 
+.banner.error {
+  background: #fef2f2;
+  color: #991b1b;
+  border-bottom-color: #fecaca;
+}
+
 .main {
   flex: 1;
   display: grid;

@@ -39,6 +39,23 @@ pub struct ReloadProjectsResponse {
 }
 
 #[derive(Serialize)]
+pub struct RunProjectStatusResponse {
+    pub name: String,
+    pub state: String,
+    pub error: Option<String>,
+}
+
+impl From<runs::RunProjectStatusRow> for RunProjectStatusResponse {
+    fn from(row: runs::RunProjectStatusRow) -> Self {
+        Self {
+            name: row.name,
+            state: row.state,
+            error: row.error,
+        }
+    }
+}
+
+#[derive(Serialize)]
 pub struct RunStatusResponse {
     pub id: i64,
     pub trigger: String,
@@ -47,6 +64,7 @@ pub struct RunStatusResponse {
     pub finished_at: Option<String>,
     pub project_total: Option<i64>,
     pub project_skipped: i64,
+    pub projects: Vec<RunProjectStatusResponse>,
 }
 
 impl From<RunRow> for RunStatusResponse {
@@ -59,6 +77,7 @@ impl From<RunRow> for RunStatusResponse {
             finished_at: row.finished_at,
             project_total: row.project_total,
             project_skipped: row.project_skipped,
+            projects: Vec::new(),
         }
     }
 }
@@ -145,7 +164,19 @@ async fn get_run(
         .await
         .map_err(ApiError::from)?
         .ok_or(Error::NotFound)?;
-    Ok(Json(run.into()))
+    let projects = runs::list_run_project_statuses(&state.pool, run_id)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(RunStatusResponse {
+        id: run.id,
+        trigger: run.trigger,
+        status: run.status,
+        started_at: run.started_at,
+        finished_at: run.finished_at,
+        project_total: run.project_total,
+        project_skipped: run.project_skipped,
+        projects: projects.into_iter().map(Into::into).collect(),
+    }))
 }
 
 async fn reload_projects(

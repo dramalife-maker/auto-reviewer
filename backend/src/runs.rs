@@ -238,6 +238,30 @@ pub async fn get_run(pool: &sqlx::SqlitePool, run_id: i64) -> crate::Result<Opti
     .map_err(crate::Error::Database)
 }
 
+#[derive(Debug, Clone, sqlx::FromRow, Serialize)]
+pub struct RunProjectStatusRow {
+    pub name: String,
+    pub state: String,
+    pub error: Option<String>,
+}
+
+pub async fn list_run_project_statuses(
+    pool: &sqlx::SqlitePool,
+    run_id: i64,
+) -> crate::Result<Vec<RunProjectStatusRow>> {
+    sqlx::query_as::<_, RunProjectStatusRow>(
+        "SELECT p.name, rp.state, rp.error
+         FROM run_projects rp
+         INNER JOIN projects p ON p.id = rp.project_id
+         WHERE rp.run_id = ?
+         ORDER BY rp.id",
+    )
+    .bind(run_id)
+    .fetch_all(pool)
+    .await
+    .map_err(crate::Error::Database)
+}
+
 #[derive(Serialize)]
 pub struct RunManifest<'a> {
     pub mode: &'static str,

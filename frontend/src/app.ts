@@ -10,7 +10,13 @@ import {
   reloadProjects,
   startManualRun,
 } from './api'
-import type { LatestReportItem, LatestReportsResponse, Person, UnmatchedAuthor } from './types'
+import type {
+  LatestReportItem,
+  LatestReportsResponse,
+  Person,
+  RunStatus,
+  UnmatchedAuthor,
+} from './types'
 
 const TERMINAL_STATUSES = new Set(['success', 'partial', 'failed'])
 
@@ -22,6 +28,7 @@ export class ReviewerApp {
   private activeRunId: number | null = null
   private pollTimer: number | null = null
   private bannerMessage: string | null = null
+  private bannerIsError = false
   private reloading = false
   private unmatchedAuthors: UnmatchedAuthor[] = []
   private showUnmatchedPanel = false
@@ -95,7 +102,7 @@ export class ReviewerApp {
             </button>
           </div>
         </header>
-        ${this.bannerMessage ? `<div class="banner">${escapeHtml(this.bannerMessage)}</div>` : ''}
+        ${this.bannerMessage ? `<div class="banner${this.bannerIsError ? ' error' : ''}">${escapeHtml(this.bannerMessage)}</div>` : ''}
         ${this.showUnmatchedPanel ? this.renderUnmatchedPanel() : ''}
         <div class="main">
           <aside class="sidebar">
@@ -373,10 +380,12 @@ export class ReviewerApp {
       const response = await startManualRun()
       this.activeRunId = response.run_id
       this.bannerMessage = null
+      this.bannerIsError = false
       this.render(`執行中 · run #${response.run_id}`)
       this.startPolling(response.run_id)
     } catch (error) {
       this.bannerMessage = error instanceof Error ? error.message : '無法啟動執行'
+      this.bannerIsError = true
       this.render(await this.statusLine())
     }
   }
@@ -405,7 +414,9 @@ export class ReviewerApp {
         this.pollTimer = null
       }
       this.activeRunId = null
-      this.bannerMessage = `Run #${run.id} 已完成：${run.status}（略過 ${run.project_skipped} 個專案）`
+      const { message, isError } = formatRunCompleteBanner(run)
+      this.bannerMessage = message
+      this.bannerIsError = isError
       await Promise.all([this.loadPeople(), this.loadUnmatchedAuthors()])
       this.render(await this.statusLine())
     } catch (error) {
@@ -415,6 +426,7 @@ export class ReviewerApp {
       }
       this.activeRunId = null
       this.bannerMessage = error instanceof Error ? error.message : '輪詢失敗'
+      this.bannerIsError = true
       this.render(await this.statusLine())
     }
   }
@@ -434,6 +446,42 @@ export class ReviewerApp {
       </div>
     `
   }
+}
+
+function formatRunCompleteBanner(run: RunStatus): { message: string; isError: boolean } {
+  const skipped =
+    run.project_skipped > 0 ? `（略過 ${run.project_skipped} 個專案）` : ''
+  const failed = run.projects.filter(
+    (project) => project.state === 'failed' && project.error,
+  )
+
+  if (failed.length === 0) {
+    return {
+      message: `Run #${run.id} 已完成：${run.status}${skipped}`,
+      isError: run.status === 'failed',
+    }
+  }
+
+  const details = failed
+    .map((project) => `${project.name}：${humanizeProjectError(project.error!)}`)
+    .join('；')
+
+  return {
+    message: `Run #${run.id} 失敗${skipped} — ${details}`,
+    isError: true,
+  }
+}
+
+function humanizeProjectError(error: string): string {
+  const lower = error.toLowerCase()
+  if (
+    lower.includes('認證失敗') ||
+    lower.includes('authentication required') ||
+    lower.includes('agent login')
+  ) {
+    return 'Cursor 登入已失效，請在本機重新執行 cursor-agent login 後再試'
+  }
+  return error
 }
 
 function renderSection(title: string, items: string[]): string {

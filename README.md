@@ -8,7 +8,7 @@
 - Node.js 20+（前端 build / dev）
 - AI agent CLI（擇一，見 `REVIEWER_AGENT`）：
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)（`claude` 已登入；設 `REVIEWER_AGENT=claude`）
-  - [Cursor Agent CLI](https://cursor.com/docs/cli)（`cursor-agent` 已安裝；預設，headless 需 `CURSOR_API_KEY`）
+  - [Cursor Agent CLI](https://cursor.com/docs/cli)（`cursor-agent` 已安裝；預設，須以已登入的使用者啟動 reviewer-server）
 - `git` 已在 PATH（後端啟動時會 bare clone 各專案並建立 worktree）
 
 ## 快速開始
@@ -33,8 +33,7 @@ copy .env.example .env
 | `PROJECTS_CONFIG` | `projects.yaml` 路徑，預設 repo 根目錄 |
 | `APP_ROOT` | 部署根目錄，預設為 process 工作目錄；headless workflow 在 `$APP_ROOT/skills/` |
 | `REVIEWER_AGENT` | 批次執行用的 agent：`cursor`（預設）或 `claude` |
-| `REVIEWER_CURSOR_MODEL` | `REVIEWER_AGENT=cursor` 時可選的 model（對應 `cursor-agent --model`） |
-| `CURSOR_API_KEY` | Cursor headless 認證（`--print` 子進程需能讀到此 env） |
+| `REVIEWER_MODEL` | 可選的 model（對應 agent CLI 的 `--model`）；未設定則使用 agent 預設 |
 | `REVIEWER_EXECUTOR` | 測試用 mock 執行檔，取代真實 agent CLI |
 | `REVIEWER_MIN_FREE_BYTES` | clone / worktree add 前要求的最小可用空間，預設 2GiB |
 | `CORS_ALLOW_ORIGINS` | 允許的前端來源（逗號分隔）。開發建置（`cargo run`）未設定時預設 `*`；正式建置未設定則不啟用 CORS。可明確設 `*` 或例 `https://reviewer.example.com` |
@@ -219,7 +218,7 @@ claude --bare ... --append-system-prompt-file $APP_ROOT/skills/reviewer-batch/WO
 
 執行前請確認：
 
-1. 所選 agent CLI 已在 PATH 且已 auth（Cursor headless 請設 `CURSOR_API_KEY`）
+1. 所選 agent CLI 已在 PATH 且已 auth（Cursor：以已執行 `cursor-agent login` 的同一使用者啟動 reviewer-server）
 2. 從 repo 根目錄啟動後端（或設定 `APP_ROOT` 指向含 `skills/` 的目錄）
 3. 各專案 `git_remote_url` 可達，且啟動時已成功 provision（`is_git_repo=1`）
 

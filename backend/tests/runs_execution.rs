@@ -254,7 +254,12 @@ async fn resolve_working_dir_returns_resident_worktree() {
         repo_path: container.display().to_string(),
     };
 
-    let dir = resolve_working_dir(&pool, &job).await.expect("resolve dir");
+    std::env::set_var("DATA_ROOT_DIR", temp.path());
+    let config = reviewer_server::config::AppConfig::from_env().expect("config");
+
+    let dir = resolve_working_dir(&pool, &config, &job)
+        .await
+        .expect("resolve dir");
     assert_eq!(dir, container.join("main"), "resident worktree path");
 
     // An unhealthy / unprovisioned project cannot supply a worktree.
@@ -265,7 +270,7 @@ async fn resolve_working_dir_returns_resident_worktree() {
         name: "missing".into(),
         repo_path: container.display().to_string(),
     };
-    assert!(resolve_working_dir(&pool, &bad_job).await.is_err());
+    assert!(resolve_working_dir(&pool, &config, &bad_job).await.is_err());
 }
 
 #[tokio::test]
