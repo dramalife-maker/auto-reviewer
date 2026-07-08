@@ -1,0 +1,75 @@
+<div style="background: var(--color-background-secondary); border-radius: var(--border-radius-lg); padding: 1.25rem 1.5rem; min-height: 420px;">
+  <h2 class="sr-only">Reviewer 桌面 app 控制台首頁 mockup,包含執行狀態、立即執行按鈕、專案統計卡片與下次排程</h2>
+
+  <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 20px;">
+    <div>
+      <h1 style="font-size: 20px; margin: 0 0 2px;">控制台</h1>
+      <p style="font-size: 12px; color: var(--color-text-tertiary); margin: 0;">上次執行 2026-06-14 09:00 · 耗時 4m 12s</p>
+    </div>
+    <button style="font-size: 13px; padding: 8px 16px; border: 0.5px solid var(--color-border-info); color: var(--color-text-info);">
+      <i class="ti ti-player-play" aria-hidden="true" style="margin-right:6px;"></i>立即執行
+    </button>
+  </div>
+
+  <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px;">
+    <div style="background: var(--color-background-primary); border-radius: var(--border-radius-md); padding: 14px; border: 0.5px solid var(--color-border-tertiary);">
+      <div style="font-size: 12px; color: var(--color-text-secondary); margin-bottom: 6px;">專案</div>
+      <div style="font-size: 24px; font-weight: 500;">5</div>
+    </div>
+    <div style="background: var(--color-background-primary); border-radius: var(--border-radius-md); padding: 14px; border: 0.5px solid var(--color-border-tertiary);">
+      <div style="font-size: 12px; color: var(--color-text-secondary); margin-bottom: 6px;">工程師</div>
+      <div style="font-size: 24px; font-weight: 500;">11</div>
+    </div>
+    <div style="background: var(--color-background-primary); border-radius: var(--border-radius-md); padding: 14px; border: 0.5px solid var(--color-border-tertiary);">
+      <div style="font-size: 12px; color: var(--color-text-secondary); margin-bottom: 6px;">未讀報告</div>
+      <div style="font-size: 24px; font-weight: 500; color: var(--color-text-info);">3</div>
+    </div>
+    <div style="background: var(--color-background-primary); border-radius: var(--border-radius-md); padding: 14px; border: 0.5px solid var(--color-border-tertiary);">
+      <div style="font-size: 12px; color: var(--color-text-secondary); margin-bottom: 6px;">待確認</div>
+      <div style="font-size: 24px; font-weight: 500; color: var(--color-text-warning);">2</div>
+    </div>
+  </div>
+
+  <div style="display:grid; grid-template-columns: 1.4fr 1fr; gap: 16px;">
+    <div style="background: var(--color-background-primary); border-radius: var(--border-radius-lg); border: 0.5px solid var(--color-border-tertiary); padding: 16px 18px;">
+      <div style="font-size: 13px; font-weight: 500; color: var(--color-text-secondary); margin-bottom: 12px;">最近報告</div>
+
+      <div style="display:flex; align-items:center; justify-content:space-between; padding: 8px 0; border-bottom: 0.5px solid var(--color-border-tertiary);">
+        <span style="display:flex; align-items:center; gap:10px; font-size:13px;">
+          <span style="width:7px;height:7px;border-radius:50%;background:var(--color-text-info);"></span>
+          Alice <span style="color:var(--color-text-tertiary);">game-backend</span>
+        </span>
+        <span style="font-size:11px; color: var(--color-text-warning);"><i class="ti ti-help-circle" aria-hidden="true"></i> 1</span>
+      </div>
+      <div style="display:flex; align-items:center; justify-content:space-between; padding: 8px 0; border-bottom: 0.5px solid var(--color-border-tertiary);">
+        <span style="display:flex; align-items:center; gap:10px; font-size:13px;">
+          <span style="width:7px;height:7px;border-radius:50%;background:var(--color-text-info);"></span>
+          Charlie <span style="color:var(--color-text-tertiary);">payment-service</span>
+        </span>
+        <span style="font-size:11px; color: var(--color-text-warning);"><i class="ti ti-help-circle" aria-hidden="true"></i> 1</span>
+      </div>
+      <div style="display:flex; align-items:center; justify-content:space-between; padding: 8px 0;">
+        <span style="display:flex; align-items:center; gap:10px; font-size:13px; color: var(--color-text-secondary);">
+          <span style="width:7px;height:7px;border-radius:50%;background:var(--color-border-secondary);"></span>
+          Bob <span style="color:var(--color-text-tertiary);">game-backend</span>
+        </span>
+        <span style="font-size:11px; color: var(--color-text-tertiary);">已讀</span>
+      </div>
+    </div>
+
+    <div style="background: var(--color-background-primary); border-radius: var(--border-radius-lg); border: 0.5px solid var(--color-border-tertiary); padding: 16px 18px;">
+      <div style="font-size: 13px; font-weight: 500; color: var(--color-text-secondary); margin-bottom: 12px;">排程</div>
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom: 10px;">
+        <i class="ti ti-calendar" aria-hidden="true" style="color:var(--color-text-tertiary);"></i>
+        <span style="font-size:13px;">每週一 09:00</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom: 14px;">
+        <i class="ti ti-clock" aria-hidden="true" style="color:var(--color-text-tertiary);"></i>
+        <span style="font-size:13px; color: var(--color-text-secondary);">下次 06-21 09:00</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:6px; font-size:12px; color: var(--color-text-success); background: var(--color-background-success); padding: 6px 10px; border-radius: var(--border-radius-md);">
+        <i class="ti ti-circle-check" aria-hidden="true"></i> 排程器運行中
+      </div>
+    </div>
+  </div>
+</div>

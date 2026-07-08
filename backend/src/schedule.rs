@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use chrono::FixedOffset;
+use chrono::{Datelike, Duration, FixedOffset, NaiveDateTime, NaiveTime, Utc, Weekday};
 use sqlx::SqlitePool;
 use tokio_cron_scheduler::{Job, JobScheduler};
 use tracing::{error, info};
@@ -120,6 +120,56 @@ fn parse_run_time(run_time: &str) -> Result<(u32, u32), Error> {
     Ok((hour, minute))
 }
 
+pub fn format_schedule_label(config: &ScheduleConfigRow) -> String {
+    let weekday_names = ["一", "二", "三", "四", "五", "六", "日"];
+    let weekday = config.weekday.unwrap_or(0).clamp(0, 6) as usize;
+    format!("每週{} {}", weekday_names[weekday], config.run_time)
+}
+
+pub fn compute_next_run_at(config: &ScheduleConfigRow) -> Result<Option<String>, Error> {
+    if config.enabled == 0 {
+        return Ok(None);
+    }
+
+    let tz = schedule_timezone(config)?;
+    let now = Utc::now().with_timezone(&tz);
+    let (hour, minute) = parse_run_time(&config.run_time)?;
+    let target_weekday = spec_weekday_to_chrono_weekday(config.weekday.unwrap_or(0));
+    let run_time = NaiveTime::from_hms_opt(hour, minute, 0).ok_or_else(|| {
+        Error::SummaryParse(format!("invalid run_time: {}", config.run_time))
+    })?;
+
+    for offset in 0..8 {
+        let candidate_date = now.date_naive() + Duration::days(offset);
+        if candidate_date.weekday() != target_weekday {
+            continue;
+        }
+
+        let candidate_dt = NaiveDateTime::new(candidate_date, run_time);
+        let candidate = candidate_dt
+            .and_local_timezone(tz)
+            .single()
+            .ok_or_else(|| Error::SummaryParse("ambiguous local time".into()))?;
+        if candidate > now {
+            return Ok(Some(candidate.format("%m-%d %H:%M").to_string()));
+        }
+    }
+
+    Ok(None)
+}
+
+fn spec_weekday_to_chrono_weekday(weekday: i64) -> Weekday {
+    match weekday {
+        0 => Weekday::Mon,
+        1 => Weekday::Tue,
+        2 => Weekday::Wed,
+        3 => Weekday::Thu,
+        4 => Weekday::Fri,
+        5 => Weekday::Sat,
+        _ => Weekday::Sun,
+    }
+}
+
 /// Spec weekday: 0=Monday … 6=Sunday. Cron (Sun=0): Mon=1 … Sat=6, Sun=0.
 fn spec_weekday_to_cron(weekday: i64) -> u32 {
     match weekday {
@@ -147,6 +197,20 @@ mod tests {
             per_project_timeout_sec: 600,
             max_concurrency: 2,
         }
+    }
+
+    #[test]
+    fn format_schedule_label_uses_weekday_and_time() {
+        assert_eq!(
+            format_schedule_label(&sample_config()),
+            "每週一 09:00"
+        );
+    }
+
+    #[test]
+    fn compute_next_run_at_when_enabled() {
+        let next = compute_next_run_at(&sample_config()).expect("next run");
+        assert!(next.is_some());
     }
 
     #[test]

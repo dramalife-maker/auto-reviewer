@@ -1,6 +1,7 @@
 import type {
   CreatePersonResponse,
   CreateRunResponse,
+  DashboardResponse,
   HealthResponse,
   LatestReportsResponse,
   Person,
@@ -21,6 +22,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     return undefined as T
   }
   return (await response.json()) as T
+}
+
+export function fetchDashboard(): Promise<DashboardResponse> {
+  return request('/api/dashboard')
 }
 
 export function fetchHealth(): Promise<HealthResponse> {

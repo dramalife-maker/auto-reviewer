@@ -92,3 +92,38 @@ export interface ReloadProjectsResponse {
   unhealthy: number
   projects: ProjectHealth[]
 }
+
+export interface DashboardLastRun {
+  started_at: string
+  duration_sec: number | null
+  status: string
+}
+
+export interface DashboardStats {
+  project_count: number
+  person_count: number
+  unread_count: number
+  pending_count: number
+}
+
+export interface DashboardRecentReport {
+  report_id: number
+  person_id: number
+  person_name: string
+  project_name: string
+  is_read: boolean
+  pending_count: number
+}
+
+export interface DashboardSchedule {
+  label: string
+  next_run_at: string | null
+  enabled: boolean
+}
+
+export interface DashboardResponse {
+  last_run: DashboardLastRun | null
+  stats: DashboardStats
+  recent_reports: DashboardRecentReport[]
+  schedule: DashboardSchedule
+}

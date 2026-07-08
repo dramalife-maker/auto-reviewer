@@ -6,6 +6,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
+use crate::dashboard;
 use crate::error::Error;
 use crate::identity;
 use crate::person_trends;
@@ -89,6 +90,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/api/runs", post(create_run))
         .route("/api/runs/{id}", get(get_run))
+        .route("/api/dashboard", get(get_dashboard))
         .route("/api/people", get(list_people).post(create_person))
         .route("/api/people/{id}/reports/latest", get(latest_reports))
         .route("/api/people/{id}/trends", get(person_trends))
@@ -209,6 +211,15 @@ async fn reload_projects(
         unhealthy,
         projects,
     }))
+}
+
+async fn get_dashboard(
+    State(state): State<AppState>,
+) -> Result<Json<dashboard::DashboardResponse>, ApiError> {
+    let response = dashboard::load_dashboard(&state.pool)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(response))
 }
 
 async fn list_people(State(state): State<AppState>) -> Result<Json<Vec<reports::PersonListItem>>, ApiError> {

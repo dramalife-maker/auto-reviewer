@@ -1,6 +1,7 @@
 import {
   bindIdentity,
   createPerson,
+  fetchDashboard,
   fetchHealth,
   fetchLatestReports,
   fetchPeople,
@@ -12,6 +13,7 @@ import {
   startManualRun,
 } from './api'
 import type {
+  DashboardResponse,
   LatestReportItem,
   LatestReportsResponse,
   Person,
@@ -21,6 +23,7 @@ import type {
 } from './types'
 
 const TERMINAL_STATUSES = new Set(['success', 'partial', 'failed'])
+type AppView = 'dashboard' | 'reports'
 
 export class ReviewerApp {
   private root: HTMLElement
@@ -36,6 +39,8 @@ export class ReviewerApp {
   private reloading = false
   private unmatchedAuthors: UnmatchedAuthor[] = []
   private showUnmatchedPanel = false
+  private appView: AppView = 'dashboard'
+  private dashboard: DashboardResponse | null = null
 
   constructor(root: HTMLElement) {
     this.root = root
@@ -45,7 +50,7 @@ export class ReviewerApp {
     try {
       const health = await fetchHealth()
       this.bannerMessage = null
-      await Promise.all([this.loadPeople(), this.loadUnmatchedAuthors()])
+      await Promise.all([this.loadPeople(), this.loadUnmatchedAuthors(), this.loadDashboard()])
       this.render(`已連線 · ${health.data_dir}`)
     } catch (error) {
       this.renderError(error)
@@ -71,6 +76,14 @@ export class ReviewerApp {
       this.unmatchedAuthors = await fetchUnmatchedAuthors()
     } catch {
       this.unmatchedAuthors = []
+    }
+  }
+
+  private async loadDashboard(): Promise<void> {
+    try {
+      this.dashboard = await fetchDashboard()
+    } catch {
+      this.dashboard = null
     }
   }
 
@@ -113,27 +126,45 @@ export class ReviewerApp {
             <button id="reload-projects" class="secondary" type="button" ${this.reloading || this.activeRunId ? 'disabled' : ''}>
               ${this.reloading ? '載入中…' : '重新載入'}
             </button>
-            <button id="run-all" class="primary" type="button" ${this.activeRunId || this.reloading ? 'disabled' : ''}>
-              ${this.activeRunId ? '執行中…' : '全部執行'}
-            </button>
           </div>
         </header>
         ${this.bannerMessage ? `<div class="banner${this.bannerIsError ? ' error' : ''}">${escapeHtml(this.bannerMessage)}</div>` : ''}
         ${this.showUnmatchedPanel ? this.renderUnmatchedPanel() : ''}
         <div class="main">
           <aside class="sidebar">
-            <h2>人員</h2>
-            ${this.renderPeopleList()}
+            <nav class="sidebar-nav" aria-label="主要導覽">
+              <button type="button" class="nav-item ${this.appView === 'dashboard' ? 'active' : ''}" data-nav="dashboard">
+                控制台
+              </button>
+              <button type="button" class="nav-item ${this.appView === 'reports' ? 'active' : ''}" data-nav="reports">
+                報告閱讀器
+              </button>
+            </nav>
+            ${this.appView === 'reports' ? `<h2>人員</h2>${this.renderPeopleList()}` : ''}
           </aside>
           <section class="content">
-            ${this.renderContent()}
+            ${this.appView === 'dashboard' ? this.renderDashboard() : this.renderContent()}
           </section>
         </div>
       </div>
     `
 
-    this.root.querySelector('#run-all')?.addEventListener('click', () => {
+    this.root.querySelectorAll('[data-nav]').forEach((element) => {
+      element.addEventListener('click', () => {
+        const view = (element as HTMLElement).dataset.nav as AppView
+        void this.switchAppView(view)
+      })
+    })
+
+    this.root.querySelector('#dashboard-run')?.addEventListener('click', () => {
       void this.handleRunAll()
+    })
+
+    this.root.querySelectorAll('[data-recent-person]').forEach((element) => {
+      element.addEventListener('click', () => {
+        const personId = Number((element as HTMLElement).dataset.recentPerson)
+        void this.openPersonReport(personId)
+      })
     })
 
     this.root.querySelector('#reload-projects')?.addEventListener('click', () => {
@@ -195,6 +226,93 @@ export class ReviewerApp {
         void this.switchViewTab(tab)
       })
     })
+  }
+
+  private renderDashboard(): string {
+    const dashboard = this.dashboard
+    const lastRunLine = dashboard?.last_run
+      ? `上次執行 ${formatTimestamp(dashboard.last_run.started_at)}${formatDurationSuffix(dashboard.last_run.duration_sec)}`
+      : '尚無執行紀錄'
+
+    const stats = dashboard?.stats ?? {
+      project_count: 0,
+      person_count: 0,
+      unread_count: 0,
+      pending_count: 0,
+    }
+
+    const recentRows =
+      dashboard?.recent_reports.length === 0
+        ? '<p class="empty dashboard-empty">尚無報告</p>'
+        : (dashboard?.recent_reports ?? [])
+            .map((report) => {
+              const status = report.is_read
+                ? '<span class="recent-status read">已讀</span>'
+                : `<span class="recent-status pending">${report.pending_count > 0 ? `⚠ ${report.pending_count}` : ''}</span>`
+              const dotClass = report.is_read ? 'read' : 'unread'
+              const rowClass = report.is_read ? 'recent-row read' : 'recent-row'
+              return `<button type="button" class="${rowClass}" data-recent-person="${report.person_id}">
+                <span class="recent-label">
+                  <span class="recent-dot ${dotClass}" aria-hidden="true"></span>
+                  ${escapeHtml(report.person_name)}
+                  <span class="recent-project">${escapeHtml(report.project_name)}</span>
+                </span>
+                ${status}
+              </button>`
+            })
+            .join('')
+
+    const schedule = dashboard?.schedule
+    const scheduleStatus = schedule?.enabled
+      ? '<div class="schedule-status active"><span aria-hidden="true">✓</span> 排程器運行中</div>'
+      : '<div class="schedule-status inactive">排程已停用</div>'
+
+    return `<div class="dashboard">
+      <div class="dashboard-header">
+        <div>
+          <h2 class="dashboard-title">控制台</h2>
+          <p class="dashboard-subtitle">${escapeHtml(lastRunLine)}</p>
+        </div>
+        <button id="dashboard-run" class="dashboard-run" type="button" ${this.activeRunId || this.reloading ? 'disabled' : ''}>
+          ${this.activeRunId ? '執行中…' : '▶ 立即執行'}
+        </button>
+      </div>
+
+      <div class="dashboard-stats">
+        <article class="stat-card">
+          <div class="stat-label">專案</div>
+          <div class="stat-value">${stats.project_count}</div>
+        </article>
+        <article class="stat-card">
+          <div class="stat-label">工程師</div>
+          <div class="stat-value">${stats.person_count}</div>
+        </article>
+        <article class="stat-card">
+          <div class="stat-label">未讀報告</div>
+          <div class="stat-value accent-info">${stats.unread_count}</div>
+        </article>
+        <article class="stat-card">
+          <div class="stat-label">待確認</div>
+          <div class="stat-value accent-warning">${stats.pending_count}</div>
+        </article>
+      </div>
+
+      <div class="dashboard-panels">
+        <section class="dashboard-panel">
+          <h3 class="panel-title">最近報告</h3>
+          <div class="recent-list">${recentRows}</div>
+        </section>
+        <section class="dashboard-panel">
+          <h3 class="panel-title">排程</h3>
+          <div class="schedule-row"><span aria-hidden="true">📅</span> ${escapeHtml(schedule?.label ?? '—')}</div>
+          <div class="schedule-row muted">
+            <span aria-hidden="true">🕒</span>
+            ${schedule?.next_run_at ? `下次 ${escapeHtml(schedule.next_run_at)}` : '無下次排程'}
+          </div>
+          ${scheduleStatus}
+        </section>
+      </div>
+    </div>`
   }
 
   private renderUnmatchedPanel(): string {
@@ -375,6 +493,22 @@ export class ReviewerApp {
     </article>`
   }
 
+  private async switchAppView(view: AppView): Promise<void> {
+    this.appView = view
+    if (view === 'dashboard' && this.dashboard === null) {
+      await this.loadDashboard()
+    }
+    this.render(await this.statusLine())
+  }
+
+  private async openPersonReport(personId: number): Promise<void> {
+    this.appView = 'reports'
+    this.selectedPersonId = personId
+    this.personViewTab = 'weekly'
+    await Promise.all([this.loadLatestReports(), this.loadPersonTrends()])
+    this.render(await this.statusLine())
+  }
+
   private async selectPerson(personId: number): Promise<void> {
     this.selectedPersonId = personId
     await Promise.all([this.loadLatestReports(), this.loadPersonTrends()])
@@ -400,6 +534,7 @@ export class ReviewerApp {
     }
 
     await this.loadPeople()
+    await this.loadDashboard()
     this.render(await this.statusLine())
   }
 
@@ -453,7 +588,7 @@ export class ReviewerApp {
       const result = await reloadProjects()
       const unhealthyNote = result.unhealthy > 0 ? ` · 異常 ${result.unhealthy}` : ''
       this.bannerMessage = `已重新載入 ${result.total} 個專案（正常 ${result.healthy}${unhealthyNote}）`
-      await Promise.all([this.loadPeople(), this.loadUnmatchedAuthors()])
+      await Promise.all([this.loadPeople(), this.loadUnmatchedAuthors(), this.loadDashboard()])
     } catch (error) {
       this.bannerMessage = error instanceof Error ? error.message : '重新載入失敗'
     } finally {
@@ -504,7 +639,7 @@ export class ReviewerApp {
       const { message, isError } = formatRunCompleteBanner(run)
       this.bannerMessage = message
       this.bannerIsError = isError
-      await Promise.all([this.loadPeople(), this.loadUnmatchedAuthors()])
+      await Promise.all([this.loadPeople(), this.loadUnmatchedAuthors(), this.loadDashboard()])
       this.render(await this.statusLine())
     } catch (error) {
       if (this.pollTimer !== null) {
@@ -533,6 +668,22 @@ export class ReviewerApp {
       </div>
     `
   }
+}
+
+function formatTimestamp(value: string): string {
+  return value.length >= 16 ? value.slice(0, 16) : value
+}
+
+function formatDurationSuffix(durationSec: number | null | undefined): string {
+  if (durationSec == null || durationSec < 0) {
+    return ''
+  }
+  const minutes = Math.floor(durationSec / 60)
+  const seconds = durationSec % 60
+  if (minutes > 0) {
+    return ` · 耗時 ${minutes}m ${seconds}s`
+  }
+  return ` · 耗時 ${seconds}s`
 }
 
 function formatRunCompleteBanner(run: RunStatus): { message: string; isError: boolean } {
