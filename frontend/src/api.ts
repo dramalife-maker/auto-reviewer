@@ -60,6 +60,14 @@ export function startManualRun(): Promise<CreateRunResponse> {
   })
 }
 
+export function startProjectRun(projectName: string): Promise<CreateRunResponse> {
+  return request('/api/runs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ trigger: 'manual_project', project_name: projectName }),
+  })
+}
+
 export function fetchRun(runId: number): Promise<RunStatus> {
   return request(`/api/runs/${runId}`)
 }

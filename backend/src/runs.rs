@@ -44,6 +44,46 @@ pub async fn create_manual_all_run(pool: &sqlx::SqlitePool) -> crate::Result<i64
     create_batch_run(pool, "manual_all").await
 }
 
+pub async fn create_manual_project_run(
+    pool: &sqlx::SqlitePool,
+    project_name: &str,
+) -> crate::Result<i64> {
+    if has_active_run_projects(pool).await? {
+        return Err(crate::Error::RunConflict);
+    }
+
+    let project = sqlx::query_as::<_, ProjectRow>(
+        "SELECT id, name, repo_path FROM projects WHERE name = ?",
+    )
+    .bind(project_name)
+    .fetch_optional(pool)
+    .await
+    .map_err(crate::Error::Database)?
+    .ok_or(crate::Error::NotFound)?;
+
+    let mut tx = pool.begin().await.map_err(crate::Error::Database)?;
+
+    let result = sqlx::query(
+        "INSERT INTO runs (trigger, status, project_total) VALUES ('manual_project', 'running', 1)",
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(crate::Error::Database)?;
+    let run_id = result.last_insert_rowid();
+
+    sqlx::query(
+        "INSERT INTO run_projects (run_id, project_id, state) VALUES (?, ?, 'queued')",
+    )
+    .bind(run_id)
+    .bind(project.id)
+    .execute(&mut *tx)
+    .await
+    .map_err(crate::Error::Database)?;
+
+    tx.commit().await.map_err(crate::Error::Database)?;
+    Ok(run_id)
+}
+
 pub async fn create_scheduled_run(pool: &sqlx::SqlitePool) -> crate::Result<i64> {
     create_batch_run(pool, "schedule").await
 }

@@ -25,6 +25,7 @@ pub struct HealthResponse {
 #[derive(Deserialize)]
 pub struct CreateRunRequest {
     pub trigger: String,
+    pub project_name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -149,13 +150,21 @@ async fn create_run(
     State(state): State<AppState>,
     Json(body): Json<CreateRunRequest>,
 ) -> Result<(StatusCode, Json<CreateRunResponse>), ApiError> {
-    if body.trigger != "manual_all" {
-        return Err(ApiError::from(Error::UnsupportedRunTrigger(body.trigger)));
-    }
-
-    let run_id = runs::create_manual_all_run(&state.pool)
-        .await
-        .map_err(ApiError::from)?;
+    let run_id = match body.trigger.as_str() {
+        "manual_all" => runs::create_manual_all_run(&state.pool).await?,
+        "manual_project" => {
+            let project_name = body
+                .project_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .ok_or(Error::InvalidProjectConfig(
+                    "manual_project requires project_name".into(),
+                ))?;
+            runs::create_manual_project_run(&state.pool, project_name).await?
+        }
+        other => return Err(ApiError::from(Error::UnsupportedRunTrigger(other.to_string()))),
+    };
 
     if let Some(worker) = &state.worker {
         worker.wake();

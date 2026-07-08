@@ -82,6 +82,67 @@ async fn manual_all_run_enqueues_projects() {
 }
 
 #[tokio::test]
+async fn manual_project_run_enqueues_one_project() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_app_state_env(&temp).await;
+
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    insert_projects(&pool, &temp).await;
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/runs")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"trigger":"manual_project","project_name":"alpha"}"#,
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    let run_id = json["run_id"].as_i64().expect("run_id");
+
+    assert_eq!(
+        runs::count_run_projects_by_state(&pool, run_id, "queued")
+            .await
+            .expect("count"),
+        1
+    );
+
+    let trigger: String = sqlx::query_scalar("SELECT trigger FROM runs WHERE id = ?")
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("trigger");
+    assert_eq!(trigger, "manual_project");
+
+    let project_name: String = sqlx::query_scalar(
+        "SELECT p.name FROM run_projects rp
+         INNER JOIN projects p ON p.id = rp.project_id
+         WHERE rp.run_id = ?",
+    )
+    .bind(run_id)
+    .fetch_one(&pool)
+    .await
+    .expect("project name");
+    assert_eq!(project_name, "alpha");
+}
+
+#[tokio::test]
 async fn duplicate_project_run_returns_409() {
     let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
     let temp = tempfile::tempdir().expect("tempdir");

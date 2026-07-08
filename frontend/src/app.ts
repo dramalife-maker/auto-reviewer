@@ -14,6 +14,7 @@ import {
   markReportRead,
   reloadProjects,
   startManualRun,
+  startProjectRun,
   updateProject,
 } from './api'
 import type {
@@ -317,6 +318,10 @@ export class ReviewerApp {
       void this.handleProjectDelete()
     })
 
+    this.root.querySelector('#project-run')?.addEventListener('click', () => {
+      void this.handleProjectRun()
+    })
+
     this.root.querySelector('#project-save')?.addEventListener('click', () => {
       void this.handleProjectSave()
     })
@@ -512,7 +517,12 @@ export class ReviewerApp {
             ${
               draft.isNew
                 ? ''
-                : '<button id="project-remove" class="project-settings-remove" type="button">移除</button>'
+                : `<div class="project-settings-detail-actions">
+                    <button id="project-run" class="project-settings-run" type="button" ${this.activeRunId || this.reloading ? 'disabled' : ''}>
+                      ${this.activeRunId ? '執行中…' : '▶ 執行'}
+                    </button>
+                    <button id="project-remove" class="project-settings-remove" type="button" ${this.activeRunId || this.reloading ? 'disabled' : ''}>移除</button>
+                  </div>`
             }
           </div>
           ${healthNote}
@@ -649,6 +659,26 @@ export class ReviewerApp {
       this.bannerIsError = true
     }
     await this.renderWithStatus()
+  }
+
+  private async handleProjectRun(): Promise<void> {
+    const draft = this.projectDraft
+    if (!draft || draft.isNew || this.activeRunId || this.reloading) {
+      return
+    }
+
+    try {
+      const response = await startProjectRun(draft.name)
+      this.activeRunId = response.run_id
+      this.bannerMessage = null
+      this.bannerIsError = false
+      this.render(`執行中 · ${draft.name} · run #${response.run_id}`)
+      this.startPolling(response.run_id)
+    } catch (error) {
+      this.bannerMessage = error instanceof Error ? error.message : '無法啟動執行'
+      this.bannerIsError = true
+      await this.renderWithStatus()
+    }
   }
 
   private async handleProjectDelete(): Promise<void> {
@@ -1018,6 +1048,9 @@ export class ReviewerApp {
         this.loadDashboard(),
         this.loadProjects(),
       ])
+      if (this.appView === 'projects') {
+        this.syncProjectDraft()
+      }
       this.render(await this.statusLine())
     } catch (error) {
       if (this.pollTimer !== null) {
