@@ -261,6 +261,60 @@ body {
   font-size: 0.875rem;
 }
 
+.view-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.view-tab {
+  border: 1px solid #d1d5db;
+  border-radius: 0.5rem;
+  padding: 0.375rem 0.875rem;
+  background: white;
+  cursor: pointer;
+}
+
+.view-tab.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.trends-panel {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.trends-section {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.75rem;
+  padding: 1rem;
+}
+
+.trends-section h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+
+.timeline-entry + .timeline-entry {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid #f3f4f6;
+}
+
+.timeline-entry h4 {
+  margin: 0 0 0.5rem;
+  color: #374151;
+}
+
+.markdown-body {
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
 .project-grid {
   display: grid;
   gap: 1rem;

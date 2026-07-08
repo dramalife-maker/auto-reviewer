@@ -102,6 +102,22 @@ curl http://127.0.0.1:8080/health
 
 首次啟動會建立 `$DATA_ROOT_DIR/reviewer.db`、執行 migration，並建立 `repos/`、`reports/` 目錄。
 
+報告目錄佈局：
+
+```text
+$DATA_ROOT_DIR/reports/
+  _people/{display_name}/     # 跨專案長期觀察（趨勢 Tab）
+    index.md
+    YYYY-MM.md                # 跨專案月度成長軌跡
+    _notes.md
+  {project_name}/{display_name}/
+    YYYY-MM.md                # 本專案月度成長（workflow 每週追加）
+    {YYYY-MM-DD}/
+      summary.md              # 本週 Tab
+```
+
+舊筆記遷移見 [`docs/idea/migration-person-observations.md`](docs/idea/migration-person-observations.md)。
+
 ### 4. 啟動前端（開發）
 
 ```powershell
@@ -237,6 +253,7 @@ claude --bare ... --append-system-prompt-file $APP_ROOT/skills/reviewer-batch/WO
 | POST | `/api/people/{id}/identities` | 綁定 identity `{ "kind", "value", "label?" }` |
 | GET | `/api/unmatched-authors` | 未歸戶 git author 列表 |
 | GET | `/api/people/{id}/reports/latest` | 最新週報 |
+| GET | `/api/people/{id}/trends` | 人物趨勢（長期觀察 / 成長軌跡 / 歷史待確認） |
 | PATCH | `/api/reports/{id}/read` | 標記已讀 |
 
 排程預設：每週一 09:00 台北時間（`schedule_config` 表，enabled=1）。時區由 `schedule_config.tz_offset_min` 設定（UTC 偏移分鐘數，預設 `480` = UTC+8）；`run_time` 依此時區解讀。
@@ -252,4 +269,5 @@ cd frontend && npm run build
 
 - 產品規格：`docs/idea/spec.md`
 - 資料 schema：`docs/idea/schema.md`
+- 人物層遷移：`docs/idea/migration-person-observations.md`
 - MVP 實作計畫：`openspec/changes/cloud-reviewer-mvp/`

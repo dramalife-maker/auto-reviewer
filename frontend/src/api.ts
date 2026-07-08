@@ -4,6 +4,7 @@ import type {
   HealthResponse,
   LatestReportsResponse,
   Person,
+  PersonTrendsResponse,
   ReloadProjectsResponse,
   RunStatus,
   UnmatchedAuthor,
@@ -32,6 +33,10 @@ export function fetchPeople(): Promise<Person[]> {
 
 export function fetchLatestReports(personId: number): Promise<LatestReportsResponse> {
   return request(`/api/people/${personId}/reports/latest`)
+}
+
+export function fetchPersonTrends(personId: number): Promise<PersonTrendsResponse> {
+  return request(`/api/people/${personId}/trends`)
 }
 
 export function markReportRead(reportId: number): Promise<void> {

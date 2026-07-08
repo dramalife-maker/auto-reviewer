@@ -4,6 +4,7 @@ import {
   fetchHealth,
   fetchLatestReports,
   fetchPeople,
+  fetchPersonTrends,
   fetchRun,
   fetchUnmatchedAuthors,
   markReportRead,
@@ -14,6 +15,7 @@ import type {
   LatestReportItem,
   LatestReportsResponse,
   Person,
+  PersonTrendsResponse,
   RunStatus,
   UnmatchedAuthor,
 } from './types'
@@ -24,7 +26,9 @@ export class ReviewerApp {
   private root: HTMLElement
   private people: Person[] = []
   private selectedPersonId: number | null = null
+  private personViewTab: 'weekly' | 'trends' = 'weekly'
   private latestReports: LatestReportsResponse | null = null
+  private personTrends: PersonTrendsResponse | null = null
   private activeRunId: number | null = null
   private pollTimer: number | null = null
   private bannerMessage: string | null = null
@@ -79,6 +83,18 @@ export class ReviewerApp {
       this.latestReports = await fetchLatestReports(this.selectedPersonId)
     } catch {
       this.latestReports = null
+    }
+  }
+
+  private async loadPersonTrends(): Promise<void> {
+    if (this.selectedPersonId === null) {
+      this.personTrends = null
+      return
+    }
+    try {
+      this.personTrends = await fetchPersonTrends(this.selectedPersonId)
+    } catch {
+      this.personTrends = null
     }
   }
 
@@ -172,6 +188,13 @@ export class ReviewerApp {
     this.root.querySelector('#mark-read')?.addEventListener('click', () => {
       void this.handleMarkRead()
     })
+
+    this.root.querySelectorAll('[data-view-tab]').forEach((element) => {
+      element.addEventListener('click', () => {
+        const tab = (element as HTMLElement).dataset.viewTab as 'weekly' | 'trends'
+        void this.switchViewTab(tab)
+      })
+    })
   }
 
   private renderUnmatchedPanel(): string {
@@ -250,11 +273,25 @@ export class ReviewerApp {
       return '<p class="empty">找不到人員</p>'
     }
 
+    const tabs = `<div class="view-tabs">
+      <button type="button" class="view-tab ${this.personViewTab === 'weekly' ? 'active' : ''}" data-view-tab="weekly">本週</button>
+      <button type="button" class="view-tab ${this.personViewTab === 'trends' ? 'active' : ''}" data-view-tab="trends">趨勢</button>
+    </div>`
+
+    if (this.personViewTab === 'trends') {
+      return `<div class="content-header">
+        <h2>${escapeHtml(person.display_name)}</h2>
+      </div>
+      ${tabs}
+      ${this.renderTrendsContent()}`
+    }
+
     if (!this.latestReports || this.latestReports.projects.length === 0) {
       return `<div class="content-header">
         <h2>${escapeHtml(person.display_name)}</h2>
-        <p class="empty">尚無週報</p>
-      </div>`
+      </div>
+      ${tabs}
+      <p class="empty">尚無週報</p>`
     }
 
     const unreadCount = this.latestReports.projects.filter((item) => !item.is_read).length
@@ -270,9 +307,51 @@ export class ReviewerApp {
       </div>
       ${markReadButton}
     </div>
+    ${tabs}
     <div class="project-grid">
       ${this.latestReports.projects.map((project) => this.renderProjectCard(project)).join('')}
     </div>`
+  }
+
+  private renderTrendsContent(): string {
+    const trends = this.personTrends
+    const hasObservation = Boolean(trends?.long_term_observation?.trim())
+    const hasTimeline = (trends?.growth_timeline.length ?? 0) > 0
+    const hasPending = (trends?.historical_pending.length ?? 0) > 0
+
+    if (!hasObservation && !hasTimeline && !hasPending) {
+      return `<p class="empty">尚無長期觀察資料。可將舊筆記放入 <code>reports/_people/{display_name}/index.md</code>，詳見 README 遷移說明。</p>`
+    }
+
+    const observation = hasObservation
+      ? `<section class="trends-section">
+          <h3>長期觀察</h3>
+          <div class="markdown-body">${renderMarkdownText(trends!.long_term_observation)}</div>
+        </section>`
+      : ''
+
+    const timeline = hasTimeline
+      ? `<section class="trends-section">
+          <h3>成長軌跡</h3>
+          ${trends!
+            .growth_timeline.map(
+              (entry) => `<article class="timeline-entry">
+                <h4>${escapeHtml(entry.month)}</h4>
+                <div class="markdown-body">${renderMarkdownText(entry.content)}</div>
+              </article>`,
+            )
+            .join('')}
+        </section>`
+      : ''
+
+    const pending = hasPending
+      ? `<section class="trends-section">
+          <h3>歷史待確認</h3>
+          <ul>${trends!.historical_pending.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
+        </section>`
+      : ''
+
+    return `<div class="trends-panel">${observation}${timeline}${pending}</div>`
   }
 
   private renderProjectCard(project: LatestReportItem): string {
@@ -298,7 +377,15 @@ export class ReviewerApp {
 
   private async selectPerson(personId: number): Promise<void> {
     this.selectedPersonId = personId
-    await this.loadLatestReports()
+    await Promise.all([this.loadLatestReports(), this.loadPersonTrends()])
+    this.render(await this.statusLine())
+  }
+
+  private async switchViewTab(tab: 'weekly' | 'trends'): Promise<void> {
+    this.personViewTab = tab
+    if (tab === 'trends' && this.personTrends === null) {
+      await this.loadPersonTrends()
+    }
     this.render(await this.statusLine())
   }
 
@@ -482,6 +569,10 @@ function humanizeProjectError(error: string): string {
     return 'Cursor 登入已失效，請在本機重新執行 cursor-agent login 後再試'
   }
   return error
+}
+
+function renderMarkdownText(value: string): string {
+  return escapeHtml(value).replaceAll('\n', '<br>')
 }
 
 function renderSection(title: string, items: string[]): string {

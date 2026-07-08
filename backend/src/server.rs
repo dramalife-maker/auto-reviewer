@@ -8,6 +8,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::error::Error;
 use crate::identity;
+use crate::person_trends;
 use crate::projects;
 use crate::reports;
 use crate::runs::{self, RunRow};
@@ -90,6 +91,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/runs/{id}", get(get_run))
         .route("/api/people", get(list_people).post(create_person))
         .route("/api/people/{id}/reports/latest", get(latest_reports))
+        .route("/api/people/{id}/trends", get(person_trends))
         .route("/api/people/{id}/identities", get(list_person_identities).post(bind_person_identity))
         .route("/api/unmatched-authors", get(list_unmatched_authors))
         .route("/api/reports/{id}/read", patch(mark_report_read))
@@ -295,6 +297,21 @@ async fn latest_reports(
         .await
         .map_err(ApiError::from)?
         .ok_or(Error::NotFound)?;
+    Ok(Json(response))
+}
+
+async fn person_trends(
+    State(state): State<AppState>,
+    Path(person_id): Path<i64>,
+) -> Result<Json<person_trends::PersonTrendsResponse>, ApiError> {
+    let response = person_trends::load_trends(
+        &state.pool,
+        state.config.data_dir(),
+        person_id,
+    )
+    .await
+    .map_err(ApiError::from)?
+    .ok_or(Error::NotFound)?;
     Ok(Json(response))
 }
 

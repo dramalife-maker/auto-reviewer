@@ -18,11 +18,15 @@ $DATA_ROOT_DIR/                   # 環境變數，例 /data/reviewer
 ├── runs/                            # headless manifest（spec §6.0）
 │   └── <run_id>/projects/<project_id>/manifest.json
 └── reports/
+    ├── _people/                     # 人物層（跨專案長期觀察；非專案名）
+    │   └── <person>/                # = people.display_name
+    │       ├── index.md             # 趨勢「長期觀察」（跨專案）
+    │       ├── YYYY-MM.md           # 趨勢「成長軌跡」（跨專案月度綜合）
+    │       └── _notes.md            # 趨勢「歷史待確認」
     └── <name>/                      # 通常 = projects.name
         └── <person>/                # 通常 = people.display_name
-            ├── index.md             # 趨勢「長期觀察」
-            ├── YYYY-MM.md           # 趨勢「成長軌跡」素材
-            ├── _notes.md            # 趨勢「歷史待確認」
+            ├── index.md             # （可選）本專案技術脈絡
+            ├── YYYY-MM.md           # 本專案月度成長素材（workflow 每週追加）
             ├── _pending/            # 軌道 2 MR 觀察片段
             ├── _cache/              # 選填：long_term.md 等 AI 快取（spec §8 #4）
             └── <YYYY-MM-DD>/
@@ -329,13 +333,15 @@ CREATE INDEX idx_mr_reviews_inbox ON mr_reviews(status, created_at DESC)
 
 | 趨勢 Tab 區塊 | 檔案來源 | 後端行為 |
 |--------------|---------|---------|
-| 長期觀察 | `index.md` + 歷史 `YYYY-MM.md` | 讀檔；可選 AI 跨檔綜合（重算頻率：待決 #4） |
-| 成長軌跡 | 歷史 `YYYY-MM.md` | 解析 / AI 跨季綜合，產時間線 JSON 回前端 |
-| 歷史待確認 | `_notes.md` + 月檔待確認區段 | 解析結構化列表；可與 `pending_items` 對照 |
+| 長期觀察 | `reports/_people/<person>/index.md` | 讀檔全文；可接受無 frontmatter 的自由 Markdown |
+| 成長軌跡 | `reports/_people/<person>/YYYY-MM.md` | 列舉月檔、依檔名降序回傳 JSON（跨專案綜合） |
+| 歷史待確認 | `reports/_people/<person>/_notes.md` | 解析 `- [YYYY-MM]` 開頭的行 |
+
+**專案層月檔**（趨勢 API 不讀；workflow 維護）：`reports/<project>/<person>/YYYY-MM.md` 記錄該人在該 repo 的月度成長，作為單專案深讀素材，並供 workflow 撰寫人物層月檔時參考。
 
 **可選快取（不落 SQLite）**：AI 重算的「長期觀察」可寫入 `reports/<name>/<person>/_cache/long_term.md`（spec §8 #4）。
 
-**headless workflow 責任**：週報 / MR review 執行時維護 `index.md`、`YYYY-MM.md`（對齊既有 reviewer 輸出），後端只讀不寫（閉環標記除外）。
+**headless workflow 責任**：每週產報後維護**專案層** `{project}/{person}/YYYY-MM.md`（本 repo 月度成長）與**人物層** `_people/<person>/` 下 `index.md`、`YYYY-MM.md`、`_notes.md`（跨專案綜合）。趨勢 API 只讀人物層，不寫 SQLite。
 
 ---
 

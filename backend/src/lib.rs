@@ -3,6 +3,7 @@ pub mod db;
 pub mod error;
 pub mod executor;
 pub mod identity;
+pub mod person_trends;
 pub mod projects;
 pub mod reports;
 pub mod runs;

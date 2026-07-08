@@ -153,6 +153,56 @@ async fn weekly_manifest_includes_resolved_authors() {
 }
 
 #[tokio::test]
+async fn manifest_includes_person_report_root() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::env::set_var("DATA_ROOT_DIR", temp.path());
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let repo = temp.path().join("repo");
+    init_repo_with_commits(
+        &repo,
+        &[("alice@co.com", "Alice", "alice work")],
+    );
+
+    sqlx::query(
+        "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('alpha', ?, 1)",
+    )
+    .bind(repo.display().to_string())
+    .execute(&pool)
+    .await
+    .expect("insert project");
+
+    let person_id = create_person(&pool, "Alice Chen")
+        .await
+        .expect("create person");
+    bind_identity(&pool, person_id, KIND_GIT_EMAIL, "alice@co.com", None)
+        .await
+        .expect("bind alice");
+
+    let project = ProjectRow {
+        id: 1,
+        name: "alpha".into(),
+        repo_path: repo.display().to_string(),
+    };
+    let manifest_path =
+        write_weekly_manifest(&pool, temp.path(), 42, &project, &project.repo_path)
+            .await
+            .expect("write manifest");
+
+    let json: Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).expect("read manifest"))
+            .expect("parse manifest");
+    let expected = temp
+        .path()
+        .join("reports")
+        .join("_people")
+        .display()
+        .to_string()
+        .replace('\\', "/");
+    assert_eq!(json["person_report_root"], expected);
+}
+
+#[tokio::test]
 async fn unmatched_authors_list_api() {
     let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
     let temp = tempfile::tempdir().expect("tempdir");

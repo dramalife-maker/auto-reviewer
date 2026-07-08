@@ -268,6 +268,7 @@ pub struct RunManifest<'a> {
     pub project_name: &'a str,
     pub repo_path: &'a str,
     pub report_root: String,
+    pub person_report_root: String,
     pub run_date: String,
     pub since: String,
     pub output_contract: &'static str,
@@ -305,6 +306,12 @@ pub async fn write_weekly_manifest(
         .display()
         .to_string()
         .replace('\\', "/");
+    let person_report_root = data_root
+        .join("reports")
+        .join(crate::person_trends::PERSON_REPORT_DIR)
+        .display()
+        .to_string()
+        .replace('\\', "/");
 
     let authors = identity::prepare_manifest_authors(
         pool,
@@ -320,6 +327,7 @@ pub async fn write_weekly_manifest(
         project_name: &project.name,
         repo_path,
         report_root,
+        person_report_root,
         run_date,
         since,
         output_contract: "output-contract.md",

@@ -13,6 +13,7 @@
    - `project_name`
    - `repo_path`（應與目前 cwd 一致）
    - `report_root`（本專案報告根目錄，例 `$DATA_ROOT_DIR/reports/game-backend`）
+   - `person_report_root`（人物層報告根目錄，例 `$DATA_ROOT_DIR/reports/_people`；每位 author 的跨專案長期檔寫入 `{person_report_root}/{display_name}/`）
    - `run_date`（本次報告日期，`YYYY-MM-DD`）
    - `since`（分析窗口起日，`YYYY-MM-DD`，含當日）
    - `authors`（已歸戶工程師陣列：`email`, `git_name`, `person_id`, `display_name`）
@@ -21,8 +22,8 @@
 
 **寫入限制（硬性）**：
 
-- 允許寫入：`{report_root}/**` 底下所有檔案。
-- 允許讀取：`repo_path` 下 git 歷史、`report_root` 既有檔案（含 `_pending/`）。
+- 允許寫入：`{report_root}/**` 底下所有檔案，以及 `{person_report_root}/{display_name}/**`（跨專案長期檔）。
+- 允許讀取：`repo_path` 下 git 歷史、`report_root` 與 `{person_report_root}/{display_name}/` 既有檔案（含 `_pending/`）。
 - **禁止**寫入 manifest 路徑以外的新根目錄、禁止修改 `repos/` 原始碼（除 Read 外不 Write repo 內容）。
 
 ---
@@ -66,9 +67,11 @@
 
 Read 若已存在：
 
-- `{report_root}/{person}/index.md` — 長期觀察
-- `{report_root}/{person}/YYYY-MM.md`（`run_date` 所在月份）
-- `{report_root}/{person}/_notes.md` — 歷史待確認
+- `{person_report_root}/{display_name}/index.md` — **跨專案**長期觀察（趨勢 Tab 主資料源）
+- `{person_report_root}/{display_name}/YYYY-MM.md`（`run_date` 所在月份）— 跨專案月度成長
+- `{person_report_root}/{display_name}/_notes.md` — 歷史待確認
+- `{report_root}/{person}/index.md` —（可選）本專案技術脈絡補充
+- `{report_root}/{person}/YYYY-MM.md`（`run_date` 所在月份）— **本專案**月度成長素材
 
 用於延續敘事、避免與過去待確認矛盾；**不要**複製整段舊文到 summary。
 
@@ -121,13 +124,30 @@ Read 若已存在：
 
 ## 4. 更新長期檔案（每位有產報告的工程師）
 
-路徑均在 `{report_root}/{person}/`：
+每位工程師產完 `{report_root}/{person}/{run_date}/summary.md` 後，**依序**更新專案層與人物層長期檔。兩層 `YYYY-MM.md` 語意不同，**皆須維護**。
+
+### 4.1 專案層（本 repo 月度成長）
+
+路徑：`{report_root}/{person}/`
 
 | 檔案 | 動作 |
 |------|------|
-| `index.md` | 追加或修訂「長期觀察」段落（引文式、累積敘事；非每週重複貼 summary） |
-| `YYYY-MM.md` | 以 `run_date` 的 `YYYY-MM` 為檔名；追加本週摘要段落，供趨勢「成長軌跡」 |
+| `YYYY-MM.md` | **必做**。以 `run_date` 的 `YYYY-MM` 為檔名；追加本週在**本專案**的成長段落（技術深度、交付、review 互動等；可引用 summary 的 `## 成長面向`，但須改寫為月度累積敘事，非整段複製） |
+| `index.md` | （可選）追加本專案技術脈絡段落 |
+
+專案層月檔記錄「這個人在這個 repo 當月長大了什麼」，供單專案深讀與人物層綜合的素材來源。
+
+### 4.2 人物層（跨專案綜合；趨勢 Tab 主資料源）
+
+路徑：`{person_report_root}/{display_name}/`
+
+| 檔案 | 動作 |
+|------|------|
+| `index.md` | 追加或修訂「長期觀察」段落（跨專案綜合敘事；引文式、累積；非每週重複貼 summary） |
+| `YYYY-MM.md` | **必做**。以 `run_date` 的 `YYYY-MM` 為檔名；追加本週**跨專案**成長綜合段落（引用各專案本週重點，非複製專案層月檔全文） |
 | `_notes.md` | 將本次 `## 待確認` 條目追加為 `- [YYYY-MM] 問題文字`（供趨勢「歷史待確認」） |
+
+人物層月檔記錄「這個人整體當月的成長軌跡」，由趨勢 API `growth_timeline` 讀取。
 
 若檔案不存在，建立並寫入標題與首段。若已存在，**追加**新段落，保留舊內容。
 
@@ -158,5 +178,6 @@ Read 若已存在：
 - [ ] 已依 manifest `authors` 處理每位工程師（非自行 git 歸戶）
 - [ ] 每份 `summary.md` frontmatter 與三個 heading 正確
 - [ ] 路徑均在 `{report_root}/{person}/{run_date}/`
-- [ ] 已更新 `index.md` / `YYYY-MM.md` / `_notes.md`（若有產 report）
+- [ ] 已更新 `{report_root}/{person}/` 下 `YYYY-MM.md`（若有產 report）
+- [ ] 已更新 `{person_report_root}/{display_name}/` 下 `index.md` / `YYYY-MM.md` / `_notes.md`（若有產 report）
 - [ ] 未 Write repo 原始碼、未互動詢問

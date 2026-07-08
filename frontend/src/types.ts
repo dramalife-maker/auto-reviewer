@@ -45,6 +45,19 @@ export interface LatestReportsResponse {
   projects: LatestReportItem[]
 }
 
+export interface GrowthTimelineEntry {
+  month: string
+  content: string
+}
+
+export interface PersonTrendsResponse {
+  person_id: number
+  display_name: string
+  long_term_observation: string
+  growth_timeline: GrowthTimelineEntry[]
+  historical_pending: string[]
+}
+
 export interface RunProjectStatus {
   name: string
   state: string
