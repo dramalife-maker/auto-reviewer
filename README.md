@@ -1,6 +1,6 @@
 # Auto Reviewer
 
-雲端 1on1 Reviewer MVP：Rust 後端排程執行 reviewer-batch workflow，Vite 前端閱讀週報。
+雲端 Reviewer MVP：Rust 後端排程執行 reviewer-batch workflow，Vite 前端閱讀週報。
 
 ## 需求
 

@@ -101,7 +101,6 @@ export interface ProjectListItem {
   health_reason: string | null
   is_git_repo: number
   source_type: 'gitlab' | 'local'
-  gitlab_project_id: string | null
   engineers: ProjectEngineer[]
 }
 
@@ -115,7 +114,6 @@ export interface ProjectInput {
   repo_path: string
   git_remote_url?: string | null
   default_branches?: string[]
-  gitlab_project_id?: string | null
 }
 
 export interface ProjectUpdateInput {
@@ -123,7 +121,6 @@ export interface ProjectUpdateInput {
   repo_path: string
   git_remote_url?: string | null
   default_branches?: string[]
-  gitlab_project_id?: string | null
 }
 
 export interface ReloadProjectsResponse {

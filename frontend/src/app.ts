@@ -34,7 +34,6 @@ type SourceType = 'gitlab' | 'local'
 interface ProjectDraft {
   name: string
   source_type: SourceType
-  gitlab_project_id: string
   repo_path: string
   git_remote_url: string
   default_branches: string
@@ -163,15 +162,12 @@ export class ReviewerApp {
       <div class="layout">
         <header class="header">
           <div>
-            <h1>1on1 Reviewer</h1>
+            <h1>Reviewer</h1>
             <p class="status-line">${escapeHtml(statusLine)}</p>
           </div>
           <div class="header-actions">
             <button id="toggle-unmatched" class="secondary" type="button" ${this.unmatchedAuthors.length === 0 ? 'disabled' : ''}>
               未歸戶 (${this.unmatchedAuthors.length})
-            </button>
-            <button id="reload-projects" class="secondary" type="button" ${this.reloading || this.activeRunId ? 'disabled' : ''}>
-              ${this.reloading ? '載入中…' : '重新載入'}
             </button>
           </div>
         </header>
@@ -183,11 +179,11 @@ export class ReviewerApp {
               <button type="button" class="nav-item ${this.appView === 'dashboard' ? 'active' : ''}" data-nav="dashboard">
                 控制台
               </button>
-              <button type="button" class="nav-item ${this.appView === 'reports' ? 'active' : ''}" data-nav="reports">
-                報告閱讀器
-              </button>
               <button type="button" class="nav-item ${this.appView === 'projects' ? 'active' : ''}" data-nav="projects">
                 專案設定
+              </button>
+              <button type="button" class="nav-item ${this.appView === 'reports' ? 'active' : ''}" data-nav="reports">
+                報告閱讀器
               </button>
             </nav>
             ${this.appView === 'reports' ? `<h2>人員</h2>${this.renderPeopleList()}` : ''}
@@ -309,7 +305,6 @@ export class ReviewerApp {
       this.projectDraft = {
         name: '',
         source_type: 'gitlab',
-        gitlab_project_id: '',
         repo_path: '',
         git_remote_url: '',
         default_branches: 'main',
@@ -472,27 +467,31 @@ export class ReviewerApp {
     const gitlabFields =
       draft.source_type === 'gitlab'
         ? `<div class="project-field">
-            <label for="project-gitlab-id">GitLab Project ID</label>
-            <input id="project-gitlab-id" class="project-input" type="text" value="${escapeHtml(draft.gitlab_project_id)}" placeholder="例：123" />
-          </div>
-          <div class="project-field">
-            <label for="project-git-remote">Git Remote URL</label>
+            <label for="project-git-remote">Git Remote URL <span class="required" aria-hidden="true">*</span></label>
             <input id="project-git-remote" class="project-input mono" type="text" value="${escapeHtml(draft.git_remote_url)}" placeholder="git@gitlab.example.com:team/repo.git" />
+            <p class="project-field-hint">用於 clone 遠端 repo，請從 GitLab 專案的「Clone」複製 SSH 或 HTTPS 網址。</p>
           </div>
           <div class="project-field">
-            <label for="project-default-branches">常駐分支 <span class="muted">(逗號分隔)</span></label>
+            <label for="project-default-branches">常駐分支 <span class="required" aria-hidden="true">*</span></label>
             <input id="project-default-branches" class="project-input mono" type="text" value="${escapeHtml(draft.default_branches)}" placeholder="main, develop" />
+            <p class="project-field-hint">啟動時會為這些分支建立 worktree，週報預設看第一個分支。</p>
           </div>`
         : ''
 
     const nameField = draft.isNew
       ? `<div class="project-field">
-          <label for="project-name">專案名稱</label>
+          <label for="project-name">專案名稱 <span class="required" aria-hidden="true">*</span></label>
           <input id="project-name" class="project-input" type="text" value="${escapeHtml(draft.name)}" placeholder="game-backend" />
         </div>`
       : ''
 
     return `<div class="project-settings">
+      <div class="project-settings-toolbar">
+        <h2 class="project-settings-page-title">專案設定</h2>
+        <button id="reload-projects" class="project-settings-reload" type="button" ${this.reloading || this.activeRunId ? 'disabled' : ''}>
+          ${this.reloading ? '載入中…' : '重新載入'}
+        </button>
+      </div>
       <h2 class="sr-only">專案設定頁，左側為專案清單，右側為選定專案的詳細設定</h2>
       <div class="project-settings-shell">
         <aside class="project-settings-list">
@@ -527,8 +526,9 @@ export class ReviewerApp {
           </div>
           ${gitlabFields}
           <div class="project-field">
-            <label for="project-repo-path">本地路徑 <span class="muted">(slug 或絕對路徑，供 skill 讀取程式碼)</span></label>
+            <label for="project-repo-path">儲存路徑 <span class="required" aria-hidden="true">*</span></label>
             <input id="project-repo-path" class="project-input mono" type="text" value="${escapeHtml(draft.repo_path)}" placeholder="game-backend" />
+            <p class="project-field-hint">簡短名稱即可（例 <code>game-backend</code>），會對應到伺服器的 <code>repos/</code> 目錄；若已有固定路徑可填絕對路徑。</p>
           </div>
           <div class="project-field">
             <div class="project-field-header">
@@ -557,7 +557,6 @@ export class ReviewerApp {
     return {
       name: '',
       source_type: 'gitlab',
-      gitlab_project_id: '',
       repo_path: '',
       git_remote_url: '',
       default_branches: 'main',
@@ -575,7 +574,6 @@ export class ReviewerApp {
     this.projectDraft = {
       name: selected.name,
       source_type: selected.source_type,
-      gitlab_project_id: selected.gitlab_project_id ?? '',
       repo_path: selected.repo_path,
       git_remote_url: selected.git_remote_url ?? '',
       default_branches: (selected.default_branches.length > 0
@@ -595,7 +593,6 @@ export class ReviewerApp {
     }
     const nameInput = this.root.querySelector('#project-name') as HTMLInputElement | null
     const repoPathInput = this.root.querySelector('#project-repo-path') as HTMLInputElement | null
-    const gitlabIdInput = this.root.querySelector('#project-gitlab-id') as HTMLInputElement | null
     const gitRemoteInput = this.root.querySelector('#project-git-remote') as HTMLInputElement | null
     const branchesInput = this.root.querySelector('#project-default-branches') as HTMLInputElement | null
 
@@ -603,7 +600,6 @@ export class ReviewerApp {
       ...draft,
       name: (nameInput?.value ?? draft.name).trim(),
       repo_path: (repoPathInput?.value ?? draft.repo_path).trim(),
-      gitlab_project_id: (gitlabIdInput?.value ?? draft.gitlab_project_id).trim(),
       git_remote_url: (gitRemoteInput?.value ?? draft.git_remote_url).trim(),
       default_branches: (branchesInput?.value ?? draft.default_branches).trim(),
     }
@@ -628,7 +624,6 @@ export class ReviewerApp {
       git_remote_url: draft.source_type === 'gitlab' ? draft.git_remote_url || null : null,
       default_branches:
         draft.source_type === 'gitlab' ? this.parseDefaultBranches(draft.default_branches) : [],
-      gitlab_project_id: draft.gitlab_project_id || null,
     }
 
     try {
@@ -966,6 +961,7 @@ export class ReviewerApp {
         this.loadDashboard(),
         this.loadProjects(),
       ])
+      this.syncProjectDraft()
     } catch (error) {
       this.bannerMessage = error instanceof Error ? error.message : '重新載入失敗'
     } finally {
@@ -1044,7 +1040,7 @@ export class ReviewerApp {
     const message = error instanceof Error ? error.message : '無法連線後端'
     this.root.innerHTML = `
       <div class="layout error-state">
-        <h1>1on1 Reviewer</h1>
+        <h1>Reviewer</h1>
         <p class="error">無法連線後端：${escapeHtml(message)}</p>
         <p class="hint">請確認 reviewer-server 已啟動。本地開發請保持 VITE_API_BASE 留空（走 Vite proxy）；跨域部署請設定 VITE_API_BASE 並在後端設定 CORS_ALLOW_ORIGINS。</p>
       </div>

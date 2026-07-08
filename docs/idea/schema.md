@@ -1,4 +1,4 @@
-# 1on1 Reviewer 雲端 Web 服務 — 資料 Schema 附錄
+# Reviewer 雲端 Web 服務 — 資料 Schema 附錄
 
 > 搭配《設計規格》（spec.md）使用。路徑與檔名約定與 spec **§9.0** 一致；UI 欄位名 = 本附錄 SQL 欄位名。
 > 決定（拍板）：

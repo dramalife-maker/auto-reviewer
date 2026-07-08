@@ -1,6 +1,6 @@
 ## Context
 
-專案已有產品設計文件 `docs/idea/spec.md` 與資料 schema `docs/idea/schema.md`，定義雲端雙軌 1on1 reviewer（本 MVP 僅實作**軌道 1 週報**核心流程）。後端 Rust 常駐、SQLite + 檔案、`DATA_ROOT_DIR` 布局、skill 子行程邊界均已拍板。目前 repo 無應用程式碼，僅 Spectra / OpenSpec 脚手架。
+專案已有產品設計文件 `docs/idea/spec.md` 與資料 schema `docs/idea/schema.md`，定義雲端雙軌 Reviewer（本 MVP 僅實作**軌道 1 週報**核心流程）。後端 Rust 常駐、SQLite + 檔案、`DATA_ROOT_DIR` 布局、skill 子行程邊界均已拍板。目前 repo 無應用程式碼，僅 Spectra / OpenSpec 脚手架。
 
 ## Goals / Non-Goals
 

@@ -1,4 +1,4 @@
-# 1on1 Reviewer 雲端 Web 服務 — 設計規格
+# Reviewer 雲端 Web 服務 — 設計規格
 
 > 狀態：**設計階段**（尚未進 MVP）
 > 用途：作為後續 MVP 實作的依據，可直接餵給 Claude Code 當實作藍本。

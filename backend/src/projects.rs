@@ -36,7 +36,6 @@ pub struct ProjectInput {
     pub git_remote_url: Option<String>,
     #[serde(default)]
     pub default_branches: Vec<String>,
-    pub gitlab_project_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -46,7 +45,6 @@ pub struct ProjectUpdateInput {
     pub git_remote_url: Option<String>,
     #[serde(default)]
     pub default_branches: Vec<String>,
-    pub gitlab_project_id: Option<String>,
 }
 
 /// Import YAML when the DB has no projects yet; otherwise SQLite is the source of truth.
@@ -187,7 +185,6 @@ pub async fn load_from_yaml(
                 repo_path: entry.repo_path.clone(),
                 git_remote_url: entry.git_remote_url.clone(),
                 default_branches,
-                gitlab_project_id: None,
             },
         )?;
         upsert_project_row(pool, &normalized).await?;
@@ -210,7 +207,6 @@ struct NormalizedProject {
     repo_path_str: String,
     git_remote_url: Option<String>,
     default_branches: Vec<String>,
-    gitlab_project_id: Option<String>,
     health: &'static str,
     health_reason: Option<&'static str>,
 }
@@ -234,10 +230,10 @@ async fn upsert_project_row(pool: &SqlitePool, project: &NormalizedProject) -> R
         r#"
         INSERT INTO projects (
             name, repo_path, git_remote_url, is_git_repo, default_branch,
-            health, health_reason, source_type, gitlab_project_id, default_branches,
+            health, health_reason, source_type, default_branches,
             updated_at
         )
-        VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?, datetime('now'))
+        VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(name) DO UPDATE SET
             repo_path = excluded.repo_path,
             git_remote_url = excluded.git_remote_url,
@@ -246,7 +242,6 @@ async fn upsert_project_row(pool: &SqlitePool, project: &NormalizedProject) -> R
             health = excluded.health,
             health_reason = excluded.health_reason,
             source_type = excluded.source_type,
-            gitlab_project_id = excluded.gitlab_project_id,
             default_branches = excluded.default_branches,
             updated_at = datetime('now')
         "#,
@@ -258,7 +253,6 @@ async fn upsert_project_row(pool: &SqlitePool, project: &NormalizedProject) -> R
     .bind(project.health)
     .bind(project.health_reason)
     .bind(&project.source_type)
-    .bind(&project.gitlab_project_id)
     .bind(&default_branches_json)
     .execute(pool)
     .await
@@ -273,7 +267,6 @@ fn normalize_project_input(data_dir: &Path, input: &ProjectInput) -> Result<Norm
     let repo_path = resolve_repo_path(data_dir, input.repo_path.trim());
     let repo_path_str = repo_path.display().to_string();
     let git_remote_url = normalize_optional_string(input.git_remote_url.as_deref());
-    let gitlab_project_id = normalize_optional_string(input.gitlab_project_id.as_deref());
     let default_branches = normalize_default_branches(&input.default_branches);
 
     let (git_remote_url, default_branches, health, health_reason) = match source_type.as_str() {
@@ -301,7 +294,6 @@ fn normalize_project_input(data_dir: &Path, input: &ProjectInput) -> Result<Norm
         repo_path_str,
         git_remote_url,
         default_branches,
-        gitlab_project_id,
         health,
         health_reason,
     })
@@ -320,7 +312,6 @@ fn normalize_project_update(
             repo_path: input.repo_path.clone(),
             git_remote_url: input.git_remote_url.clone(),
             default_branches: input.default_branches.clone(),
-            gitlab_project_id: input.gitlab_project_id.clone(),
         },
     )
 }
@@ -363,7 +354,6 @@ struct ProjectRow {
     health_reason: Option<String>,
     is_git_repo: i64,
     source_type: String,
-    gitlab_project_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -389,7 +379,6 @@ pub struct ProjectListItem {
     pub health_reason: Option<String>,
     pub is_git_repo: i64,
     pub source_type: String,
-    pub gitlab_project_id: Option<String>,
     pub engineers: Vec<ProjectEngineer>,
 }
 
@@ -413,7 +402,7 @@ pub async fn list_project_details(pool: &SqlitePool, data_dir: &Path) -> Result<
     let rows = sqlx::query_as::<_, ProjectRow>(
         r#"
         SELECT id, name, repo_path, git_remote_url, default_branch, default_branches,
-               health, health_reason, is_git_repo, source_type, gitlab_project_id
+               health, health_reason, is_git_repo, source_type
         FROM projects
         ORDER BY name
         "#,
@@ -437,7 +426,6 @@ pub async fn list_project_details(pool: &SqlitePool, data_dir: &Path) -> Result<
             health_reason: row.health_reason,
             is_git_repo: row.is_git_repo,
             source_type: row.source_type,
-            gitlab_project_id: row.gitlab_project_id,
             engineers,
         });
     }
