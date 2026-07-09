@@ -49,6 +49,9 @@ export class ReviewerApp {
   private latestReports: LatestReportsResponse | null = null
   private personTrends: PersonTrendsResponse | null = null
   private activeRunId: number | null = null
+  private activeRun: RunStatus | null = null
+  private runElapsedTimer: number | null = null
+  private runElapsedTick = 0
   private pollTimer: number | null = null
   private bannerMessage: string | null = null
   private bannerIsError = false
@@ -289,6 +292,20 @@ export class ReviewerApp {
       })
     })
 
+    this.root.querySelectorAll('[data-project-run]').forEach((element) => {
+      element.addEventListener('click', (event) => {
+        event.stopPropagation()
+        const projectName = (element as HTMLElement).dataset.projectRun
+        if (projectName) {
+          void this.handleProjectRun(projectName)
+        }
+      })
+    })
+
+    this.root.querySelector('#project-run-all')?.addEventListener('click', () => {
+      void this.handleRunAll()
+    })
+
     this.root.querySelectorAll('[data-source-type]').forEach((element) => {
       element.addEventListener('click', () => {
         const sourceType = (element as HTMLElement).dataset.sourceType as SourceType
@@ -316,10 +333,6 @@ export class ReviewerApp {
 
     this.root.querySelector('#project-remove')?.addEventListener('click', () => {
       void this.handleProjectDelete()
-    })
-
-    this.root.querySelector('#project-run')?.addEventListener('click', () => {
-      void this.handleProjectRun()
     })
 
     this.root.querySelector('#project-save')?.addEventListener('click', () => {
@@ -429,20 +442,47 @@ export class ReviewerApp {
     </div>`
   }
 
+  private renderProjectListItem(project: ProjectListItem): string {
+    const active =
+      !this.isCreatingProject && project.name === this.selectedProjectName ? ' active' : ''
+    const runState = this.getProjectRunState(project.name)
+    const running = runState === 'queued' || runState === 'running'
+    const icon = project.source_type === 'gitlab' ? 'gitlab' : 'folder'
+    const dateLabel = project.last_report_date
+      ? formatReportDateShort(project.last_report_date)
+      : ''
+    const runDisabled = this.activeRunId !== null || this.reloading
+
+    const trailing = running
+      ? `<span class="project-list-running">
+          <span class="project-list-spinner" aria-hidden="true"></span>
+          <span class="project-list-elapsed">${formatRunElapsed(this.activeRun?.started_at ?? null, this.runElapsedTick)}</span>
+        </span>`
+      : `<span class="project-list-date">${escapeHtml(dateLabel)}</span>
+         <button type="button" class="project-list-run" data-project-run="${escapeHtml(project.name)}" ${runDisabled ? 'disabled' : ''}>▶ 執行</button>`
+
+    return `<div class="project-list-item${active}${running ? ' running' : ''}">
+      <button type="button" class="project-list-main" data-project-name="${escapeHtml(project.name)}">
+        <span class="project-list-icon ${icon}" aria-hidden="true"></span>
+        <span class="project-list-name">${escapeHtml(project.name)}</span>
+      </button>
+      <span class="project-list-trailing">${trailing}</span>
+    </div>`
+  }
+
+  private getProjectRunState(projectName: string): string | null {
+    return this.activeRun?.projects.find((project) => project.name === projectName)?.state ?? null
+  }
+
+  private isProjectRunning(projectName: string): boolean {
+    const state = this.getProjectRunState(projectName)
+    return state === 'queued' || state === 'running'
+  }
+
   private renderProjectSettings(): string {
     const draft = this.projectDraft ?? this.emptyProjectDraft()
     const selected = this.selectedProject
-    const listItems = this.projects
-      .map((project) => {
-        const active =
-          !this.isCreatingProject && project.name === this.selectedProjectName ? ' active' : ''
-        const icon = project.source_type === 'gitlab' ? 'gitlab' : 'folder'
-        return `<button type="button" class="project-list-item${active}" data-project-name="${escapeHtml(project.name)}">
-          <span class="project-list-icon ${icon}" aria-hidden="true"></span>
-          <span class="project-list-name">${escapeHtml(project.name)}</span>
-        </button>`
-      })
-      .join('')
+    const listItems = this.projects.map((project) => this.renderProjectListItem(project)).join('')
 
     const sourceGitlab = draft.source_type === 'gitlab' ? ' active' : ''
     const sourceLocal = draft.source_type === 'local' ? ' active' : ''
@@ -490,6 +530,11 @@ export class ReviewerApp {
         </div>`
       : ''
 
+    const selectedRunning = draft.isNew ? false : this.isProjectRunning(draft.name)
+    const runningBadge = selectedRunning
+      ? '<span class="project-settings-running-badge"><span class="project-list-spinner" aria-hidden="true"></span>執行中</span>'
+      : ''
+
     return `<div class="project-settings">
       <div class="project-settings-toolbar">
         <h2 class="project-settings-page-title">專案設定</h2>
@@ -502,25 +547,32 @@ export class ReviewerApp {
         <aside class="project-settings-list">
           <div class="project-settings-list-header">
             <span>專案</span>
-            <button id="project-add" class="project-settings-add" type="button">＋ 新增</button>
+            <div class="project-settings-list-actions">
+              <button id="project-run-all" class="project-settings-run-all" type="button" ${this.activeRunId || this.reloading ? 'disabled' : ''}>
+                ▶ 全部
+              </button>
+              <button id="project-add" class="project-settings-add" type="button" aria-label="新增專案">＋</button>
+            </div>
           </div>
           <div class="project-settings-list-items">
             ${listItems || '<p class="project-list-empty">尚無專案</p>'}
           </div>
+          <p class="project-list-hint">
+            <span class="project-list-hint-icon" aria-hidden="true">ⓘ</span>
+            滑過專案顯示「執行」，單獨跑完即更新該專案報告
+          </p>
         </aside>
         <div class="project-settings-detail">
           <div class="project-settings-detail-header">
             <div class="project-settings-title">
               <span class="project-list-icon ${headerIcon}" aria-hidden="true"></span>
               <h2>${title}</h2>
+              ${runningBadge}
             </div>
             ${
               draft.isNew
                 ? ''
                 : `<div class="project-settings-detail-actions">
-                    <button id="project-run" class="project-settings-run" type="button" ${this.activeRunId || this.reloading ? 'disabled' : ''}>
-                      ${this.activeRunId ? '執行中…' : '▶ 執行'}
-                    </button>
                     <button id="project-remove" class="project-settings-remove" type="button" ${this.activeRunId || this.reloading ? 'disabled' : ''}>移除</button>
                   </div>`
             }
@@ -661,18 +713,18 @@ export class ReviewerApp {
     await this.renderWithStatus()
   }
 
-  private async handleProjectRun(): Promise<void> {
-    const draft = this.projectDraft
-    if (!draft || draft.isNew || this.activeRunId || this.reloading) {
+  private async handleProjectRun(projectName?: string): Promise<void> {
+    const name = projectName ?? this.projectDraft?.name
+    if (!name || this.projectDraft?.isNew || this.activeRunId || this.reloading) {
       return
     }
 
     try {
-      const response = await startProjectRun(draft.name)
+      const response = await startProjectRun(name)
       this.activeRunId = response.run_id
       this.bannerMessage = null
       this.bannerIsError = false
-      this.render(`執行中 · ${draft.name} · run #${response.run_id}`)
+      this.render(`執行中 · ${name} · run #${response.run_id}`)
       this.startPolling(response.run_id)
     } catch (error) {
       this.bannerMessage = error instanceof Error ? error.message : '無法啟動執行'
@@ -894,6 +946,13 @@ export class ReviewerApp {
       if (!this.projectDraft) {
         this.syncProjectDraft()
       }
+      if (this.activeRunId !== null && this.activeRun === null) {
+        try {
+          this.activeRun = await fetchRun(this.activeRunId)
+        } catch {
+          // poll loop will recover
+        }
+      }
     }
     this.render(await this.statusLine())
   }
@@ -1019,26 +1078,53 @@ export class ReviewerApp {
     if (this.pollTimer !== null) {
       window.clearInterval(this.pollTimer)
     }
+    if (this.runElapsedTimer !== null) {
+      window.clearInterval(this.runElapsedTimer)
+    }
 
     this.pollTimer = window.setInterval(() => {
       void this.pollRun(runId)
     }, 2000)
+    this.runElapsedTimer = window.setInterval(() => {
+      if (this.activeRunId === null) {
+        return
+      }
+      this.runElapsedTick += 1
+      if (this.appView === 'projects') {
+        void this.renderWithStatus()
+      }
+    }, 1000)
     void this.pollRun(runId)
+  }
+
+  private stopRunTimers(): void {
+    if (this.pollTimer !== null) {
+      window.clearInterval(this.pollTimer)
+      this.pollTimer = null
+    }
+    if (this.runElapsedTimer !== null) {
+      window.clearInterval(this.runElapsedTimer)
+      this.runElapsedTimer = null
+    }
+    this.runElapsedTick = 0
   }
 
   private async pollRun(runId: number): Promise<void> {
     try {
       const run = await fetchRun(runId)
+      this.activeRun = run
       if (!TERMINAL_STATUSES.has(run.status)) {
-        this.render(`執行中 · run #${run.id} · ${run.status}`)
+        if (this.appView === 'projects') {
+          await this.renderWithStatus()
+        } else {
+          this.render(`執行中 · run #${run.id} · ${run.status}`)
+        }
         return
       }
 
-      if (this.pollTimer !== null) {
-        window.clearInterval(this.pollTimer)
-        this.pollTimer = null
-      }
+      this.stopRunTimers()
       this.activeRunId = null
+      this.activeRun = null
       const { message, isError } = formatRunCompleteBanner(run)
       this.bannerMessage = message
       this.bannerIsError = isError
@@ -1053,11 +1139,9 @@ export class ReviewerApp {
       }
       this.render(await this.statusLine())
     } catch (error) {
-      if (this.pollTimer !== null) {
-        window.clearInterval(this.pollTimer)
-        this.pollTimer = null
-      }
+      this.stopRunTimers()
       this.activeRunId = null
+      this.activeRun = null
       this.bannerMessage = error instanceof Error ? error.message : '輪詢失敗'
       this.bannerIsError = true
       this.render(await this.statusLine())
@@ -1079,6 +1163,28 @@ export class ReviewerApp {
       </div>
     `
   }
+}
+
+function formatReportDateShort(value: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value)
+  if (match) {
+    return `${match[2]}-${match[3]}`
+  }
+  return value.length >= 5 ? value.slice(5) : value
+}
+
+function formatRunElapsed(startedAt: string | null, _tick: number): string {
+  if (!startedAt) {
+    return '00:00'
+  }
+  const started = Date.parse(startedAt.replace(' ', 'T'))
+  if (Number.isNaN(started)) {
+    return '00:00'
+  }
+  const elapsedSec = Math.max(0, Math.floor((Date.now() - started) / 1000))
+  const minutes = Math.floor(elapsedSec / 60)
+  const seconds = elapsedSec % 60
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
 }
 
 function formatTimestamp(value: string): string {

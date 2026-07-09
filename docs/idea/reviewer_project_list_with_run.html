@@ -1,0 +1,98 @@
+<div style="background: var(--color-background-secondary); border-radius: var(--border-radius-lg); padding: 1rem; min-height: 500px;">
+  <h2 class="sr-only">專案設定頁,左側清單每列整合即時執行按鈕與狀態,右側為選定專案的設定</h2>
+
+  <div style="display: flex; gap: 1px; background: var(--color-border-tertiary); border-radius: var(--border-radius-md); overflow: hidden; border: 0.5px solid var(--color-border-tertiary); min-height: 480px;">
+
+    <div style="width: 270px; background: var(--color-background-primary); padding: 14px 12px; flex-shrink: 0;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;">
+        <span style="font-size: 13px; font-weight: 500; color: var(--color-text-secondary);">專案</span>
+        <div style="display:flex; gap:6px;">
+          <button style="font-size:11px; padding:4px 9px; border:0.5px solid var(--color-border-tertiary); color:var(--color-text-secondary);"><i class="ti ti-player-play" aria-hidden="true" style="margin-right:3px;"></i>全部</button>
+          <button style="font-size:11px; padding:4px 9px; border:0.5px solid var(--color-border-info); color:var(--color-text-info);"><i class="ti ti-plus" aria-hidden="true"></i></button>
+        </div>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:3px;">
+
+        <div style="display:flex; align-items:center; justify-content:space-between; padding: 9px 10px; border-radius: var(--border-radius-md); background: var(--color-background-info);">
+          <span style="display:flex; align-items:center; gap:8px; min-width:0;">
+            <i class="ti ti-folder" aria-hidden="true" style="color:var(--color-text-info); font-size:15px; flex-shrink:0;"></i>
+            <span style="font-size: 13px; color: var(--color-text-info); font-weight:500;">game-backend</span>
+          </span>
+          <span style="display:flex; align-items:center; gap:7px; flex-shrink:0;">
+            <span style="display:flex; align-items:center; gap:4px; font-size:11px; color:var(--color-text-info);"><i class="ti ti-loader-2 ti-spin" aria-hidden="true"></i>00:42</span>
+          </span>
+        </div>
+
+        <div style="display:flex; align-items:center; justify-content:space-between; padding: 9px 10px; border-radius: var(--border-radius-md);">
+          <span style="display:flex; align-items:center; gap:8px; min-width:0;">
+            <i class="ti ti-folder" aria-hidden="true" style="color:var(--color-text-tertiary); font-size:15px; flex-shrink:0;"></i>
+            <span style="font-size: 13px;">payment-service</span>
+          </span>
+          <button style="font-size:11px; padding:3px 9px; border:0.5px solid var(--color-border-info); color:var(--color-text-info); border-radius:var(--border-radius-md); display:flex; align-items:center; gap:3px; flex-shrink:0;"><i class="ti ti-player-play" aria-hidden="true"></i>執行</button>
+        </div>
+
+        <div style="display:flex; align-items:center; justify-content:space-between; padding: 9px 10px; border-radius: var(--border-radius-md);">
+          <span style="display:flex; align-items:center; gap:8px; min-width:0;">
+            <i class="ti ti-folder" aria-hidden="true" style="color:var(--color-text-tertiary); font-size:15px; flex-shrink:0;"></i>
+            <span style="font-size: 13px;">infra-tools</span>
+          </span>
+          <span style="font-size:10px; color:var(--color-text-tertiary); flex-shrink:0;">06-14</span>
+        </div>
+
+        <div style="display:flex; align-items:center; justify-content:space-between; padding: 9px 10px; border-radius: var(--border-radius-md);">
+          <span style="display:flex; align-items:center; gap:8px; min-width:0;">
+            <i class="ti ti-folder" aria-hidden="true" style="color:var(--color-text-tertiary); font-size:15px; flex-shrink:0;"></i>
+            <span style="font-size: 13px;">admin-portal</span>
+          </span>
+          <span style="font-size:10px; color:var(--color-text-tertiary); flex-shrink:0;">06-14</span>
+        </div>
+      </div>
+
+      <div style="margin-top:12px; padding:8px 10px; background:var(--color-background-secondary); border-radius:var(--border-radius-md); font-size:11px; color:var(--color-text-tertiary); display:flex; align-items:flex-start; gap:6px;">
+        <i class="ti ti-info-circle" aria-hidden="true" style="margin-top:1px;"></i>
+        <span>滑過專案顯示「執行」,單獨跑完即更新該專案報告</span>
+      </div>
+    </div>
+
+    <div style="flex: 1; background: var(--color-background-primary); padding: 18px 24px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:22px;">
+        <div style="display:flex; align-items:center; gap:9px;">
+          <i class="ti ti-folder" aria-hidden="true" style="color:var(--color-text-info); font-size:18px;"></i>
+          <h1 style="font-size: 18px; margin: 0;">game-backend</h1>
+          <span style="font-size:11px; color:var(--color-text-info); background:var(--color-background-info); padding:3px 9px; border-radius:var(--border-radius-md); display:flex; align-items:center; gap:4px;"><i class="ti ti-loader-2 ti-spin" aria-hidden="true"></i>執行中</span>
+        </div>
+        <button style="font-size:12px; padding:5px 10px; color:var(--color-text-danger); border:0.5px solid var(--color-border-tertiary);"><i class="ti ti-trash" aria-hidden="true" style="margin-right:4px;"></i>移除</button>
+      </div>
+
+      <div style="margin-bottom:18px;">
+        <label style="font-size:12px; color:var(--color-text-secondary); display:block; margin-bottom:6px;">專案名稱</label>
+        <div style="font-size:13px; padding:8px 12px; background:var(--color-background-secondary); border-radius:var(--border-radius-md); border:0.5px solid var(--color-border-tertiary);">game-backend</div>
+      </div>
+
+      <div style="margin-bottom:18px;">
+        <label style="font-size:12px; color:var(--color-text-secondary); display:block; margin-bottom:6px;">本機路徑 <span style="color:var(--color-text-tertiary);">(git clone 位置)</span></label>
+        <div style="display:flex; gap:8px;">
+          <div style="flex:1; font-size:13px; padding:8px 12px; background:var(--color-background-secondary); border-radius:var(--border-radius-md); border:0.5px solid var(--color-border-tertiary); color:var(--color-text-secondary); font-family:monospace;">/workspace/game-backend</div>
+          <button style="font-size:12px; padding:8px 12px; border:0.5px solid var(--color-border-tertiary);"><i class="ti ti-folder-open" aria-hidden="true"></i></button>
+        </div>
+        <div style="display:flex; align-items:center; gap:5px; margin-top:7px; font-size:11px; color:var(--color-text-success);">
+          <i class="ti ti-circle-check" aria-hidden="true"></i> 已偵測到 git repo · 預設分支 main
+        </div>
+      </div>
+
+      <div style="margin-bottom:8px;">
+        <label style="font-size:12px; color:var(--color-text-secondary); display:block; margin-bottom:8px;">參與工程師 <span style="color:var(--color-text-tertiary);">(由人員設定的 identity 自動比對,唯讀)</span></label>
+        <div style="display:flex; gap:6px;">
+          <span style="font-size:12px; padding:5px 12px; border-radius:var(--border-radius-md); background:var(--color-background-secondary); color:var(--color-text-secondary); display:flex; align-items:center; gap:6px;"><span style="width:18px;height:18px;border-radius:50%;background:var(--color-background-info);display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--color-text-info);">A</span>Alice</span>
+          <span style="font-size:12px; padding:5px 12px; border-radius:var(--border-radius-md); background:var(--color-background-secondary); color:var(--color-text-secondary); display:flex; align-items:center; gap:6px;"><span style="width:18px;height:18px;border-radius:50%;background:var(--color-background-tertiary);display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--color-text-secondary);">B</span>Bob</span>
+        </div>
+      </div>
+
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:26px; padding-top:16px; border-top:0.5px solid var(--color-border-tertiary);">
+        <button style="font-size:13px; padding:7px 16px; color:var(--color-text-tertiary);">取消</button>
+        <button style="font-size:13px; padding:7px 16px; background:var(--color-text-info); color:white; border:none;">儲存</button>
+      </div>
+    </div>
+  </div>
+</div>

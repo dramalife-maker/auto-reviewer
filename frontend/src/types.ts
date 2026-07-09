@@ -101,6 +101,7 @@ export interface ProjectListItem {
   health_reason: string | null
   is_git_repo: number
   source_type: 'gitlab' | 'local'
+  last_report_date: string | null
   engineers: ProjectEngineer[]
 }
 

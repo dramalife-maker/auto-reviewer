@@ -379,6 +379,7 @@ pub struct ProjectListItem {
     pub health_reason: Option<String>,
     pub is_git_repo: i64,
     pub source_type: String,
+    pub last_report_date: Option<String>,
     pub engineers: Vec<ProjectEngineer>,
 }
 
@@ -411,6 +412,7 @@ pub async fn list_project_details(pool: &SqlitePool, data_dir: &Path) -> Result<
     .await
     .map_err(Error::Database)?;
 
+    let last_report_dates = list_last_report_dates(pool).await?;
     let mut projects = Vec::with_capacity(rows.len());
     for row in rows {
         let default_branches =
@@ -426,11 +428,32 @@ pub async fn list_project_details(pool: &SqlitePool, data_dir: &Path) -> Result<
             health_reason: row.health_reason,
             is_git_repo: row.is_git_repo,
             source_type: row.source_type,
+            last_report_date: last_report_dates.get(&row.id).cloned(),
             engineers,
         });
     }
 
     Ok(ProjectListResponse { projects })
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct LastReportDateRow {
+    project_id: i64,
+    report_date: String,
+}
+
+async fn list_last_report_dates(pool: &SqlitePool) -> Result<std::collections::HashMap<i64, String>> {
+    let rows = sqlx::query_as::<_, LastReportDateRow>(
+        "SELECT project_id, MAX(report_date) AS report_date FROM reports GROUP BY project_id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.project_id, row.report_date))
+        .collect())
 }
 
 async fn list_project_engineers(pool: &SqlitePool, project_id: i64) -> Result<Vec<ProjectEngineer>> {

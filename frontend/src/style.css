@@ -658,10 +658,12 @@ body {
 }
 
 .project-settings-list {
-  width: 210px;
+  width: 270px;
   flex-shrink: 0;
   background: white;
   padding: 0.875rem 0.75rem;
+  display: flex;
+  flex-direction: column;
 }
 
 .project-settings-list-header {
@@ -674,14 +676,36 @@ body {
   color: #6b7280;
 }
 
+.project-settings-list-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.project-settings-run-all {
+  border: 1px solid #d1d5db;
+  border-radius: 0.375rem;
+  padding: 0.25rem 0.5625rem;
+  background: white;
+  color: #6b7280;
+  font-size: 0.6875rem;
+  cursor: pointer;
+}
+
+.project-settings-run-all:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 .project-settings-add {
   border: 1px solid #93c5fd;
   border-radius: 0.375rem;
-  padding: 0.25rem 0.5625rem;
+  padding: 0.25rem 0.5rem;
   background: white;
   color: #2563eb;
   font-size: 0.6875rem;
   cursor: pointer;
+  min-width: 1.75rem;
 }
 
 .project-settings-list-items {
@@ -693,22 +717,159 @@ body {
 .project-list-item {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 0.5rem;
-  width: 100%;
+  min-height: 2.375rem;
   padding: 0.5625rem 0.625rem;
-  border: 0;
   border-radius: 0.5rem;
+  background: transparent;
+  font-size: 0.8125rem;
+  color: #374151;
+  box-sizing: border-box;
+}
+
+.project-list-item.active,
+.project-list-item.running {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.project-list-item.active .project-list-name,
+.project-list-item.running .project-list-name {
+  font-weight: 500;
+}
+
+.project-list-main {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  flex: 1;
+  padding: 0;
+  border: 0;
   background: transparent;
   cursor: pointer;
   text-align: left;
-  font-size: 0.8125rem;
-  color: #374151;
+  font: inherit;
+  color: inherit;
 }
 
-.project-list-item.active {
-  background: #eff6ff;
+.project-list-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-list-trailing {
+  position: relative;
+  flex-shrink: 0;
+  width: 3.5rem;
+  height: 1.375rem;
+  display: grid;
+  place-items: center end;
+}
+
+.project-list-date,
+.project-list-run,
+.project-list-running {
+  grid-area: 1 / 1;
+}
+
+.project-list-date {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 1.375rem;
+  font-size: 0.625rem;
+  color: #9ca3af;
+  line-height: 1;
+}
+
+.project-list-run {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.1875rem;
+  box-sizing: border-box;
+  height: 1.375rem;
+  min-width: 3.5rem;
+  padding: 0 0.5625rem;
+  border: 1px solid #93c5fd;
+  border-radius: 0.375rem;
+  background: white;
   color: #2563eb;
-  font-weight: 500;
+  font-size: 0.6875rem;
+  line-height: 1;
+  cursor: pointer;
+  visibility: hidden;
+}
+
+.project-list-item:hover:not(.running) .project-list-run {
+  visibility: visible;
+}
+
+.project-list-item:hover:not(.running) .project-list-date {
+  visibility: hidden;
+}
+
+.project-list-running {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.25rem;
+  min-height: 1.375rem;
+  font-size: 0.6875rem;
+  color: #2563eb;
+  line-height: 1;
+}
+
+.project-list-item.running .project-list-trailing {
+  width: auto;
+  min-width: 3.5rem;
+}
+
+.project-list-spinner {
+  width: 0.875rem;
+  height: 0.875rem;
+  border: 2px solid #bfdbfe;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: project-list-spin 0.8s linear infinite;
+}
+
+@keyframes project-list-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.project-list-hint {
+  margin: 0.75rem 0 0;
+  padding: 0.5rem 0.625rem;
+  background: #f9fafb;
+  border-radius: 0.375rem;
+  font-size: 0.6875rem;
+  color: #9ca3af;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.375rem;
+  line-height: 1.4;
+}
+
+.project-list-hint-icon {
+  flex-shrink: 0;
+}
+
+.project-settings-running-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.6875rem;
+  color: #2563eb;
+  background: #eff6ff;
+  padding: 0.1875rem 0.5625rem;
+  border-radius: 0.375rem;
+  font-weight: 400;
 }
 
 .project-list-icon {
@@ -722,11 +883,17 @@ body {
 }
 
 .project-list-icon.gitlab {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' fill='%239ca3af'%3E%3Cpath d='M231.92773,169.78029l-94.82031,65.64454a16.07612,16.07612,0,0,1-18.21484,0L24.07227,169.78029a16.03981,16.03981,0,0,1-6.35254-17.27783L45.04883,50.0176a12.00012,12.00012,0,0,1,22.831-1.12109L88.544,104h78.9121l20.66407-55.10449a12.00021,12.00021,0,0,1,22.83056,1.12109l27.32959,102.48584A16.03981,16.03981,0,0,1,231.92773,169.78029Z'/%3E%3C/svg%3E");
+}
+
+.project-list-item.active .project-list-icon.gitlab,
+.project-list-item.running .project-list-icon.gitlab {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' fill='%232563eb'%3E%3Cpath d='M231.92773,169.78029l-94.82031,65.64454a16.07612,16.07612,0,0,1-18.21484,0L24.07227,169.78029a16.03981,16.03981,0,0,1-6.35254-17.27783L45.04883,50.0176a12.00012,12.00012,0,0,1,22.831-1.12109L88.544,104h78.9121l20.66407-55.10449a12.00021,12.00021,0,0,1,22.83056,1.12109l27.32959,102.48584A16.03981,16.03981,0,0,1,231.92773,169.78029Z'/%3E%3C/svg%3E");
 }
 
-.project-list-item:not(.active) .project-list-icon.gitlab {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' fill='%239ca3af'%3E%3Cpath d='M231.92773,169.78029l-94.82031,65.64454a16.07612,16.07612,0,0,1-18.21484,0L24.07227,169.78029a16.03981,16.03981,0,0,1-6.35254-17.27783L45.04883,50.0176a12.00012,12.00012,0,0,1,22.831-1.12109L88.544,104h78.9121l20.66407-55.10449a12.00021,12.00021,0,0,1,22.83056,1.12109l27.32959,102.48584A16.03981,16.03981,0,0,1,231.92773,169.78029Z'/%3E%3C/svg%3E");
+.project-list-item.active .project-list-icon.folder,
+.project-list-item.running .project-list-icon.folder {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%232563eb'%3E%3Cpath d='M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2Z'/%3E%3C/svg%3E");
 }
 
 .project-list-icon.folder {
