@@ -1,4 +1,5 @@
 import {
+  agentTurnMrReview,
   bindIdentity,
   createPerson,
   createProject,
@@ -6,21 +7,29 @@ import {
   fetchDashboard,
   fetchHealth,
   fetchLatestReports,
+  fetchMrReviews,
   fetchPeople,
   fetchPersonTrends,
   fetchProjects,
   fetchRun,
   fetchUnmatchedAuthors,
+  ignoreMrReview,
   markReportRead,
+  publishMrReview,
   reloadProjects,
   startManualRun,
+  startMrScan,
   startProjectRun,
+  updateMrReview,
   updateProject,
+  updateSchedule,
 } from './api'
 import type {
   DashboardResponse,
   LatestReportItem,
   LatestReportsResponse,
+  MrReviewItem,
+  MrReviewStatus,
   Person,
   PersonTrendsResponse,
   ProjectListItem,
@@ -29,7 +38,8 @@ import type {
 } from './types'
 
 const TERMINAL_STATUSES = new Set(['success', 'partial', 'failed'])
-type AppView = 'dashboard' | 'reports' | 'projects'
+const DEFAULT_MR_SKIP_LABELS = ['wip', 'do-not-review', 'no-ai-review']
+type AppView = 'dashboard' | 'reports' | 'projects' | 'mr-inbox'
 type SourceType = 'gitlab' | 'local'
 
 interface ProjectDraft {
@@ -38,6 +48,8 @@ interface ProjectDraft {
   repo_path: string
   git_remote_url: string
   default_branches: string
+  mr_review_skip_labels: string
+  mr_review_require_label: string
   isNew: boolean
 }
 
@@ -64,6 +76,15 @@ export class ReviewerApp {
   private selectedProjectName: string | null = null
   private projectDraft: ProjectDraft | null = null
   private isCreatingProject = false
+  private mrReviews: MrReviewItem[] = []
+  private selectedMrReviewId: number | null = null
+  private mrStatusFilter: MrReviewStatus = 'draft'
+  private mrEditorBody = ''
+  private mrEditorDirty = false
+  private mrActionLoading = false
+  private mrChatMessages: Array<{ role: 'user' | 'assistant'; text: string }> = []
+  private mrChatLoading = false
+  private scheduleSaving = false
 
   constructor(root: HTMLElement) {
     this.root = root
@@ -189,6 +210,10 @@ export class ReviewerApp {
               <button type="button" class="nav-item ${this.appView === 'reports' ? 'active' : ''}" data-nav="reports">
                 報告閱讀器
               </button>
+              <button type="button" class="nav-item ${this.appView === 'mr-inbox' ? 'active' : ''}" data-nav="mr-inbox">
+                MR 收件匣
+                ${this.mrDraftBadge()}
+              </button>
             </nav>
             ${this.appView === 'reports' ? `<h2>人員</h2>${this.renderPeopleList()}` : ''}
           </aside>
@@ -198,7 +223,9 @@ export class ReviewerApp {
                 ? this.renderDashboard()
                 : this.appView === 'projects'
                   ? this.renderProjectSettings()
-                  : this.renderContent()
+                  : this.appView === 'mr-inbox'
+                    ? this.renderMrInbox()
+                    : this.renderContent()
             }
           </section>
         </div>
@@ -320,14 +347,7 @@ export class ReviewerApp {
     this.root.querySelector('#project-add')?.addEventListener('click', () => {
       this.isCreatingProject = true
       this.selectedProjectName = null
-      this.projectDraft = {
-        name: '',
-        source_type: 'gitlab',
-        repo_path: '',
-        git_remote_url: '',
-        default_branches: 'main',
-        isNew: true,
-      }
+      this.projectDraft = this.emptyProjectDraft()
       void this.renderWithStatus()
     })
 
@@ -353,6 +373,88 @@ export class ReviewerApp {
       this.bannerIsError = false
       void this.renderWithStatus()
     })
+
+    this.root.querySelectorAll('[data-mr-status]').forEach((element) => {
+      element.addEventListener('click', () => {
+        const status = (element as HTMLElement).dataset.mrStatus as MrReviewStatus
+        void this.switchMrStatusFilter(status)
+      })
+    })
+
+    this.root.querySelectorAll('[data-mr-review-id]').forEach((element) => {
+      element.addEventListener('click', () => {
+        const id = Number((element as HTMLElement).dataset.mrReviewId)
+        this.selectMrReview(id)
+        void this.renderWithStatus()
+      })
+    })
+
+    this.root.querySelector('#mr-editor')?.addEventListener('input', (event) => {
+      this.mrEditorBody = (event.target as HTMLTextAreaElement).value
+      this.mrEditorDirty = true
+    })
+
+    this.root.querySelector('#mr-save')?.addEventListener('click', () => {
+      void this.handleMrSave()
+    })
+
+    this.root.querySelector('#mr-publish')?.addEventListener('click', () => {
+      void this.handleMrPublish()
+    })
+
+    this.root.querySelector('#mr-ignore')?.addEventListener('click', () => {
+      void this.handleMrIgnore()
+    })
+
+    this.root.querySelector('#mr-chat-send')?.addEventListener('click', () => {
+      void this.handleMrAgentTurn()
+    })
+
+    this.root.querySelector('#mr-chat-input')?.addEventListener('keydown', (event) => {
+      const keyEvent = event as KeyboardEvent
+      if (keyEvent.key === 'Enter' && !keyEvent.shiftKey) {
+        keyEvent.preventDefault()
+        void this.handleMrAgentTurn()
+      }
+    })
+
+    this.root.querySelector('#dashboard-mr-drafts')?.addEventListener('click', () => {
+      void this.switchAppView('mr-inbox')
+    })
+
+    this.root.querySelector('#schedule-save')?.addEventListener('click', () => {
+      void this.handleScheduleSave()
+    })
+
+    this.root.querySelectorAll('[data-project-mr-scan]').forEach((element) => {
+      element.addEventListener('click', (event) => {
+        event.stopPropagation()
+        const projectId = Number((element as HTMLElement).dataset.projectMrScan)
+        void this.handleMrScan(projectId)
+      })
+    })
+
+    this.root.querySelectorAll('[data-project-mr-scan-force]').forEach((element) => {
+      element.addEventListener('click', (event) => {
+        event.stopPropagation()
+        const projectId = Number((element as HTMLElement).dataset.projectMrScanForce)
+        void this.handleMrScan(projectId, true)
+      })
+    })
+
+    this.root.querySelector('#project-mr-scan')?.addEventListener('click', () => {
+      const project = this.selectedProject
+      if (project) {
+        void this.handleMrScan(project.id)
+      }
+    })
+
+    this.root.querySelector('#project-mr-scan-force')?.addEventListener('click', () => {
+      const project = this.selectedProject
+      if (project) {
+        void this.handleMrScan(project.id, true)
+      }
+    })
   }
 
   private renderDashboard(): string {
@@ -366,6 +468,7 @@ export class ReviewerApp {
       person_count: 0,
       unread_count: 0,
       pending_count: 0,
+      mr_draft_count: 0,
     }
 
     const recentRows =
@@ -422,6 +525,10 @@ export class ReviewerApp {
           <div class="stat-label">待確認</div>
           <div class="stat-value accent-warning">${stats.pending_count}</div>
         </article>
+        <button type="button" id="dashboard-mr-drafts" class="stat-card stat-card-button">
+          <div class="stat-label">MR 草稿</div>
+          <div class="stat-value accent-mr">${stats.mr_draft_count}</div>
+        </button>
       </div>
 
       <div class="dashboard-panels">
@@ -431,12 +538,38 @@ export class ReviewerApp {
         </section>
         <section class="dashboard-panel">
           <h3 class="panel-title">排程</h3>
-          <div class="schedule-row"><span aria-hidden="true">📅</span> ${escapeHtml(schedule?.label ?? '—')}</div>
-          <div class="schedule-row muted">
-            <span aria-hidden="true">🕒</span>
-            ${schedule?.next_run_at ? `下次 ${escapeHtml(schedule.next_run_at)}` : '無下次排程'}
+          <div class="schedule-section">
+            <div class="schedule-section-title">週報（軌道 1）</div>
+            <div class="schedule-row"><span aria-hidden="true">📅</span> ${escapeHtml(schedule?.label ?? '—')}</div>
+            <div class="schedule-row muted">
+              <span aria-hidden="true">🕒</span>
+              ${schedule?.next_run_at ? `下次 ${escapeHtml(schedule.next_run_at)}` : '無下次排程'}
+            </div>
+            ${scheduleStatus}
           </div>
-          ${scheduleStatus}
+          <div class="schedule-section schedule-section-mr">
+            <div class="schedule-section-title">MR 輪詢（軌道 2）</div>
+            <div class="schedule-row">
+              <span aria-hidden="true">🔁</span>
+              ${escapeHtml(schedule?.mr_poll_label ?? '—')}
+              ${schedule?.mr_poll_interval_min && schedule.mr_poll_interval_min <= 0 ? '（已停用）' : ''}
+            </div>
+            <div class="schedule-mr-poll-edit">
+              <label class="schedule-mr-poll-label" for="schedule-mr-poll-interval">間隔（分鐘）</label>
+              <input
+                id="schedule-mr-poll-interval"
+                class="schedule-mr-poll-input"
+                type="number"
+                min="1"
+                step="1"
+                value="${schedule?.mr_poll_interval_min ?? 60}"
+              />
+              <button id="schedule-save" class="schedule-save-btn" type="button" ${this.scheduleSaving ? 'disabled' : ''}>
+                ${this.scheduleSaving ? '儲存中…' : '儲存'}
+              </button>
+            </div>
+            <p class="schedule-field-hint">≥60 時須為 60 的倍數（如 60、120）。變更後需重啟 reviewer-server 才會套用新 cron。</p>
+          </div>
         </section>
       </div>
     </div>`
@@ -452,6 +585,7 @@ export class ReviewerApp {
       ? formatReportDateShort(project.last_report_date)
       : ''
     const runDisabled = this.activeRunId !== null || this.reloading
+    const mrScanDisabled = runDisabled || project.is_git_repo === 0
 
     const trailing = running
       ? `<span class="project-list-running">
@@ -459,6 +593,7 @@ export class ReviewerApp {
           <span class="project-list-elapsed">${formatRunElapsed(this.activeRun?.started_at ?? null, this.runElapsedTick)}</span>
         </span>`
       : `<span class="project-list-date">${escapeHtml(dateLabel)}</span>
+         ${project.is_git_repo ? `<button type="button" class="project-list-mr-scan" data-project-mr-scan="${project.id}" ${mrScanDisabled ? 'disabled' : ''} title="掃描 MR">MR</button><button type="button" class="project-list-mr-scan-force" data-project-mr-scan-force="${project.id}" ${mrScanDisabled ? 'disabled' : ''} title="強制重掃（略過收件匣草稿閘門）">強制</button>` : ''}
          <button type="button" class="project-list-run" data-project-run="${escapeHtml(project.name)}" ${runDisabled ? 'disabled' : ''}>▶ 執行</button>`
 
     return `<div class="project-list-item${active}${running ? ' running' : ''}">
@@ -520,6 +655,16 @@ export class ReviewerApp {
             <label for="project-default-branches">常駐分支 <span class="required" aria-hidden="true">*</span></label>
             <input id="project-default-branches" class="project-input mono" type="text" value="${escapeHtml(draft.default_branches)}" placeholder="main, develop" />
             <p class="project-field-hint">啟動時會為這些分支建立 worktree，週報預設看第一個分支。</p>
+          </div>
+          <div class="project-field project-field-mr-gates">
+            <label for="project-mr-skip-labels">MR 排除標籤</label>
+            <input id="project-mr-skip-labels" class="project-input mono" type="text" value="${escapeHtml(draft.mr_review_skip_labels)}" placeholder="wip, do-not-review, no-ai-review" />
+            <p class="project-field-hint">逗號分隔。帶有任一標籤的 MR 不會進入 AI review；留空表示不排除任何標籤。</p>
+          </div>
+          <div class="project-field project-field-mr-gates">
+            <label for="project-mr-require-label">MR 必備標籤（可選）</label>
+            <input id="project-mr-require-label" class="project-input mono" type="text" value="${escapeHtml(draft.mr_review_require_label)}" placeholder="ready-for-review" />
+            <p class="project-field-hint">設定後，只有帶此標籤的 MR 才會被掃描（opt-in 模式）。留空則不啟用。</p>
           </div>`
         : ''
 
@@ -573,6 +718,7 @@ export class ReviewerApp {
               draft.isNew
                 ? ''
                 : `<div class="project-settings-detail-actions">
+                    ${selected && selected.is_git_repo ? `<button id="project-mr-scan" class="project-settings-mr-scan" type="button" ${this.activeRunId || this.reloading ? 'disabled' : ''}>掃描 MR</button><button id="project-mr-scan-force" class="project-settings-mr-scan-force" type="button" ${this.activeRunId || this.reloading ? 'disabled' : ''} title="略過收件匣草稿閘門，強制重掃">強制重掃</button>` : ''}
                     <button id="project-remove" class="project-settings-remove" type="button" ${this.activeRunId || this.reloading ? 'disabled' : ''}>移除</button>
                   </div>`
             }
@@ -622,6 +768,8 @@ export class ReviewerApp {
       repo_path: '',
       git_remote_url: '',
       default_branches: 'main',
+      mr_review_skip_labels: DEFAULT_MR_SKIP_LABELS.join(', '),
+      mr_review_require_label: '',
       isNew: true,
     }
   }
@@ -644,6 +792,11 @@ export class ReviewerApp {
           ? [selected.default_branch]
           : ['main']
       ).join(', '),
+      mr_review_skip_labels: (selected.mr_review_skip_labels.length > 0
+        ? selected.mr_review_skip_labels
+        : DEFAULT_MR_SKIP_LABELS
+      ).join(', '),
+      mr_review_require_label: selected.mr_review_require_label ?? '',
       isNew: false,
     }
   }
@@ -657,6 +810,8 @@ export class ReviewerApp {
     const repoPathInput = this.root.querySelector('#project-repo-path') as HTMLInputElement | null
     const gitRemoteInput = this.root.querySelector('#project-git-remote') as HTMLInputElement | null
     const branchesInput = this.root.querySelector('#project-default-branches') as HTMLInputElement | null
+    const skipLabelsInput = this.root.querySelector('#project-mr-skip-labels') as HTMLInputElement | null
+    const requireLabelInput = this.root.querySelector('#project-mr-require-label') as HTMLInputElement | null
 
     return {
       ...draft,
@@ -664,6 +819,28 @@ export class ReviewerApp {
       repo_path: (repoPathInput?.value ?? draft.repo_path).trim(),
       git_remote_url: (gitRemoteInput?.value ?? draft.git_remote_url).trim(),
       default_branches: (branchesInput?.value ?? draft.default_branches).trim(),
+      mr_review_skip_labels: (skipLabelsInput?.value ?? draft.mr_review_skip_labels).trim(),
+      mr_review_require_label: (requireLabelInput?.value ?? draft.mr_review_require_label).trim(),
+    }
+  }
+
+  private parseCommaSeparatedLabels(value: string): string[] {
+    return value
+      .split(',')
+      .map((label) => label.trim())
+      .filter(Boolean)
+  }
+
+  private mrReviewGatePayload(draft: ProjectDraft) {
+    if (draft.source_type !== 'gitlab') {
+      return {
+        mr_review_skip_labels: [] as string[],
+        mr_review_require_label: null as string | null,
+      }
+    }
+    return {
+      mr_review_skip_labels: this.parseCommaSeparatedLabels(draft.mr_review_skip_labels),
+      mr_review_require_label: draft.mr_review_require_label || null,
     }
   }
 
@@ -686,6 +863,7 @@ export class ReviewerApp {
       git_remote_url: draft.source_type === 'gitlab' ? draft.git_remote_url || null : null,
       default_branches:
         draft.source_type === 'gitlab' ? this.parseDefaultBranches(draft.default_branches) : [],
+      ...this.mrReviewGatePayload(draft),
     }
 
     try {
@@ -711,6 +889,31 @@ export class ReviewerApp {
       this.bannerIsError = true
     }
     await this.renderWithStatus()
+  }
+
+  private async handleScheduleSave(): Promise<void> {
+    const input = this.root.querySelector('#schedule-mr-poll-interval') as HTMLInputElement | null
+    const value = Number(input?.value)
+    if (!Number.isFinite(value) || value < 1) {
+      this.bannerMessage = 'MR 輪詢間隔必須為正整數（分鐘）'
+      this.bannerIsError = true
+      await this.renderWithStatus()
+      return
+    }
+    this.scheduleSaving = true
+    await this.renderWithStatus()
+    try {
+      await updateSchedule({ mr_poll_interval_min: Math.trunc(value) })
+      await this.loadDashboard()
+      this.bannerMessage = '排程設定已儲存（重啟服務後套用新 cron）'
+      this.bannerIsError = false
+    } catch (error) {
+      this.bannerMessage = error instanceof Error ? error.message : '儲存排程失敗'
+      this.bannerIsError = true
+    } finally {
+      this.scheduleSaving = false
+      await this.renderWithStatus()
+    }
   }
 
   private async handleProjectRun(projectName?: string): Promise<void> {
@@ -939,6 +1142,9 @@ export class ReviewerApp {
     if (view === 'dashboard' && this.dashboard === null) {
       await this.loadDashboard()
     }
+    if (view === 'mr-inbox') {
+      await this.loadMrReviews()
+    }
     if (view === 'projects') {
       if (this.projects.length === 0) {
         await this.loadProjects()
@@ -963,6 +1169,323 @@ export class ReviewerApp {
     this.personViewTab = 'weekly'
     await Promise.all([this.loadLatestReports(), this.loadPersonTrends()])
     this.render(await this.statusLine())
+  }
+
+  private mrDraftBadge(): string {
+    const count = this.dashboard?.stats.mr_draft_count ?? 0
+    if (count <= 0) {
+      return ''
+    }
+    return `<span class="nav-badge">${count}</span>`
+  }
+
+  private async loadMrReviews(): Promise<void> {
+    try {
+      this.mrReviews = await fetchMrReviews(this.mrStatusFilter)
+      if (
+        this.selectedMrReviewId !== null &&
+        !this.mrReviews.some((item) => item.id === this.selectedMrReviewId)
+      ) {
+        this.selectedMrReviewId = this.mrReviews[0]?.id ?? null
+        this.syncMrEditorFromSelection()
+        this.mrChatMessages = []
+      } else if (this.selectedMrReviewId === null && this.mrReviews.length > 0) {
+        this.selectMrReview(this.mrReviews[0].id)
+      } else if (this.selectedMrReviewId !== null && !this.mrEditorDirty) {
+        this.syncMrEditorFromSelection()
+      }
+    } catch (error) {
+      this.mrReviews = []
+      this.bannerMessage = error instanceof Error ? error.message : '無法載入 MR 草稿'
+      this.bannerIsError = true
+    }
+  }
+
+  private async switchMrStatusFilter(status: MrReviewStatus): Promise<void> {
+    if (this.mrStatusFilter === status) {
+      return
+    }
+    this.mrStatusFilter = status
+    this.selectedMrReviewId = null
+    this.mrEditorBody = ''
+    this.mrEditorDirty = false
+    this.mrChatMessages = []
+    await this.loadMrReviews()
+    this.render(await this.statusLine())
+  }
+
+  private selectMrReview(id: number): void {
+    this.selectedMrReviewId = id
+    this.mrEditorDirty = false
+    this.mrChatMessages = []
+    this.syncMrEditorFromSelection()
+  }
+
+  private get selectedMrReview(): MrReviewItem | null {
+    if (this.selectedMrReviewId === null) {
+      return null
+    }
+    return this.mrReviews.find((item) => item.id === this.selectedMrReviewId) ?? null
+  }
+
+  private syncMrEditorFromSelection(): void {
+    const selected = this.selectedMrReview
+    this.mrEditorBody = selected?.draft_body ?? ''
+  }
+
+  private renderMrInbox(): string {
+    const filters: Array<{ key: MrReviewStatus; label: string }> = [
+      { key: 'draft', label: '待發佈' },
+      { key: 'published', label: '已發佈' },
+      { key: 'ignored', label: '已忽略' },
+    ]
+
+    const filterTabs = filters
+      .map(
+        (filter) =>
+          `<button type="button" class="mr-filter-tab ${this.mrStatusFilter === filter.key ? 'active' : ''}" data-mr-status="${filter.key}">${filter.label}</button>`,
+      )
+      .join('')
+
+    const listItems =
+      this.mrReviews.length === 0
+        ? `<p class="mr-list-empty">尚無${this.mrStatusLabel(this.mrStatusFilter)}的 MR review</p>`
+        : this.mrReviews
+            .map((item) => {
+              const active = item.id === this.selectedMrReviewId ? ' active' : ''
+              const author = item.author_name ?? '未歸戶'
+              const title = item.mr_title ?? `MR !${item.mr_iid}`
+              return `<button type="button" class="mr-list-item${active}" data-mr-review-id="${item.id}">
+                <span class="mr-list-title">!${item.mr_iid} ${escapeHtml(title)}</span>
+                <span class="mr-list-meta">${escapeHtml(item.project_name)} · ${escapeHtml(author)} · 第 ${item.review_round} 輪</span>
+                <span class="mr-list-date">${escapeHtml(formatTimestamp(item.created_at))}</span>
+              </button>`
+            })
+            .join('')
+
+    const selected = this.selectedMrReview
+    const detail = selected
+      ? this.renderMrReviewDetail(selected)
+      : `<div class="mr-detail-empty"><p>選擇左側草稿以檢視內容</p></div>`
+
+    return `<div class="mr-inbox">
+      <div class="mr-inbox-header">
+        <div>
+          <h2 class="mr-inbox-title">MR 收件匣</h2>
+          <p class="mr-inbox-subtitle">AI 產出的 MR review 草稿，發佈前可編輯與追問</p>
+        </div>
+      </div>
+      <div class="mr-inbox-body">
+        <aside class="mr-inbox-list">
+          <div class="mr-filter-tabs">${filterTabs}</div>
+          <div class="mr-list">${listItems}</div>
+        </aside>
+        <section class="mr-inbox-detail">${detail}</section>
+      </div>
+    </div>`
+  }
+
+  private mrStatusLabel(status: MrReviewStatus): string {
+    switch (status) {
+      case 'draft':
+        return '待發佈'
+      case 'published':
+        return '已發佈'
+      case 'ignored':
+        return '已忽略'
+    }
+  }
+
+  private renderMrReviewDetail(item: MrReviewItem): string {
+    const isDraft = item.status === 'draft'
+    const readOnly = !isDraft
+    const title = item.mr_title ?? `MR !${item.mr_iid}`
+    const author = item.author_name ?? '未歸戶'
+    const sessionHint = isDraft
+      ? item.agent_session_id
+        ? `<span class="mr-session-badge">可追問 · ${escapeHtml(item.reviewer_agent)}</span>`
+        : `<span class="mr-session-badge muted">無 agent session</span>`
+      : ''
+
+    const actions = isDraft
+      ? `<div class="mr-detail-actions">
+          <button id="mr-ignore" class="mr-btn-secondary" type="button" ${this.mrActionLoading ? 'disabled' : ''}>忽略</button>
+          <button id="mr-save" class="mr-btn-secondary" type="button" ${this.mrActionLoading || !this.mrEditorDirty ? 'disabled' : ''}>儲存</button>
+          <button id="mr-publish" class="mr-btn-primary" type="button" ${this.mrActionLoading ? 'disabled' : ''}>發佈到 GitLab</button>
+        </div>`
+      : ''
+
+    const chatSection =
+      isDraft && item.agent_session_id
+        ? `<section class="mr-chat">
+            <h3 class="mr-chat-title">追問 AI</h3>
+            <div class="mr-chat-messages">
+              ${
+                this.mrChatMessages.length === 0
+                  ? '<p class="mr-chat-empty">針對這份 review 向 AI 追問細節（不會自動發佈）</p>'
+                  : this.mrChatMessages
+                      .map(
+                        (message) =>
+                          `<div class="mr-chat-bubble ${message.role}">
+                            <div class="mr-chat-role">${message.role === 'user' ? '你' : 'AI'}</div>
+                            <div class="mr-chat-text">${escapeHtml(message.text)}</div>
+                          </div>`,
+                      )
+                      .join('')
+              }
+              ${this.mrChatLoading ? '<p class="mr-chat-loading">AI 回覆中…</p>' : ''}
+            </div>
+            <div class="mr-chat-input-row">
+              <textarea id="mr-chat-input" class="mr-chat-input" rows="2" placeholder="例如：為什麼你標記了 transaction helper？" ${this.mrChatLoading ? 'disabled' : ''}></textarea>
+              <button id="mr-chat-send" class="mr-btn-primary" type="button" ${this.mrChatLoading ? 'disabled' : ''}>送出</button>
+            </div>
+          </section>`
+        : ''
+
+    return `<div class="mr-detail">
+      <header class="mr-detail-header">
+        <div>
+          <h3 class="mr-detail-title">!${item.mr_iid} ${escapeHtml(title)}</h3>
+          <p class="mr-detail-meta">${escapeHtml(item.project_name)} · ${escapeHtml(author)} · 第 ${item.review_round} 輪 · ${escapeHtml(this.mrStatusLabel(item.status))}</p>
+        </div>
+        ${sessionHint}
+      </header>
+      <label class="mr-editor-label" for="mr-editor">${readOnly ? 'Review 內容（唯讀）' : 'Review 草稿'}</label>
+      <textarea id="mr-editor" class="mr-editor" ${readOnly ? 'readonly' : ''}>${escapeHtml(this.mrEditorBody)}</textarea>
+      ${actions}
+      ${chatSection}
+    </div>`
+  }
+
+  private async handleMrSave(): Promise<void> {
+    const selected = this.selectedMrReview
+    if (!selected || selected.status !== 'draft' || this.mrActionLoading) {
+      return
+    }
+    this.mrActionLoading = true
+    await this.renderWithStatus()
+    try {
+      await updateMrReview(selected.id, this.mrEditorBody)
+      this.mrEditorDirty = false
+      await this.loadMrReviews()
+      this.bannerMessage = '草稿已儲存'
+      this.bannerIsError = false
+    } catch (error) {
+      this.bannerMessage = error instanceof Error ? error.message : '儲存失敗'
+      this.bannerIsError = true
+    } finally {
+      this.mrActionLoading = false
+      await this.renderWithStatus()
+    }
+  }
+
+  private async handleMrPublish(): Promise<void> {
+    const selected = this.selectedMrReview
+    if (!selected || selected.status !== 'draft' || this.mrActionLoading) {
+      return
+    }
+    if (!window.confirm(`確定要將 MR !${selected.mr_iid} 的 review 發佈到 GitLab？`)) {
+      return
+    }
+    if (this.mrEditorDirty) {
+      try {
+        await updateMrReview(selected.id, this.mrEditorBody)
+        this.mrEditorDirty = false
+      } catch (error) {
+        this.bannerMessage = error instanceof Error ? error.message : '發佈前儲存失敗'
+        this.bannerIsError = true
+        await this.renderWithStatus()
+        return
+      }
+    }
+    this.mrActionLoading = true
+    await this.renderWithStatus()
+    try {
+      await publishMrReview(selected.id)
+      this.bannerMessage = `MR !${selected.mr_iid} 已發佈到 GitLab`
+      this.bannerIsError = false
+      this.selectedMrReviewId = null
+      this.mrChatMessages = []
+      await Promise.all([this.loadMrReviews(), this.loadDashboard()])
+    } catch (error) {
+      this.bannerMessage = error instanceof Error ? error.message : '發佈失敗'
+      this.bannerIsError = true
+    } finally {
+      this.mrActionLoading = false
+      await this.renderWithStatus()
+    }
+  }
+
+  private async handleMrIgnore(): Promise<void> {
+    const selected = this.selectedMrReview
+    if (!selected || selected.status !== 'draft' || this.mrActionLoading) {
+      return
+    }
+    if (!window.confirm(`確定要忽略 MR !${selected.mr_iid} 的草稿？`)) {
+      return
+    }
+    this.mrActionLoading = true
+    await this.renderWithStatus()
+    try {
+      await ignoreMrReview(selected.id)
+      this.bannerMessage = `已忽略 MR !${selected.mr_iid}`
+      this.bannerIsError = false
+      this.selectedMrReviewId = null
+      this.mrChatMessages = []
+      await Promise.all([this.loadMrReviews(), this.loadDashboard()])
+    } catch (error) {
+      this.bannerMessage = error instanceof Error ? error.message : '忽略失敗'
+      this.bannerIsError = true
+    } finally {
+      this.mrActionLoading = false
+      await this.renderWithStatus()
+    }
+  }
+
+  private async handleMrAgentTurn(): Promise<void> {
+    const selected = this.selectedMrReview
+    if (!selected || selected.status !== 'draft' || !selected.agent_session_id || this.mrChatLoading) {
+      return
+    }
+    const input = this.root.querySelector('#mr-chat-input') as HTMLTextAreaElement | null
+    const message = input?.value.trim()
+    if (!message) {
+      return
+    }
+    this.mrChatMessages.push({ role: 'user', text: message })
+    if (input) {
+      input.value = ''
+    }
+    this.mrChatLoading = true
+    await this.renderWithStatus()
+    try {
+      const response = await agentTurnMrReview(selected.id, message)
+      this.mrChatMessages.push({ role: 'assistant', text: response.reply })
+    } catch (error) {
+      this.bannerMessage = error instanceof Error ? error.message : '追問失敗'
+      this.bannerIsError = true
+    } finally {
+      this.mrChatLoading = false
+      await this.renderWithStatus()
+    }
+  }
+
+  private async handleMrScan(projectId: number, force = false): Promise<void> {
+    if (this.activeRunId || this.reloading) {
+      return
+    }
+    try {
+      const response = await startMrScan(projectId, force ? { force: true } : undefined)
+      this.activeRunId = response.run_id
+      this.bannerMessage = null
+      this.bannerIsError = false
+      this.render(force ? `MR 強制重掃中 · run #${response.run_id}` : `MR 掃描中 · run #${response.run_id}`)
+      this.startPolling(response.run_id)
+    } catch (error) {
+      this.bannerMessage = error instanceof Error ? error.message : '無法啟動 MR 掃描'
+      this.bannerIsError = true
+      await this.renderWithStatus()
+    }
   }
 
   private async selectPerson(personId: number): Promise<void> {
@@ -1093,6 +1616,9 @@ export class ReviewerApp {
       if (this.appView === 'projects') {
         void this.renderWithStatus()
       }
+      if (this.appView === 'mr-inbox') {
+        void this.renderWithStatus()
+      }
     }, 1000)
     void this.pollRun(runId)
   }
@@ -1114,7 +1640,7 @@ export class ReviewerApp {
       const run = await fetchRun(runId)
       this.activeRun = run
       if (!TERMINAL_STATUSES.has(run.status)) {
-        if (this.appView === 'projects') {
+        if (this.appView === 'projects' || this.appView === 'mr-inbox') {
           await this.renderWithStatus()
         } else {
           this.render(`執行中 · run #${run.id} · ${run.status}`)
@@ -1133,6 +1659,7 @@ export class ReviewerApp {
         this.loadUnmatchedAuthors(),
         this.loadDashboard(),
         this.loadProjects(),
+        this.appView === 'mr-inbox' ? this.loadMrReviews() : Promise.resolve(),
       ])
       if (this.appView === 'projects') {
         this.syncProjectDraft()

@@ -6,11 +6,27 @@ use sqlx::Row;
 
 use crate::identity::{self, ManifestAuthor};
 
+pub fn is_mr_trigger(trigger: &str) -> bool {
+    matches!(trigger, "mr_poll" | "manual_mr_poll")
+}
+
+pub const DEFAULT_MR_REVIEW_SKIP_LABELS: &[&str] =
+    &["wip", "do-not-review", "no-ai-review"];
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ProjectRow {
     pub id: i64,
     pub name: String,
     pub repo_path: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct MrPollProjectRow {
+    pub id: i64,
+    pub name: String,
+    pub repo_path: String,
+    pub mr_review_skip_labels: String,
+    pub mr_review_require_label: Option<String>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -20,6 +36,15 @@ pub struct RunProjectRow {
     pub project_id: i64,
     pub name: String,
     pub repo_path: String,
+    pub trigger: String,
+    pub mr_scan_force: i64,
+}
+
+pub fn parse_mr_scan_force(value: Option<&str>) -> bool {
+    matches!(
+        value.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
+        Some("1") | Some("true")
+    )
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -34,6 +59,24 @@ pub async fn has_active_run_projects(pool: &sqlx::SqlitePool) -> crate::Result<b
          INNER JOIN runs r ON r.id = rp.run_id
          WHERE r.status = 'running' AND rp.state IN ('queued', 'running')",
     )
+    .fetch_one(pool)
+    .await
+    .map_err(crate::Error::Database)?;
+    Ok(row.get::<i64, _>(0) > 0)
+}
+
+pub async fn has_active_run_for_project(
+    pool: &sqlx::SqlitePool,
+    project_id: i64,
+) -> crate::Result<bool> {
+    let row = sqlx::query(
+        "SELECT COUNT(*) FROM run_projects rp
+         INNER JOIN runs r ON r.id = rp.run_id
+         WHERE rp.project_id = ?
+           AND r.status = 'running'
+           AND rp.state IN ('queued', 'running')",
+    )
+    .bind(project_id)
     .fetch_one(pool)
     .await
     .map_err(crate::Error::Database)?;
@@ -82,6 +125,130 @@ pub async fn create_manual_project_run(
 
     tx.commit().await.map_err(crate::Error::Database)?;
     Ok(run_id)
+}
+
+pub async fn create_manual_mr_scan_run(
+    pool: &sqlx::SqlitePool,
+    project_id: i64,
+    force: bool,
+) -> crate::Result<i64> {
+    if has_active_run_for_project(pool, project_id).await? {
+        return Err(crate::Error::RunConflict);
+    }
+
+    let project = sqlx::query_as::<_, ProjectRow>(
+        "SELECT id, name, repo_path FROM projects WHERE id = ?",
+    )
+    .bind(project_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(crate::Error::Database)?
+    .ok_or(crate::Error::NotFound)?;
+
+    let mut tx = pool.begin().await.map_err(crate::Error::Database)?;
+
+    let result = sqlx::query(
+        "INSERT INTO runs (trigger, status, project_total, mr_scan_force) VALUES ('manual_mr_poll', 'running', 1, ?)",
+    )
+    .bind(i64::from(force))
+    .execute(&mut *tx)
+    .await
+    .map_err(crate::Error::Database)?;
+    let run_id = result.last_insert_rowid();
+
+    sqlx::query(
+        "INSERT INTO run_projects (run_id, project_id, state) VALUES (?, ?, 'queued')",
+    )
+    .bind(run_id)
+    .bind(project.id)
+    .execute(&mut *tx)
+    .await
+    .map_err(crate::Error::Database)?;
+
+    tx.commit().await.map_err(crate::Error::Database)?;
+    Ok(run_id)
+}
+
+pub async fn create_mr_poll_run(pool: &sqlx::SqlitePool) -> crate::Result<i64> {
+    let mut tx = pool.begin().await.map_err(crate::Error::Database)?;
+
+    let result = sqlx::query(
+        "INSERT INTO runs (trigger, status, project_total) VALUES ('mr_poll', 'running', 0)",
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(crate::Error::Database)?;
+    let run_id = result.last_insert_rowid();
+
+    let projects = sqlx::query_as::<_, ProjectRow>(
+        "SELECT id, name, repo_path FROM projects WHERE is_git_repo = 1 ORDER BY id",
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(crate::Error::Database)?;
+
+    let mut enqueued = 0_i64;
+    for project in &projects {
+        let active = sqlx::query(
+            "SELECT COUNT(*) FROM run_projects rp
+             INNER JOIN runs r ON r.id = rp.run_id
+             WHERE rp.project_id = ?
+               AND r.status = 'running'
+               AND rp.state IN ('queued', 'running')",
+        )
+        .bind(project.id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(crate::Error::Database)?;
+        if active.get::<i64, _>(0) > 0 {
+            continue;
+        }
+
+        sqlx::query(
+            "INSERT INTO run_projects (run_id, project_id, state) VALUES (?, ?, 'queued')",
+        )
+        .bind(run_id)
+        .bind(project.id)
+        .execute(&mut *tx)
+        .await
+        .map_err(crate::Error::Database)?;
+        enqueued += 1;
+    }
+
+    sqlx::query("UPDATE runs SET project_total = ? WHERE id = ?")
+        .bind(enqueued)
+        .bind(run_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(crate::Error::Database)?;
+
+    tx.commit().await.map_err(crate::Error::Database)?;
+    Ok(run_id)
+}
+
+pub async fn get_run_trigger(
+    pool: &sqlx::SqlitePool,
+    run_id: i64,
+) -> crate::Result<Option<String>> {
+    sqlx::query_scalar("SELECT trigger FROM runs WHERE id = ?")
+        .bind(run_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(crate::Error::Database)
+}
+
+pub async fn load_mr_poll_project(
+    pool: &sqlx::SqlitePool,
+    project_id: i64,
+) -> crate::Result<Option<MrPollProjectRow>> {
+    sqlx::query_as::<_, MrPollProjectRow>(
+        "SELECT id, name, repo_path, mr_review_skip_labels, mr_review_require_label
+         FROM projects WHERE id = ?",
+    )
+    .bind(project_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(crate::Error::Database)
 }
 
 pub async fn create_scheduled_run(pool: &sqlx::SqlitePool) -> crate::Result<i64> {
@@ -135,7 +302,7 @@ pub async fn fetch_next_queued_run_project(
     pool: &sqlx::SqlitePool,
 ) -> crate::Result<Option<RunProjectRow>> {
     let row = sqlx::query_as::<_, RunProjectRow>(
-        "SELECT rp.id, rp.run_id, rp.project_id, p.name, p.repo_path
+        "SELECT rp.id, rp.run_id, rp.project_id, p.name, p.repo_path, r.trigger, r.mr_scan_force
          FROM run_projects rp
          INNER JOIN projects p ON p.id = rp.project_id
          INNER JOIN runs r ON r.id = rp.run_id
@@ -313,6 +480,10 @@ pub struct RunManifest<'a> {
     pub since: String,
     pub output_contract: &'static str,
     pub authors: Vec<ManifestAuthor>,
+    /// Observation snippets under `report_root` that may be folded into the weekly summary.
+    /// Populated from `mr_reviews` rows with `status='published'`; draft/ignored snippets stay out.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub published_pending_snippets: Vec<String>,
 }
 
 pub fn manifest_path(data_root: &Path, run_id: i64, project_id: i64) -> PathBuf {
@@ -362,6 +533,9 @@ pub async fn write_weekly_manifest(
     )
     .await?;
 
+    let published_pending_snippets =
+        crate::mr_reviews::load_published_pending_snippets(pool, project.id).await?;
+
     let manifest = RunManifest {
         mode: "weekly_batch",
         project_name: &project.name,
@@ -372,6 +546,7 @@ pub async fn write_weekly_manifest(
         since,
         output_contract: "output-contract.md",
         authors,
+        published_pending_snippets,
     };
 
     let json = serde_json::to_string_pretty(&manifest).map_err(|err| {
@@ -379,4 +554,148 @@ pub async fn write_weekly_manifest(
     })?;
     std::fs::write(&path, json)?;
     Ok(path)
+}
+
+pub fn parse_mr_review_skip_labels(raw: &str) -> Vec<String> {
+    serde_json::from_str(raw).unwrap_or_else(|_| {
+        DEFAULT_MR_REVIEW_SKIP_LABELS
+            .iter()
+            .map(|label| (*label).to_string())
+            .collect()
+    })
+}
+
+pub fn eligible_mrs_path(data_root: &Path, run_id: i64, project_id: i64) -> PathBuf {
+    data_root
+        .join("runs")
+        .join(run_id.to_string())
+        .join("projects")
+        .join(project_id.to_string())
+        .join("eligible_mrs.json")
+}
+
+pub fn mr_poll_draft_dir(data_root: &Path, run_id: i64, project_id: i64) -> PathBuf {
+    data_root
+        .join("runs")
+        .join(run_id.to_string())
+        .join("projects")
+        .join(project_id.to_string())
+        .join("drafts")
+}
+
+#[derive(Serialize)]
+pub struct MrPollManifest<'a> {
+    pub mode: &'static str,
+    pub project_name: &'a str,
+    pub repo_path: &'a str,
+    pub draft_dir: String,
+    pub pending_dir: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reviewer_username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+    pub eligible_mrs_path: String,
+    pub mr_review_skip_labels: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mr_review_require_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mr_iid: Option<i64>,
+}
+
+pub async fn write_mr_poll_manifest(
+    data_root: &Path,
+    run_id: i64,
+    project: &MrPollProjectRow,
+    repo_path: &str,
+    reviewer_username: Option<&str>,
+    mr_iid: Option<i64>,
+) -> crate::Result<PathBuf> {
+    let path = manifest_path(data_root, run_id, project.id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let since = (Utc::now() - chrono::Duration::days(7))
+        .format("%Y-%m-%d")
+        .to_string();
+    let draft_dir = mr_poll_draft_dir(data_root, run_id, project.id)
+        .display()
+        .to_string()
+        .replace('\\', "/");
+    let pending_dir = data_root
+        .join("reports")
+        .join(&project.name)
+        .display()
+        .to_string()
+        .replace('\\', "/");
+    let eligible_path = eligible_mrs_path(data_root, run_id, project.id)
+        .display()
+        .to_string()
+        .replace('\\', "/");
+
+    let manifest = MrPollManifest {
+        mode: "mr_poll",
+        project_name: &project.name,
+        repo_path,
+        draft_dir,
+        pending_dir,
+        reviewer_username: reviewer_username.map(str::to_string),
+        since: Some(since),
+        eligible_mrs_path: eligible_path,
+        mr_review_skip_labels: parse_mr_review_skip_labels(&project.mr_review_skip_labels),
+        mr_review_require_label: project.mr_review_require_label.clone(),
+        mr_iid,
+    };
+
+    let json = serde_json::to_string_pretty(&manifest).map_err(|err| {
+        crate::Error::SummaryParse(format!("manifest json: {err}"))
+    })?;
+    std::fs::write(&path, json)?;
+    Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_mr_scan_force_accepts_truthy_values() {
+        assert!(parse_mr_scan_force(Some("1")));
+        assert!(parse_mr_scan_force(Some("true")));
+        assert!(parse_mr_scan_force(Some("TRUE")));
+        assert!(!parse_mr_scan_force(None));
+        assert!(!parse_mr_scan_force(Some("0")));
+        assert!(!parse_mr_scan_force(Some("false")));
+    }
+
+    #[test]
+    fn is_mr_trigger_matches_poll_triggers() {
+        assert!(is_mr_trigger("mr_poll"));
+        assert!(is_mr_trigger("manual_mr_poll"));
+        assert!(!is_mr_trigger("manual_all"));
+        assert!(!is_mr_trigger("schedule"));
+    }
+
+    #[test]
+    fn parse_mr_review_skip_labels_uses_defaults_on_invalid_json() {
+        let labels = parse_mr_review_skip_labels("not-json");
+        assert_eq!(
+            labels,
+            vec![
+                "wip".to_string(),
+                "do-not-review".to_string(),
+                "no-ai-review".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn eligible_mrs_path_follows_run_layout() {
+        let root = Path::new("/data/reviewer");
+        let path = eligible_mrs_path(root, 9, 3);
+        assert_eq!(
+            path,
+            Path::new("/data/reviewer/runs/9/projects/3/eligible_mrs.json")
+        );
+    }
 }

@@ -92,11 +92,14 @@ export interface ProjectEngineer {
 }
 
 export interface ProjectListItem {
+  id: number
   name: string
   repo_path: string
   git_remote_url: string | null
   default_branch: string | null
   default_branches: string[]
+  mr_review_skip_labels: string[]
+  mr_review_require_label: string | null
   health: string
   health_reason: string | null
   is_git_repo: number
@@ -115,6 +118,8 @@ export interface ProjectInput {
   repo_path: string
   git_remote_url?: string | null
   default_branches?: string[]
+  mr_review_skip_labels?: string[]
+  mr_review_require_label?: string | null
 }
 
 export interface ProjectUpdateInput {
@@ -122,6 +127,8 @@ export interface ProjectUpdateInput {
   repo_path: string
   git_remote_url?: string | null
   default_branches?: string[]
+  mr_review_skip_labels?: string[]
+  mr_review_require_label?: string | null
 }
 
 export interface ReloadProjectsResponse {
@@ -142,6 +149,7 @@ export interface DashboardStats {
   person_count: number
   unread_count: number
   pending_count: number
+  mr_draft_count: number
 }
 
 export interface DashboardRecentReport {
@@ -157,6 +165,25 @@ export interface DashboardSchedule {
   label: string
   next_run_at: string | null
   enabled: boolean
+  mr_poll_interval_min: number
+  mr_poll_label: string
+}
+
+export interface ScheduleConfigResponse {
+  enabled: boolean
+  cadence: string
+  weekday: number | null
+  run_time: string
+  mr_poll_interval_min: number
+  per_project_timeout_sec: number
+  max_concurrency: number
+  weekly_label: string
+  mr_poll_label: string
+  next_weekly_run_at: string | null
+}
+
+export interface ScheduleUpdateInput {
+  mr_poll_interval_min?: number
 }
 
 export interface DashboardResponse {
@@ -164,4 +191,32 @@ export interface DashboardResponse {
   stats: DashboardStats
   recent_reports: DashboardRecentReport[]
   schedule: DashboardSchedule
+}
+
+export type MrReviewStatus = 'draft' | 'published' | 'ignored'
+
+export interface MrReviewItem {
+  id: number
+  project_id: number
+  project_name: string
+  person_id: number | null
+  author_name: string | null
+  mr_iid: number
+  mr_title: string | null
+  review_round: number
+  status: MrReviewStatus
+  draft_body: string
+  agent_session_id: string | null
+  reviewer_agent: string
+  created_at: string
+}
+
+export interface MrReviewPublishResponse {
+  published_at: string
+  published_body: string
+}
+
+export interface MrReviewAgentTurnResponse {
+  reply: string
+  agent_session_id: string
 }

@@ -34,6 +34,10 @@ pub enum Error {
     InvalidProjectConfig(String),
     #[error("failed to parse summary.md: {0}")]
     SummaryParse(String),
+    #[error("mr review conflict")]
+    MrReviewConflict,
+    #[error("agent failed: {0}")]
+    AgentFailed(String),
     #[error(transparent)]
     Yaml(#[from] serde_yaml::Error),
     #[error(transparent)]

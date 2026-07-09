@@ -18,6 +18,13 @@ pub enum ExecuteOutcome {
     Failed,
 }
 
+pub struct MrReviewExecuteResult {
+    pub outcome: ExecuteOutcome,
+    pub duration_sec: i64,
+    pub error: Option<String>,
+    pub stdout: String,
+}
+
 pub async fn execute_weekly_batch(
     pool: &SqlitePool,
     config: &AppConfig,
@@ -31,7 +38,7 @@ pub async fn execute_weekly_batch(
         write_weekly_manifest(pool, config.data_dir(), run_id, project, &working_dir_str).await?;
     let started = Instant::now();
 
-    let mut command = build_command(config, working_dir, &manifest_path)?;
+    let mut command = build_weekly_command(config, working_dir, &manifest_path)?;
     command.stdout(Stdio::null()).stderr(Stdio::piped());
 
     let mut child = command.spawn().map_err(Error::Io)?;
@@ -64,6 +71,193 @@ pub async fn execute_weekly_batch(
     }
 }
 
+pub async fn execute_mr_review(
+    config: &AppConfig,
+    working_dir: &Path,
+    manifest_path: &Path,
+    timeout_sec: u64,
+    _agent: ReviewerAgent,
+) -> MrReviewExecuteResult {
+    let started = Instant::now();
+    let mut command = match build_mr_scan_command(config, working_dir, manifest_path) {
+        Ok(command) => command,
+        Err(err) => {
+            return MrReviewExecuteResult {
+                outcome: ExecuteOutcome::Failed,
+                duration_sec: 0,
+                error: Some(err.to_string()),
+                stdout: String::new(),
+            };
+        }
+    };
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(err) => {
+            return MrReviewExecuteResult {
+                outcome: ExecuteOutcome::Failed,
+                duration_sec: 0,
+                error: Some(format!("executor spawn failed: {err}")),
+                stdout: String::new(),
+            };
+        }
+    };
+
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+    let wait_result = time::timeout(Duration::from_secs(timeout_sec), child.wait()).await;
+
+    let duration_sec = started.elapsed().as_secs() as i64;
+    let stdout_text = read_child_stdout(&mut stdout).await;
+    let stderr_text = read_child_stderr(&mut stderr).await;
+
+    match wait_result {
+        Ok(Ok(status)) if status.success() => MrReviewExecuteResult {
+            outcome: ExecuteOutcome::Success,
+            duration_sec,
+            error: None,
+            stdout: stdout_text,
+        },
+        Ok(Ok(status)) => MrReviewExecuteResult {
+            outcome: ExecuteOutcome::Failed,
+            duration_sec,
+            error: Some(format_executor_failure(&stderr_text, Some(&status))),
+            stdout: stdout_text,
+        },
+        Ok(Err(err)) => MrReviewExecuteResult {
+            outcome: ExecuteOutcome::Failed,
+            duration_sec,
+            error: Some(if stderr_text.trim().is_empty() {
+                format!("executor wait failed: {err}")
+            } else {
+                format_executor_failure(&stderr_text, None)
+            }),
+            stdout: stdout_text,
+        },
+        Err(_) => {
+            kill_process_tree(&mut child).await;
+            MrReviewExecuteResult {
+                outcome: ExecuteOutcome::SkippedTimeout,
+                duration_sec,
+                error: None,
+                stdout: stdout_text,
+            }
+        }
+    }
+}
+
+pub async fn execute_agent_turn(
+    config: &AppConfig,
+    working_dir: &Path,
+    session_id: &str,
+    message: &str,
+    agent: ReviewerAgent,
+) -> Result<(String, Option<String>), Error> {
+    let mut command = build_agent_turn_command(config, working_dir, session_id, message, agent)?;
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let mut child = command.spawn().map_err(Error::Io)?;
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+    let status = child.wait().await.map_err(Error::Io)?;
+
+    let stdout_text = read_child_stdout(&mut stdout).await;
+    let stderr_text = read_child_stderr(&mut stderr).await;
+
+    if !status.success() {
+        return Err(Error::AgentFailed(format_executor_failure(
+            &stderr_text,
+            Some(&status),
+        )));
+    }
+
+    let reply = extract_agent_reply(&stdout_text, agent)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| Error::AgentFailed("agent returned empty reply".into()))?;
+    let new_session = parse_agent_session_id(&stdout_text, agent);
+    Ok((reply, new_session))
+}
+
+pub fn parse_agent_session_id(stdout: &str, agent: ReviewerAgent) -> Option<String> {
+    let mut last_session = None;
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if let Some(session_id) = value.get("session_id").and_then(|v| v.as_str()) {
+            last_session = Some(session_id.to_string());
+        }
+        if let Some(session_id) = value
+            .pointer("/result/session_id")
+            .and_then(|v| v.as_str())
+        {
+            last_session = Some(session_id.to_string());
+        }
+        match agent {
+            ReviewerAgent::Cursor => {
+                if value.get("type").and_then(|v| v.as_str()) == Some("system")
+                    && value.get("subtype").and_then(|v| v.as_str()) == Some("init")
+                {
+                    if let Some(session_id) = value.get("session_id").and_then(|v| v.as_str()) {
+                        last_session = Some(session_id.to_string());
+                    }
+                }
+            }
+            ReviewerAgent::Claude => {
+                if value.get("type").and_then(|v| v.as_str()) == Some("result") {
+                    if let Some(session_id) = value.get("session_id").and_then(|v| v.as_str()) {
+                        last_session = Some(session_id.to_string());
+                    }
+                }
+            }
+        }
+    }
+    last_session
+}
+
+fn extract_agent_reply(stdout: &str, agent: ReviewerAgent) -> Option<String> {
+    let mut chunks = Vec::new();
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if value.get("type").and_then(|v| v.as_str()) != Some("assistant") {
+            continue;
+        }
+        if let Some(text) = value
+            .pointer("/message/content/0/text")
+            .and_then(|v| v.as_str())
+        {
+            chunks.push(text.to_string());
+            continue;
+        }
+        if let Some(text) = value.get("text").and_then(|v| v.as_str()) {
+            chunks.push(text.to_string());
+            continue;
+        }
+        if let Some(content) = value.get("content").and_then(|v| v.as_str()) {
+            chunks.push(content.to_string());
+        }
+    }
+    if !chunks.is_empty() {
+        return Some(chunks.join("\n"));
+    }
+
+    if let Some(session_id) = parse_agent_session_id(stdout, agent) {
+        return Some(format!("(session continued: {session_id})"));
+    }
+    None
+}
+
 /// Kill the reviewer subprocess and all of its descendants.
 ///
 /// `Child::kill` only terminates the direct child. On Windows the reviewer is
@@ -88,6 +282,17 @@ async fn read_child_stderr(stderr: &mut Option<ChildStderr>) -> String {
     };
     let mut buf = Vec::new();
     if stderr.read_to_end(&mut buf).await.is_err() {
+        return String::new();
+    }
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+async fn read_child_stdout(stdout: &mut Option<tokio::process::ChildStdout>) -> String {
+    let Some(stdout) = stdout else {
+        return String::new();
+    };
+    let mut buf = Vec::new();
+    if stdout.read_to_end(&mut buf).await.is_err() {
         return String::new();
     }
     String::from_utf8_lossy(&buf).into_owned()
@@ -119,7 +324,7 @@ fn format_executor_failure(stderr: &str, status: Option<&std::process::ExitStatu
     }
 }
 
-fn build_command(
+fn build_weekly_command(
     config: &AppConfig,
     working_dir: &Path,
     manifest_path: &Path,
@@ -133,13 +338,106 @@ fn build_command(
         return Ok(Command::new(program));
     }
 
-    let (workflow, contract) = reviewer_skill_paths(config);
+    let (workflow, contract) = weekly_skill_paths(config);
     match config.reviewer_agent() {
-        ReviewerAgent::Claude => {
-            build_claude_command(config, working_dir, manifest_path, &workflow, &contract)
-        }
+        ReviewerAgent::Claude => build_claude_command(
+            config,
+            working_dir,
+            manifest_path,
+            &workflow,
+            &contract,
+            true,
+        ),
         ReviewerAgent::Cursor => {
             build_cursor_command(config, working_dir, manifest_path, &workflow, &contract)
+        }
+    }
+}
+
+fn build_mr_scan_command(
+    config: &AppConfig,
+    working_dir: &Path,
+    manifest_path: &Path,
+) -> Result<Command, Error> {
+    if let Some(program) = config.reviewer_executor() {
+        if cfg!(windows) {
+            let mut command = Command::new("cmd");
+            command.arg("/C").arg(program);
+            return Ok(command);
+        }
+        return Ok(Command::new(program));
+    }
+
+    let (workflow, contract) = mr_scan_skill_paths(config);
+    match config.reviewer_agent() {
+        ReviewerAgent::Claude => build_claude_command(
+            config,
+            working_dir,
+            manifest_path,
+            &workflow,
+            &contract,
+            false,
+        ),
+        ReviewerAgent::Cursor => {
+            build_cursor_command(config, working_dir, manifest_path, &workflow, &contract)
+        }
+    }
+}
+
+fn build_agent_turn_command(
+    config: &AppConfig,
+    working_dir: &Path,
+    session_id: &str,
+    message: &str,
+    agent: ReviewerAgent,
+) -> Result<Command, Error> {
+    if let Some(program) = config.reviewer_executor() {
+        if cfg!(windows) {
+            let mut command = Command::new("cmd");
+            command.arg("/C").arg(program);
+            return Ok(command);
+        }
+        return Ok(Command::new(program));
+    }
+
+    match agent {
+        ReviewerAgent::Claude => {
+            let mut command = reviewer_command("claude");
+            command
+                .current_dir(working_dir)
+                .arg("--bare")
+                .arg("--permission-mode")
+                .arg("dontAsk")
+                .arg("--allowedTools")
+                .arg("Bash,Read,Glob,Grep,Write")
+                .arg("--add-dir")
+                .arg(config.data_dir())
+                .arg("--add-dir")
+                .arg(working_dir)
+                .arg("-p")
+                .arg(message)
+                .arg("--resume")
+                .arg(session_id)
+                .arg("--output-format")
+                .arg("stream-json");
+            append_model_arg(&mut command, config);
+            Ok(command)
+        }
+        ReviewerAgent::Cursor => {
+            let prompt = prepare_prompt_for_cli(message);
+            let mut command = reviewer_command("cursor-agent");
+            command
+                .current_dir(working_dir)
+                .arg("--print")
+                .arg("--output-format")
+                .arg("stream-json")
+                .arg("--trust")
+                .arg("--force")
+                .arg("--resume")
+                .arg(session_id);
+            append_model_arg(&mut command, config);
+            command.arg(prompt);
+            Ok(command)
         }
     }
 }
@@ -184,11 +482,22 @@ fn reviewer_command(program: &str) -> Command {
     Command::new(resolved)
 }
 
-fn reviewer_skill_paths(config: &AppConfig) -> (PathBuf, PathBuf) {
+fn weekly_skill_paths(config: &AppConfig) -> (PathBuf, PathBuf) {
     let workflow_dir = config
         .app_root()
         .join("skills")
         .join("reviewer-batch");
+    (
+        workflow_dir.join("WORKFLOW.md"),
+        workflow_dir.join("output-contract.md"),
+    )
+}
+
+fn mr_scan_skill_paths(config: &AppConfig) -> (PathBuf, PathBuf) {
+    let workflow_dir = config
+        .app_root()
+        .join("skills")
+        .join("scan-mrs-headless");
     (
         workflow_dir.join("WORKFLOW.md"),
         workflow_dir.join("output-contract.md"),
@@ -208,6 +517,7 @@ fn build_claude_command(
     manifest_path: &Path,
     workflow: &Path,
     contract: &Path,
+    disable_session_persistence: bool,
 ) -> Result<Command, Error> {
     let prompt = base_reviewer_prompt(manifest_path);
 
@@ -232,8 +542,10 @@ fn build_claude_command(
         .arg("-p")
         .arg(prompt)
         .arg("--output-format")
-        .arg("stream-json")
-        .arg("--no-session-persistence");
+        .arg("stream-json");
+    if disable_session_persistence {
+        command.arg("--no-session-persistence");
+    }
 
     Ok(command)
 }
@@ -310,5 +622,70 @@ mod tests {
             format_executor_failure("something went wrong", None),
             "something went wrong"
         );
+    }
+
+    #[test]
+    fn parse_agent_session_id_reads_claude_result() {
+        let stdout = r#"{"type":"result","session_id":"claude-sess-1"}
+{"type":"assistant","message":{"content":[{"text":"hi"}]}}"#;
+        assert_eq!(
+            parse_agent_session_id(stdout, ReviewerAgent::Claude).as_deref(),
+            Some("claude-sess-1")
+        );
+    }
+
+    #[test]
+    fn parse_agent_session_id_reads_cursor_init() {
+        let stdout = r#"{"type":"system","subtype":"init","session_id":"cursor-sess-9"}
+{"type":"assistant","text":"done"}"#;
+        assert_eq!(
+            parse_agent_session_id(stdout, ReviewerAgent::Cursor).as_deref(),
+            Some("cursor-sess-9")
+        );
+    }
+
+    #[test]
+    fn parse_agent_session_id_returns_none_without_session() {
+        let stdout = r#"{"type":"assistant","text":"only reply"}"#;
+        assert!(parse_agent_session_id(stdout, ReviewerAgent::Cursor).is_none());
+    }
+
+    #[test]
+    fn weekly_claude_command_includes_no_session_persistence() {
+        let config = test_config();
+        let manifest = config.app_root.join("manifest.json");
+        let command = build_weekly_command(&config, config.app_root(), &manifest).expect("cmd");
+        let args = command_args(&command);
+        assert!(args.iter().any(|arg| arg == "--no-session-persistence"));
+    }
+
+    #[test]
+    fn mr_scan_claude_command_omits_no_session_persistence() {
+        let config = test_config();
+        let manifest = config.app_root.join("manifest.json");
+        let command = build_mr_scan_command(&config, config.app_root(), &manifest).expect("cmd");
+        let args = command_args(&command);
+        assert!(!args.iter().any(|arg| arg == "--no-session-persistence"));
+    }
+
+    fn test_config() -> AppConfig {
+        AppConfig {
+            data_dir: PathBuf::from("/data"),
+            port: 8080,
+            projects_config_path: PathBuf::from("projects.yaml"),
+            app_root: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".."),
+            cors_allow_origins: Vec::new(),
+            reviewer_agent: ReviewerAgent::Claude,
+            reviewer_model: None,
+            reviewer_executor: None,
+        }
+    }
+
+    fn command_args(command: &Command) -> Vec<String> {
+        command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
     }
 }

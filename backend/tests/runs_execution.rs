@@ -247,6 +247,8 @@ async fn worker_marks_skipped_timeout() {
         project_id,
         name: "alpha".into(),
         repo_path: temp.path().join("repos/alpha").display().to_string(),
+        trigger: "manual_project".into(),
+        mr_scan_force: 0,
     };
 
     process_run_project(&pool, &config, job, 1)
@@ -313,6 +315,8 @@ async fn resolve_working_dir_returns_resident_worktree() {
         project_id,
         name: "svc".into(),
         repo_path: container.display().to_string(),
+        trigger: "manual_project".into(),
+        mr_scan_force: 0,
     };
 
     std::env::set_var("DATA_ROOT_DIR", temp.path());
@@ -330,6 +334,8 @@ async fn resolve_working_dir_returns_resident_worktree() {
         project_id: 999,
         name: "missing".into(),
         repo_path: container.display().to_string(),
+        trigger: "manual_project".into(),
+        mr_scan_force: 0,
     };
     assert!(resolve_working_dir(&pool, &config, &bad_job).await.is_err());
 }

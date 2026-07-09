@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{header, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post, put};
@@ -9,10 +9,12 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use crate::dashboard;
 use crate::error::Error;
 use crate::identity;
+use crate::mr_reviews::{self, AgentTurnResponse, MrReviewListItem, PublishResponse};
 use crate::person_trends;
 use crate::projects;
 use crate::reports;
 use crate::runs::{self, RunRow};
+use crate::schedule::{self, ScheduleConfigResponse, ScheduleUpdateInput};
 use crate::state::AppState;
 use crate::worktree;
 
@@ -31,6 +33,11 @@ pub struct CreateRunRequest {
 #[derive(Serialize)]
 pub struct CreateRunResponse {
     pub run_id: i64,
+}
+
+#[derive(Deserialize)]
+pub struct MrScanQuery {
+    pub force: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -92,6 +99,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/runs", post(create_run))
         .route("/api/runs/{id}", get(get_run))
         .route("/api/dashboard", get(get_dashboard))
+        .route("/api/schedule", get(get_schedule).patch(update_schedule))
         .route("/api/people", get(list_people).post(create_person))
         .route("/api/people/{id}/reports/latest", get(latest_reports))
         .route("/api/people/{id}/trends", get(person_trends))
@@ -100,7 +108,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/reports/{id}/read", patch(mark_report_read))
         .route("/api/projects", get(list_projects).post(create_project))
         .route("/api/projects/reload", post(reload_projects))
+        .route("/api/projects/{id}/mr-scan", post(mr_scan))
         .route("/api/projects/{name}", put(update_project).delete(delete_project))
+        .route("/api/mr-reviews", get(list_mr_reviews))
+        .route("/api/mr-reviews/{id}", patch(update_mr_review))
+        .route("/api/mr-reviews/{id}/publish", post(publish_mr_review))
+        .route("/api/mr-reviews/{id}/ignore", post(ignore_mr_review))
+        .route("/api/mr-reviews/{id}/agent-turn", post(agent_turn_mr_review))
         .with_state(state);
 
     apply_cors(router, &cors_origins)
@@ -293,6 +307,25 @@ async fn get_dashboard(
     Ok(Json(response))
 }
 
+async fn get_schedule(
+    State(state): State<AppState>,
+) -> Result<Json<ScheduleConfigResponse>, ApiError> {
+    let response = schedule::get_schedule_config_response(&state.pool)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(response))
+}
+
+async fn update_schedule(
+    State(state): State<AppState>,
+    Json(body): Json<ScheduleUpdateInput>,
+) -> Result<Json<ScheduleConfigResponse>, ApiError> {
+    let response = schedule::update_schedule_config(&state.pool, body)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(response))
+}
+
 async fn list_people(State(state): State<AppState>) -> Result<Json<Vec<reports::PersonListItem>>, ApiError> {
     let people = reports::list_people(&state.pool)
         .await
@@ -411,6 +444,102 @@ async fn mark_report_read(
     }
 }
 
+#[derive(Deserialize)]
+struct MrReviewListQuery {
+    status: Option<String>,
+}
+
+async fn list_mr_reviews(
+    State(state): State<AppState>,
+    Query(query): Query<MrReviewListQuery>,
+) -> Result<Json<Vec<MrReviewListItem>>, ApiError> {
+    let status = query.status.as_deref();
+    if let Some(status) = status {
+        if !matches!(status, "draft" | "published" | "ignored") {
+            return Err(ApiError::from(Error::InvalidProjectConfig(
+                "status must be draft, published, or ignored".into(),
+            )));
+        }
+    }
+    let items = mr_reviews::list_mr_reviews(&state.pool, status)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(items))
+}
+
+#[derive(Deserialize)]
+struct UpdateMrReviewRequest {
+    draft_body: String,
+}
+
+async fn update_mr_review(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<UpdateMrReviewRequest>,
+) -> Result<StatusCode, ApiError> {
+    mr_reviews::update_draft(&state.pool, id, &body.draft_body)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn publish_mr_review(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<PublishResponse>, ApiError> {
+    let response = mr_reviews::publish(&state.pool, &state.config, id)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(response))
+}
+
+async fn ignore_mr_review(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    mr_reviews::ignore(&state.pool, id)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct AgentTurnRequest {
+    message: String,
+}
+
+async fn agent_turn_mr_review(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<AgentTurnRequest>,
+) -> Result<Json<AgentTurnResponse>, ApiError> {
+    let message = body.message.trim();
+    if message.is_empty() {
+        return Err(ApiError::from(Error::InvalidProjectConfig(
+            "message is required".into(),
+        )));
+    }
+    let response = mr_reviews::agent_turn(&state.pool, &state.config, id, message)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(response))
+}
+
+async fn mr_scan(
+    State(state): State<AppState>,
+    Path(project_id): Path<i64>,
+    Query(query): Query<MrScanQuery>,
+) -> Result<(StatusCode, Json<CreateRunResponse>), ApiError> {
+    let force = runs::parse_mr_scan_force(query.force.as_deref());
+    let run_id = runs::create_manual_mr_scan_run(&state.pool, project_id, force).await?;
+
+    if let Some(worker) = &state.worker {
+        worker.wake();
+    }
+
+    Ok((StatusCode::ACCEPTED, Json(CreateRunResponse { run_id })))
+}
+
 #[derive(Debug)]
 struct ApiError(Error);
 
@@ -426,13 +555,15 @@ impl IntoResponse for ApiError {
             Error::RunConflict
             | Error::DuplicateDisplayName
             | Error::DuplicateProjectName
-            | Error::IdentityConflict => StatusCode::CONFLICT,
+            | Error::IdentityConflict
+            | Error::MrReviewConflict => StatusCode::CONFLICT,
             Error::UnsupportedRunTrigger(_)
             | Error::InvalidPersonName
             | Error::InvalidIdentityValue
             | Error::InvalidProjectName
             | Error::InvalidProjectConfig(_) => StatusCode::BAD_REQUEST,
             Error::NotFound => StatusCode::NOT_FOUND,
+            Error::AgentFailed(_) => StatusCode::BAD_GATEWAY,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (status, self.0.to_string()).into_response()

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 
 use crate::error::{Error, Result};
+use crate::runs::{self, DEFAULT_MR_REVIEW_SKIP_LABELS};
 
 #[derive(Debug, Deserialize)]
 struct ProjectsFile {
@@ -17,6 +18,9 @@ struct ProjectEntry {
     git_remote_url: Option<String>,
     #[serde(default)]
     default_branches: Vec<String>,
+    #[serde(default)]
+    mr_review_skip_labels: Option<Vec<String>>,
+    mr_review_require_label: Option<String>,
 }
 
 /// A project entry after `repo_path` resolution, ready for provisioning.
@@ -36,6 +40,9 @@ pub struct ProjectInput {
     pub git_remote_url: Option<String>,
     #[serde(default)]
     pub default_branches: Vec<String>,
+    #[serde(default)]
+    pub mr_review_skip_labels: Option<Vec<String>>,
+    pub mr_review_require_label: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -45,6 +52,9 @@ pub struct ProjectUpdateInput {
     pub git_remote_url: Option<String>,
     #[serde(default)]
     pub default_branches: Vec<String>,
+    #[serde(default)]
+    pub mr_review_skip_labels: Option<Vec<String>>,
+    pub mr_review_require_label: Option<String>,
 }
 
 /// Import YAML when the DB has no projects yet; otherwise SQLite is the source of truth.
@@ -185,6 +195,8 @@ pub async fn load_from_yaml(
                 repo_path: entry.repo_path.clone(),
                 git_remote_url: entry.git_remote_url.clone(),
                 default_branches,
+                mr_review_skip_labels: entry.mr_review_skip_labels.clone(),
+                mr_review_require_label: entry.mr_review_require_label.clone(),
             },
         )?;
         upsert_project_row(pool, &normalized).await?;
@@ -207,6 +219,8 @@ struct NormalizedProject {
     repo_path_str: String,
     git_remote_url: Option<String>,
     default_branches: Vec<String>,
+    mr_review_skip_labels: String,
+    mr_review_require_label: Option<String>,
     health: &'static str,
     health_reason: Option<&'static str>,
 }
@@ -231,9 +245,10 @@ async fn upsert_project_row(pool: &SqlitePool, project: &NormalizedProject) -> R
         INSERT INTO projects (
             name, repo_path, git_remote_url, is_git_repo, default_branch,
             health, health_reason, source_type, default_branches,
+            mr_review_skip_labels, mr_review_require_label,
             updated_at
         )
-        VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, datetime('now'))
+        VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(name) DO UPDATE SET
             repo_path = excluded.repo_path,
             git_remote_url = excluded.git_remote_url,
@@ -243,6 +258,8 @@ async fn upsert_project_row(pool: &SqlitePool, project: &NormalizedProject) -> R
             health_reason = excluded.health_reason,
             source_type = excluded.source_type,
             default_branches = excluded.default_branches,
+            mr_review_skip_labels = excluded.mr_review_skip_labels,
+            mr_review_require_label = excluded.mr_review_require_label,
             updated_at = datetime('now')
         "#,
     )
@@ -254,6 +271,8 @@ async fn upsert_project_row(pool: &SqlitePool, project: &NormalizedProject) -> R
     .bind(project.health_reason)
     .bind(&project.source_type)
     .bind(&default_branches_json)
+    .bind(&project.mr_review_skip_labels)
+    .bind(&project.mr_review_require_label)
     .execute(pool)
     .await
     .map_err(Error::Database)?;
@@ -294,9 +313,32 @@ fn normalize_project_input(data_dir: &Path, input: &ProjectInput) -> Result<Norm
         repo_path_str,
         git_remote_url,
         default_branches,
+        mr_review_skip_labels: serialize_mr_review_skip_labels(input.mr_review_skip_labels.as_ref()),
+        mr_review_require_label: normalize_optional_string(input.mr_review_require_label.as_deref()),
         health,
         health_reason,
     })
+}
+
+fn serialize_mr_review_skip_labels(labels: Option<&Vec<String>>) -> String {
+    match labels {
+        Some(values) => {
+            let normalized = normalize_default_branches(values);
+            serde_json::to_string(&normalized)
+                .unwrap_or_else(|_| default_mr_review_skip_labels_json())
+        }
+        None => default_mr_review_skip_labels_json(),
+    }
+}
+
+pub fn default_mr_review_skip_labels_json() -> String {
+    serde_json::to_string(
+        &DEFAULT_MR_REVIEW_SKIP_LABELS
+            .iter()
+            .map(|label| (*label).to_string())
+            .collect::<Vec<_>>(),
+    )
+    .unwrap_or_else(|_| r#"["wip","do-not-review","no-ai-review"]"#.to_string())
 }
 
 fn normalize_project_update(
@@ -312,6 +354,8 @@ fn normalize_project_update(
             repo_path: input.repo_path.clone(),
             git_remote_url: input.git_remote_url.clone(),
             default_branches: input.default_branches.clone(),
+            mr_review_skip_labels: input.mr_review_skip_labels.clone(),
+            mr_review_require_label: input.mr_review_require_label.clone(),
         },
     )
 }
@@ -354,6 +398,8 @@ struct ProjectRow {
     health_reason: Option<String>,
     is_git_repo: i64,
     source_type: String,
+    mr_review_skip_labels: String,
+    mr_review_require_label: Option<String>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -370,11 +416,14 @@ pub struct ProjectEngineer {
 
 #[derive(Debug, Serialize)]
 pub struct ProjectListItem {
+    pub id: i64,
     pub name: String,
     pub repo_path: String,
     pub git_remote_url: Option<String>,
     pub default_branch: Option<String>,
     pub default_branches: Vec<String>,
+    pub mr_review_skip_labels: Vec<String>,
+    pub mr_review_require_label: Option<String>,
     pub health: String,
     pub health_reason: Option<String>,
     pub is_git_repo: i64,
@@ -403,7 +452,8 @@ pub async fn list_project_details(pool: &SqlitePool, data_dir: &Path) -> Result<
     let rows = sqlx::query_as::<_, ProjectRow>(
         r#"
         SELECT id, name, repo_path, git_remote_url, default_branch, default_branches,
-               health, health_reason, is_git_repo, source_type
+               health, health_reason, is_git_repo, source_type,
+               mr_review_skip_labels, mr_review_require_label
         FROM projects
         ORDER BY name
         "#,
@@ -419,11 +469,14 @@ pub async fn list_project_details(pool: &SqlitePool, data_dir: &Path) -> Result<
             parse_default_branches(row.default_branches.as_deref(), row.default_branch.as_deref());
         let engineers = list_project_engineers(pool, row.id).await?;
         projects.push(ProjectListItem {
+            id: row.id,
             name: row.name,
             repo_path: display_repo_path(data_dir, &row.repo_path),
             git_remote_url: row.git_remote_url,
             default_branch: row.default_branch,
             default_branches,
+            mr_review_skip_labels: runs::parse_mr_review_skip_labels(&row.mr_review_skip_labels),
+            mr_review_require_label: row.mr_review_require_label,
             health: row.health,
             health_reason: row.health_reason,
             is_git_repo: row.is_git_repo,

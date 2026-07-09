@@ -1,7 +1,7 @@
 use serde::Serialize;
 use sqlx::SqlitePool;
 
-use crate::schedule::{compute_next_run_at, format_schedule_label, load_schedule_config};
+use crate::schedule::{compute_next_run_at, format_mr_poll_label, format_schedule_label, load_schedule_config};
 use crate::Error;
 
 #[derive(Debug, Serialize)]
@@ -17,6 +17,7 @@ pub struct DashboardStats {
     pub person_count: i64,
     pub unread_count: i64,
     pub pending_count: i64,
+    pub mr_draft_count: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -34,6 +35,8 @@ pub struct DashboardSchedule {
     pub label: String,
     pub next_run_at: Option<String>,
     pub enabled: bool,
+    pub mr_poll_interval_min: i64,
+    pub mr_poll_label: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -91,6 +94,11 @@ pub async fn load_dashboard(pool: &SqlitePool) -> Result<DashboardResponse, Erro
             "SELECT COUNT(*) FROM pending_items WHERE status = 'open'",
         )
         .await?,
+        mr_draft_count: count_scalar(
+            pool,
+            "SELECT COUNT(*) FROM mr_reviews WHERE status = 'draft'",
+        )
+        .await?,
     };
 
     let recent_rows = sqlx::query_as::<_, RecentReportRow>(
@@ -132,6 +140,8 @@ pub async fn load_dashboard(pool: &SqlitePool) -> Result<DashboardResponse, Erro
         label: format_schedule_label(&schedule_config),
         next_run_at: compute_next_run_at(&schedule_config)?,
         enabled: schedule_config.enabled != 0,
+        mr_poll_interval_min: schedule_config.mr_poll_interval_min,
+        mr_poll_label: format_mr_poll_label(schedule_config.mr_poll_interval_min),
     };
 
     Ok(DashboardResponse {

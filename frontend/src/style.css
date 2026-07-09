@@ -249,7 +249,7 @@ body {
 
 .dashboard-stats {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 0.75rem;
   margin-bottom: 1.25rem;
 }
@@ -259,6 +259,17 @@ body {
   border: 1px solid #e5e7eb;
   border-radius: 0.5rem;
   padding: 0.875rem;
+}
+
+.stat-card-button {
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.stat-card-button:hover {
+  border-color: #c4b5fd;
+  box-shadow: 0 1px 3px rgba(124, 58, 237, 0.12);
 }
 
 .stat-label {
@@ -278,6 +289,26 @@ body {
 
 .stat-value.accent-warning {
   color: #d97706;
+}
+
+.stat-value.accent-mr {
+  color: #7c3aed;
+}
+
+.nav-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  margin-left: 0.375rem;
+  padding: 0 0.375rem;
+  border-radius: 999px;
+  background: #7c3aed;
+  color: white;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  vertical-align: middle;
 }
 
 .dashboard-panels {
@@ -1153,6 +1184,415 @@ body {
   cursor: pointer;
 }
 
+.schedule-section {
+  margin-bottom: 1rem;
+}
+
+.schedule-section:last-child {
+  margin-bottom: 0;
+}
+
+.schedule-section-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.5rem;
+}
+
+.schedule-section-mr {
+  padding-top: 0.875rem;
+  border-top: 1px solid #e5e7eb;
+}
+
+.schedule-mr-poll-edit {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.625rem;
+  flex-wrap: wrap;
+}
+
+.schedule-mr-poll-label {
+  font-size: 0.8125rem;
+  color: #374151;
+  font-weight: 600;
+}
+
+.schedule-mr-poll-input {
+  width: 5.5rem;
+  border: 1px solid #d1d5db;
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.5rem;
+  font: inherit;
+}
+
+.schedule-save-btn {
+  border: 0;
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  background: #7c3aed;
+  color: white;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.schedule-save-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.schedule-field-hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.75rem;
+  color: #9ca3af;
+  line-height: 1.4;
+}
+
+.project-field-mr-gates {
+  border-top: 1px dashed #e5e7eb;
+  padding-top: 0.875rem;
+  margin-top: 0.25rem;
+}
+
+.project-list-mr-scan {
+  border: 1px solid #c4b5fd;
+  border-radius: 0.375rem;
+  padding: 0.125rem 0.5rem;
+  background: #f5f3ff;
+  color: #6d28d9;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.project-list-mr-scan:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.project-list-mr-scan-force {
+  border: 1px solid #d4d4d8;
+  border-radius: 0.35rem;
+  padding: 0.15rem 0.4rem;
+  margin-left: 0.25rem;
+  background: #fafafa;
+  color: #52525b;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.project-list-mr-scan-force:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.project-settings-mr-scan {
+  margin-right: 0.5rem;
+  border: 1px solid #c4b5fd;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.875rem;
+  background: #f5f3ff;
+  color: #6d28d9;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.project-settings-mr-scan:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.project-settings-mr-scan-force {
+  font-size: 0.85rem;
+  padding: 0.5rem 0.875rem;
+  border: 1px solid #d4d4d8;
+  border-radius: 0.5rem;
+  background: #fafafa;
+  color: #52525b;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.project-settings-mr-scan-force:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.mr-inbox {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-height: 100%;
+}
+
+.mr-inbox-header h2,
+.mr-inbox-title {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.mr-inbox-subtitle {
+  margin: 0.25rem 0 0;
+  color: #6b7280;
+  font-size: 0.875rem;
+}
+
+.mr-inbox-body {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 1rem;
+  min-height: 520px;
+}
+
+.mr-inbox-list,
+.mr-inbox-detail {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.75rem;
+  overflow: hidden;
+}
+
+.mr-filter-tabs {
+  display: flex;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.mr-filter-tab {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  padding: 0.75rem 0.5rem;
+  color: #6b7280;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mr-filter-tab.active {
+  color: #6d28d9;
+  box-shadow: inset 0 -2px 0 #7c3aed;
+}
+
+.mr-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 640px;
+  overflow-y: auto;
+}
+
+.mr-list-empty,
+.mr-detail-empty {
+  padding: 2rem 1rem;
+  color: #6b7280;
+  text-align: center;
+}
+
+.mr-list-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid #f3f4f6;
+  background: white;
+  padding: 0.875rem 1rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mr-list-item:hover {
+  background: #faf5ff;
+}
+
+.mr-list-item.active {
+  background: #f5f3ff;
+  box-shadow: inset 3px 0 0 #7c3aed;
+}
+
+.mr-list-title {
+  font-weight: 600;
+  color: #111827;
+}
+
+.mr-list-meta,
+.mr-list-date {
+  font-size: 0.8125rem;
+  color: #6b7280;
+}
+
+.mr-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem;
+  min-height: 100%;
+}
+
+.mr-detail-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.mr-detail-title {
+  margin: 0;
+  font-size: 1.125rem;
+}
+
+.mr-detail-meta {
+  margin: 0.25rem 0 0;
+  color: #6b7280;
+  font-size: 0.875rem;
+}
+
+.mr-session-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.625rem;
+  border-radius: 999px;
+  background: #ede9fe;
+  color: #5b21b6;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mr-session-badge.muted {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.mr-editor-label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #374151;
+}
+
+.mr-editor {
+  width: 100%;
+  min-height: 280px;
+  flex: 1;
+  border: 1px solid #d1d5db;
+  border-radius: 0.5rem;
+  padding: 0.875rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.mr-editor:focus {
+  outline: 2px solid #c4b5fd;
+  border-color: #a78bfa;
+}
+
+.mr-detail-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.mr-btn-primary,
+.mr-btn-secondary {
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mr-btn-primary {
+  border: 0;
+  background: #7c3aed;
+  color: white;
+}
+
+.mr-btn-secondary {
+  border: 1px solid #d1d5db;
+  background: white;
+  color: #374151;
+}
+
+.mr-btn-primary:disabled,
+.mr-btn-secondary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.mr-chat {
+  border-top: 1px solid #e5e7eb;
+  padding-top: 1rem;
+}
+
+.mr-chat-title {
+  margin: 0 0 0.75rem;
+  font-size: 0.9375rem;
+}
+
+.mr-chat-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  max-height: 220px;
+  overflow-y: auto;
+  margin-bottom: 0.75rem;
+}
+
+.mr-chat-empty,
+.mr-chat-loading {
+  margin: 0;
+  color: #6b7280;
+  font-size: 0.875rem;
+}
+
+.mr-chat-bubble {
+  border-radius: 0.625rem;
+  padding: 0.625rem 0.75rem;
+  max-width: 92%;
+}
+
+.mr-chat-bubble.user {
+  align-self: flex-end;
+  background: #ede9fe;
+}
+
+.mr-chat-bubble.assistant {
+  align-self: flex-start;
+  background: #f3f4f6;
+}
+
+.mr-chat-role {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  color: #6b7280;
+  margin-bottom: 0.25rem;
+}
+
+.mr-chat-text {
+  white-space: pre-wrap;
+  font-size: 0.875rem;
+}
+
+.mr-chat-input-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem;
+  align-items: end;
+}
+
+.mr-chat-input {
+  width: 100%;
+  border: 1px solid #d1d5db;
+  border-radius: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  font: inherit;
+  resize: vertical;
+}
+
 @media (max-width: 900px) {
   .main {
     grid-template-columns: 1fr;
@@ -1172,5 +1612,9 @@ body {
 
   .project-settings-list {
     width: 100%;
+  }
+
+  .mr-inbox-body {
+    grid-template-columns: 1fr;
   }
 }

@@ -17,6 +17,7 @@
    - `run_date`（本次報告日期，`YYYY-MM-DD`）
    - `since`（分析窗口起日，`YYYY-MM-DD`，含當日）
    - `authors`（已歸戶工程師陣列：`email`, `git_name`, `person_id`, `display_name`）
+   - `published_pending_snippets`（可選陣列；相對於 `report_root` 的路徑，例如 `Alice Chen/_pending/mr-42-round-1.md`。後端依 `mr_reviews.status='published'` 預先篩選；未列於此陣列的 `_pending/` 片段**不得**折入週報）
    - `output_contract`（固定為 `output-contract.md`，格式見同目錄 appended 規格）
 3. 若 `mode` 不是 `weekly_batch`，停止並在 stderr 說明（仍 exit 0 除非無法讀 manifest）。
 
@@ -58,10 +59,14 @@
 
 ### 2.2 MR 觀察片段（可選）
 
-若存在 `{report_root}/{person}/_pending/` 下 `.md` 片段（軌道 2 預留）：
+軌道 2 會將觀察片段寫入 `{report_root}/{person}/_pending/`。**僅** manifest 的 `published_pending_snippets` 所列路徑可折入週報（對應 `mr_reviews.status='published'`）；`draft` / `ignored` 的片段必須留在 `_pending/` 不動。
 
-- Read 全部片段，合併進本週分析。
-- 寫完本次報告後，將已消費的片段**搬移**至 `{report_root}/{person}/_pending/_archived/`（若目錄不存在則建立），不要刪除。
+對每位 `{person}`：
+
+1. 從 `published_pending_snippets` 篩出以 `{person}/_pending/` 開頭的 `.md` 路徑（相對於 `report_root`）。
+2. Read 這些片段，合併進本週分析（可併入 `report.md` 與 `summary.md` 的「本週重點」或「協作與 review」）。
+3. 寫完本次報告後，將**已消費**的片段搬移至 `{report_root}/{person}/_pending/_archived/`（若目錄不存在則建立），不要刪除。
+4. **不要** Read 或搬移未列於 `published_pending_snippets` 的 `_pending/` 檔案。
 
 ### 2.3 歷史脈絡（可選）
 

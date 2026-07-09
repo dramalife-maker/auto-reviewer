@@ -4,6 +4,10 @@ import type {
   DashboardResponse,
   HealthResponse,
   LatestReportsResponse,
+  MrReviewAgentTurnResponse,
+  MrReviewItem,
+  MrReviewPublishResponse,
+  MrReviewStatus,
   Person,
   PersonTrendsResponse,
   ProjectListResponse,
@@ -12,6 +16,8 @@ import type {
   ProjectUpdateInput,
   ReloadProjectsResponse,
   RunStatus,
+  ScheduleConfigResponse,
+  ScheduleUpdateInput,
   UnmatchedAuthor,
 } from './types'
 import { apiUrl } from './config'
@@ -122,5 +128,54 @@ export function bindIdentity(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ kind, value, label }),
+  })
+}
+
+export function fetchMrReviews(status?: MrReviewStatus): Promise<MrReviewItem[]> {
+  const query = status ? `?status=${encodeURIComponent(status)}` : ''
+  return request(`/api/mr-reviews${query}`)
+}
+
+export function updateMrReview(id: number, draftBody: string): Promise<void> {
+  return request(`/api/mr-reviews/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ draft_body: draftBody }),
+  })
+}
+
+export function publishMrReview(id: number): Promise<MrReviewPublishResponse> {
+  return request(`/api/mr-reviews/${id}/publish`, { method: 'POST' })
+}
+
+export function ignoreMrReview(id: number): Promise<void> {
+  return request(`/api/mr-reviews/${id}/ignore`, { method: 'POST' })
+}
+
+export function agentTurnMrReview(
+  id: number,
+  message: string,
+): Promise<MrReviewAgentTurnResponse> {
+  return request(`/api/mr-reviews/${id}/agent-turn`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message }),
+  })
+}
+
+export function startMrScan(projectId: number, options?: { force?: boolean }): Promise<CreateRunResponse> {
+  const query = options?.force ? '?force=1' : ''
+  return request(`/api/projects/${projectId}/mr-scan${query}`, { method: 'POST' })
+}
+
+export function fetchSchedule(): Promise<ScheduleConfigResponse> {
+  return request('/api/schedule')
+}
+
+export function updateSchedule(body: ScheduleUpdateInput): Promise<ScheduleConfigResponse> {
+  return request('/api/schedule', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
   })
 }

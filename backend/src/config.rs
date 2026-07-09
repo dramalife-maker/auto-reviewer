@@ -19,6 +19,23 @@ pub enum ReviewerAgent {
     Cursor,
 }
 
+impl ReviewerAgent {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReviewerAgent::Claude => "claude",
+            ReviewerAgent::Cursor => "cursor",
+        }
+    }
+
+    pub fn parse_db_value(raw: &str) -> Self {
+        if raw.eq_ignore_ascii_case("claude") {
+            ReviewerAgent::Claude
+        } else {
+            ReviewerAgent::Cursor
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     pub data_dir: PathBuf,

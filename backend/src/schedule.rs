@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
 use chrono::{Datelike, Duration, FixedOffset, NaiveDateTime, NaiveTime, Utc, Weekday};
+use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tokio_cron_scheduler::{Job, JobScheduler};
 use tracing::{error, info};
 
-use crate::runs::create_scheduled_run;
+use crate::runs::{create_mr_poll_run, create_scheduled_run};
 use crate::worker::RunWorker;
 use crate::Error;
 
@@ -16,13 +17,14 @@ pub struct ScheduleConfigRow {
     pub weekday: Option<i64>,
     pub run_time: String,
     pub tz_offset_min: i64,
+    pub mr_poll_interval_min: i64,
     pub per_project_timeout_sec: i64,
     pub max_concurrency: i64,
 }
 
 pub async fn load_schedule_config(pool: &SqlitePool) -> Result<ScheduleConfigRow, Error> {
     sqlx::query_as::<_, ScheduleConfigRow>(
-        "SELECT enabled, cadence, weekday, run_time, tz_offset_min,
+        "SELECT enabled, cadence, weekday, run_time, tz_offset_min, mr_poll_interval_min,
                 per_project_timeout_sec, max_concurrency
          FROM schedule_config WHERE id = 1",
     )
@@ -52,19 +54,76 @@ pub async fn trigger_scheduled_run(pool: &SqlitePool) -> Result<Option<i64>, Err
     }
 }
 
-pub async fn start_scheduler(pool: SqlitePool, worker: Arc<RunWorker>) -> Result<(), Error> {
-    let config = load_schedule_config(&pool).await?;
-    if config.enabled == 0 {
-        info!("schedule disabled; cron not registered");
-        return Ok(());
+pub async fn trigger_mr_poll_run(pool: &SqlitePool) -> Result<Option<i64>, Error> {
+    let config = load_schedule_config(pool).await?;
+    if config.mr_poll_interval_min <= 0 {
+        return Ok(None);
     }
 
-    let cron = build_cron_expression(&config)?;
+    match create_mr_poll_run(pool).await {
+        Ok(run_id) => Ok(Some(run_id)),
+        Err(Error::RunConflict) => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+pub async fn start_scheduler(pool: SqlitePool, worker: Arc<RunWorker>) -> Result<(), Error> {
+    let config = load_schedule_config(&pool).await?;
     let tz = schedule_timezone(&config)?;
     let scheduler = JobScheduler::new().await.map_err(|err| {
         Error::SummaryParse(format!("scheduler init: {err}"))
     })?;
 
+    if config.enabled != 0 {
+        let cron = build_cron_expression(&config)?;
+        let job_pool = pool.clone();
+        let job_worker = worker.clone();
+        scheduler
+            .add(Job::new_async_tz(cron.as_str(), tz, move |_uuid, _lock| {
+                let pool = job_pool.clone();
+                let worker = job_worker.clone();
+                Box::pin(async move {
+                    match trigger_scheduled_run(&pool).await {
+                        Ok(Some(_run_id)) => worker.wake(),
+                        Ok(None) => {}
+                        Err(err) => error!("scheduled run failed: {err}"),
+                    }
+                })
+            })
+            .map_err(|err| Error::SummaryParse(format!("scheduler job: {err}")))?)
+            .await
+            .map_err(|err| Error::SummaryParse(format!("scheduler add job: {err}")))?;
+        info!(
+            "weekly schedule cron registered: {cron} (UTC offset {} min)",
+            config.tz_offset_min
+        );
+    } else {
+        info!("weekly schedule disabled; weekly cron not registered");
+    }
+
+    start_mr_poll_scheduler(&scheduler, &pool, worker, &config, tz).await?;
+
+    scheduler
+        .start()
+        .await
+        .map_err(|err| Error::SummaryParse(format!("scheduler start: {err}")))?;
+
+    Ok(())
+}
+
+async fn start_mr_poll_scheduler(
+    scheduler: &JobScheduler,
+    pool: &SqlitePool,
+    worker: Arc<RunWorker>,
+    config: &ScheduleConfigRow,
+    tz: FixedOffset,
+) -> Result<(), Error> {
+    if config.mr_poll_interval_min <= 0 {
+        info!("mr poll disabled (mr_poll_interval_min <= 0)");
+        return Ok(());
+    }
+
+    let cron = build_mr_poll_cron_expression(config.mr_poll_interval_min)?;
     let job_pool = pool.clone();
     let job_worker = worker.clone();
     scheduler
@@ -72,23 +131,40 @@ pub async fn start_scheduler(pool: SqlitePool, worker: Arc<RunWorker>) -> Result
             let pool = job_pool.clone();
             let worker = job_worker.clone();
             Box::pin(async move {
-                match trigger_scheduled_run(&pool).await {
+                match trigger_mr_poll_run(&pool).await {
                     Ok(Some(_run_id)) => worker.wake(),
                     Ok(None) => {}
-                    Err(err) => error!("scheduled run failed: {err}"),
+                    Err(err) => error!("mr poll run failed: {err}"),
                 }
             })
-        }).map_err(|err| Error::SummaryParse(format!("scheduler job: {err}")))?)
+        })
+        .map_err(|err| Error::SummaryParse(format!("mr poll scheduler job: {err}")))?)
         .await
-        .map_err(|err| Error::SummaryParse(format!("scheduler add job: {err}")))?;
+        .map_err(|err| Error::SummaryParse(format!("mr poll scheduler add job: {err}")))?;
 
-    scheduler
-        .start()
-        .await
-        .map_err(|err| Error::SummaryParse(format!("scheduler start: {err}")))?;
-
-    info!("schedule cron registered: {cron} (UTC offset {} min)", config.tz_offset_min);
+    info!(
+        "mr poll cron registered: {cron} every {} min (UTC offset {} min)",
+        config.mr_poll_interval_min, config.tz_offset_min
+    );
     Ok(())
+}
+
+fn build_mr_poll_cron_expression(interval_min: i64) -> Result<String, Error> {
+    if interval_min <= 0 {
+        return Err(Error::SummaryParse(
+            "mr_poll_interval_min must be positive".into(),
+        ));
+    }
+    if interval_min >= 60 {
+        if interval_min % 60 != 0 {
+            return Err(Error::SummaryParse(format!(
+                "mr_poll_interval_min must divide 60 when >= 60: {interval_min}"
+            )));
+        }
+        let hours = interval_min / 60;
+        return Ok(format!("0 0 */{hours} * * *"));
+    }
+    Ok(format!("0 */{interval_min} * * * *"))
 }
 
 fn build_cron_expression(config: &ScheduleConfigRow) -> Result<String, Error> {
@@ -124,6 +200,72 @@ pub fn format_schedule_label(config: &ScheduleConfigRow) -> String {
     let weekday_names = ["一", "二", "三", "四", "五", "六", "日"];
     let weekday = config.weekday.unwrap_or(0).clamp(0, 6) as usize;
     format!("每週{} {}", weekday_names[weekday], config.run_time)
+}
+
+pub fn format_mr_poll_label(interval_min: i64) -> String {
+    if interval_min <= 0 {
+        return "已停用".to_string();
+    }
+    if interval_min < 60 {
+        return format!("每 {interval_min} 分鐘");
+    }
+    if interval_min % 60 == 0 {
+        let hours = interval_min / 60;
+        return format!("每 {hours} 小時");
+    }
+    format!("每 {interval_min} 分鐘")
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ScheduleUpdateInput {
+    pub mr_poll_interval_min: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ScheduleConfigResponse {
+    pub enabled: bool,
+    pub cadence: String,
+    pub weekday: Option<i64>,
+    pub run_time: String,
+    pub mr_poll_interval_min: i64,
+    pub per_project_timeout_sec: i64,
+    pub max_concurrency: i64,
+    pub weekly_label: String,
+    pub mr_poll_label: String,
+    pub next_weekly_run_at: Option<String>,
+}
+
+pub async fn get_schedule_config_response(
+    pool: &SqlitePool,
+) -> Result<ScheduleConfigResponse, Error> {
+    let config = load_schedule_config(pool).await?;
+    Ok(ScheduleConfigResponse {
+        enabled: config.enabled != 0,
+        cadence: config.cadence.clone(),
+        weekday: config.weekday,
+        run_time: config.run_time.clone(),
+        mr_poll_interval_min: config.mr_poll_interval_min,
+        per_project_timeout_sec: config.per_project_timeout_sec,
+        max_concurrency: config.max_concurrency,
+        weekly_label: format_schedule_label(&config),
+        mr_poll_label: format_mr_poll_label(config.mr_poll_interval_min),
+        next_weekly_run_at: compute_next_run_at(&config)?,
+    })
+}
+
+pub async fn update_schedule_config(
+    pool: &SqlitePool,
+    input: ScheduleUpdateInput,
+) -> Result<ScheduleConfigResponse, Error> {
+    if let Some(interval) = input.mr_poll_interval_min {
+        build_mr_poll_cron_expression(interval)?;
+        sqlx::query("UPDATE schedule_config SET mr_poll_interval_min = ? WHERE id = 1")
+            .bind(interval)
+            .execute(pool)
+            .await
+            .map_err(Error::Database)?;
+    }
+    get_schedule_config_response(pool).await
 }
 
 pub fn compute_next_run_at(config: &ScheduleConfigRow) -> Result<Option<String>, Error> {
@@ -194,6 +336,7 @@ mod tests {
             weekday: Some(0),
             run_time: "09:00".into(),
             tz_offset_min: 480,
+            mr_poll_interval_min: 60,
             per_project_timeout_sec: 600,
             max_concurrency: 2,
         }
@@ -222,6 +365,22 @@ mod tests {
     }
 
     #[test]
+    fn build_mr_poll_cron_every_minute() {
+        assert_eq!(
+            build_mr_poll_cron_expression(1).expect("cron"),
+            "0 */1 * * * *"
+        );
+    }
+
+    #[test]
+    fn build_mr_poll_cron_hourly() {
+        assert_eq!(
+            build_mr_poll_cron_expression(60).expect("cron"),
+            "0 0 */1 * * *"
+        );
+    }
+
+    #[test]
     fn default_timezone_is_taipei() {
         let tz = schedule_timezone(&sample_config()).expect("tz");
         assert_eq!(tz, FixedOffset::east_opt(8 * 3600).unwrap());
@@ -230,7 +389,7 @@ mod tests {
     #[test]
     fn invalid_timezone_offset_is_rejected() {
         let mut config = sample_config();
-        config.tz_offset_min = 100_000; // out of ±24h range
+        config.tz_offset_min = 100_000;
         assert!(schedule_timezone(&config).is_err());
     }
 }

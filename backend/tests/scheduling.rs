@@ -1,5 +1,5 @@
 use reviewer_server::db::init_pool;
-use reviewer_server::runs::create_scheduled_run;
+use reviewer_server::runs::{create_mr_poll_run, create_scheduled_run};
 use reviewer_server::schedule::{load_schedule_config, trigger_scheduled_run};
 
 #[tokio::test]
@@ -40,6 +40,60 @@ async fn scheduled_run_creates_schedule_trigger() {
         .await
         .expect("trigger");
     assert_eq!(trigger, "schedule");
+}
+
+#[tokio::test]
+async fn mr_poll_skips_project_locked_by_weekly_track() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pool = init_pool(temp.path()).await.expect("init pool");
+
+    for name in ["alpha", "beta"] {
+        sqlx::query(
+            "INSERT INTO projects (name, repo_path, is_git_repo) VALUES (?, ?, 1)",
+        )
+        .bind(name)
+        .bind(temp.path().join(format!("repos/{name}")).display().to_string())
+        .execute(&pool)
+        .await
+        .expect("insert project");
+    }
+
+    let alpha_id: i64 = sqlx::query_scalar("SELECT id FROM projects WHERE name = 'alpha'")
+        .fetch_one(&pool)
+        .await
+        .expect("alpha id");
+    let beta_id: i64 = sqlx::query_scalar("SELECT id FROM projects WHERE name = 'beta'")
+        .fetch_one(&pool)
+        .await
+        .expect("beta id");
+
+    let run_result = sqlx::query(
+        "INSERT INTO runs (trigger, status, project_total) VALUES ('schedule', 'running', 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert run");
+    let weekly_run_id = run_result.last_insert_rowid();
+
+    sqlx::query(
+        "INSERT INTO run_projects (run_id, project_id, state) VALUES (?, ?, 'running')",
+    )
+    .bind(weekly_run_id)
+    .bind(alpha_id)
+    .execute(&pool)
+    .await
+    .expect("lock alpha");
+
+    let mr_run_id = create_mr_poll_run(&pool).await.expect("mr poll run");
+
+    let enqueued: Vec<i64> = sqlx::query_scalar(
+        "SELECT project_id FROM run_projects WHERE run_id = ? ORDER BY project_id",
+    )
+    .bind(mr_run_id)
+    .fetch_all(&pool)
+    .await
+    .expect("enqueued");
+    assert_eq!(enqueued, vec![beta_id]);
 }
 
 #[tokio::test]

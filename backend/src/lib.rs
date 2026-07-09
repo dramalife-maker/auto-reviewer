@@ -4,6 +4,7 @@ pub mod db;
 pub mod error;
 pub mod executor;
 pub mod identity;
+pub mod mr_reviews;
 pub mod person_trends;
 pub mod projects;
 pub mod reports;

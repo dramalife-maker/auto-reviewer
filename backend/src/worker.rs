@@ -3,16 +3,18 @@ use std::sync::Arc;
 
 use sqlx::SqlitePool;
 use tokio::sync::{Notify, Semaphore};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::config::AppConfig;
-use crate::executor::{ExecuteOutcome, execute_weekly_batch};
+use crate::executor::{execute_mr_review, execute_weekly_batch, parse_agent_session_id, ExecuteOutcome};
+use crate::mr_reviews::{self, run_triage_script};
 use crate::runs::{
-    fetch_next_queued_run_project, finalize_run_if_complete, finish_run_project,
-    load_schedule_settings, mark_run_project_running, RunProjectRow,
+    self, eligible_mrs_path, fetch_next_queued_run_project, finalize_run_if_complete,
+    finish_run_project, load_mr_poll_project, load_schedule_settings, mark_run_project_running,
+    write_mr_poll_manifest, RunProjectRow,
 };
 use crate::summary::ingest_project_summaries;
-use crate::worktree::{supply_worktree, WorktreeKind};
+use crate::worktree::{provision_mr_worktree, supply_worktree, WorktreeKind};
 
 #[derive(Clone)]
 pub struct RunWorker {
@@ -112,6 +114,10 @@ pub async fn process_run_project(
     job: crate::runs::RunProjectRow,
     timeout_sec: u64,
 ) -> crate::Result<()> {
+    if runs::is_mr_trigger(&job.trigger) {
+        return process_mr_run_project(pool, config, job, timeout_sec).await;
+    }
+
     mark_run_project_running(pool, job.id).await?;
 
     let project = crate::runs::ProjectRow {
@@ -136,8 +142,6 @@ pub async fn process_run_project(
         {
             Ok(result) => result,
             Err(err) => {
-                // A spawn / execution error must not leave the project stuck in
-                // `running`; mark it failed and let the run finalize.
                 let reason = err.to_string();
                 finish_run_project(pool, job.id, "failed", 0, Some(&reason)).await?;
                 finalize_run_if_complete(pool, job.run_id).await?;
@@ -173,6 +177,259 @@ pub async fn process_run_project(
         project = %project.name,
         state,
         "run project finished"
+    );
+
+    Ok(())
+}
+
+async fn process_mr_run_project(
+    pool: &SqlitePool,
+    config: &AppConfig,
+    job: RunProjectRow,
+    timeout_sec: u64,
+) -> crate::Result<()> {
+    mark_run_project_running(pool, job.id).await?;
+    let started = std::time::Instant::now();
+
+    let mr_project = match load_mr_poll_project(pool, job.project_id).await? {
+        Some(project) => project,
+        None => {
+            finish_run_project(pool, job.id, "failed", 0, Some("project not found")).await?;
+            finalize_run_if_complete(pool, job.run_id).await?;
+            return Ok(());
+        }
+    };
+
+    let resident_dir = match resolve_working_dir(pool, config, &job).await {
+        Ok(dir) => dir,
+        Err(reason) => {
+            finish_run_project(pool, job.id, "failed", 0, Some(&reason)).await?;
+            finalize_run_if_complete(pool, job.run_id).await?;
+            info!(run_id = job.run_id, project = %job.name, "mr scan skipped: {reason}");
+            return Ok(());
+        }
+    };
+
+    let resident_str = resident_dir.display().to_string();
+    let manifest_path = match write_mr_poll_manifest(
+        config.data_dir(),
+        job.run_id,
+        &mr_project,
+        &resident_str,
+        None,
+        None,
+    )
+    .await
+    {
+        Ok(path) => path,
+        Err(err) => {
+            let reason = err.to_string();
+            finish_run_project(pool, job.id, "failed", 0, Some(&reason)).await?;
+            finalize_run_if_complete(pool, job.run_id).await?;
+            return Ok(());
+        }
+    };
+
+    if let Err(reason) = run_triage_script(config, &manifest_path, &resident_dir).await {
+        finish_run_project(pool, job.id, "failed", 0, Some(&reason)).await?;
+        finalize_run_if_complete(pool, job.run_id).await?;
+        error!(run_id = job.run_id, project = %job.name, "mr triage failed: {reason}");
+        return Ok(());
+    }
+
+    let eligible_path = eligible_mrs_path(config.data_dir(), job.run_id, job.project_id);
+    let eligible_file = match mr_reviews::read_eligible_mrs(&eligible_path) {
+        Ok(file) => file,
+        Err(reason) => {
+            finish_run_project(pool, job.id, "failed", 0, Some(&reason)).await?;
+            finalize_run_if_complete(pool, job.run_id).await?;
+            return Ok(());
+        }
+    };
+
+    if eligible_file.eligible.is_empty() {
+        let duration_sec = started.elapsed().as_secs() as i64;
+        finish_run_project(pool, job.id, "done", duration_sec, None).await?;
+        finalize_run_if_complete(pool, job.run_id).await?;
+        info!(run_id = job.run_id, project = %job.name, "mr scan finished with no eligible MRs");
+        return Ok(());
+    }
+
+    let force = job.mr_scan_force != 0;
+    let blocked = match mr_reviews::load_inbox_blocked_rounds(pool, job.project_id).await {
+        Ok(blocked) => blocked,
+        Err(err) => {
+            let reason = err.to_string();
+            finish_run_project(pool, job.id, "failed", 0, Some(&reason)).await?;
+            finalize_run_if_complete(pool, job.run_id).await?;
+            error!(run_id = job.run_id, project = %job.name, "inbox gate load failed: {reason}");
+            return Ok(());
+        }
+    };
+    let (eligible_to_run, inbox_skipped) = mr_reviews::filter_eligible_by_inbox(
+        &eligible_file.eligible,
+        &blocked,
+        force,
+    );
+    if let Err(reason) = mr_reviews::persist_inbox_gate_result(
+        &eligible_path,
+        &eligible_file,
+        &eligible_to_run,
+        &inbox_skipped,
+    ) {
+        warn!(
+            run_id = job.run_id,
+            project = %job.name,
+            "failed to persist inbox gate result: {reason}"
+        );
+    }
+    for skipped in &inbox_skipped {
+        warn!(
+            run_id = job.run_id,
+            project = %job.name,
+            mr_iid = skipped.mr.mr_iid,
+            review_round = skipped.mr.review_round,
+            skip_reason = %skipped.skip_reason,
+            "mr inbox gate skipped eligible MR"
+        );
+    }
+
+    if eligible_to_run.is_empty() {
+        let duration_sec = started.elapsed().as_secs() as i64;
+        finish_run_project(pool, job.id, "done", duration_sec, None).await?;
+        finalize_run_if_complete(pool, job.run_id).await?;
+        info!(
+            run_id = job.run_id,
+            project = %job.name,
+            inbox_skipped = inbox_skipped.len(),
+            "mr scan finished with no MRs to run after inbox gate"
+        );
+        return Ok(());
+    }
+
+    let agent = config.reviewer_agent();
+    let draft_dir = runs::mr_poll_draft_dir(config.data_dir(), job.run_id, job.project_id);
+    let mut had_failure = false;
+    let mut had_timeout = false;
+
+    for eligible in &eligible_to_run {
+        let mr_worktree = match provision_mr_worktree(
+            std::path::Path::new(&job.repo_path),
+            &eligible.source_branch,
+        )
+        .await
+        {
+            Ok(dir) => dir,
+            Err(err) => {
+                warn!(
+                    run_id = job.run_id,
+                    project = %job.name,
+                    mr_iid = eligible.mr_iid,
+                    branch = %eligible.source_branch,
+                    "mr worktree provision failed: {err}"
+                );
+                had_failure = true;
+                continue;
+            }
+        };
+
+        let manifest_path = match write_mr_poll_manifest(
+            config.data_dir(),
+            job.run_id,
+            &mr_project,
+            &mr_worktree.display().to_string(),
+            None,
+            Some(eligible.mr_iid),
+        )
+        .await
+        {
+            Ok(path) => path,
+            Err(err) => {
+                warn!(
+                    run_id = job.run_id,
+                    project = %job.name,
+                    mr_iid = eligible.mr_iid,
+                    "mr manifest write failed: {err}"
+                );
+                had_failure = true;
+                continue;
+            }
+        };
+
+        let result = execute_mr_review(
+            config,
+            &mr_worktree,
+            &manifest_path,
+            timeout_sec,
+            agent,
+        )
+        .await;
+
+        match result.outcome {
+            ExecuteOutcome::Success => {
+                let session_id = parse_agent_session_id(&result.stdout, agent);
+                if session_id.is_none() {
+                    warn!(
+                        run_id = job.run_id,
+                        project = %job.name,
+                        mr_iid = eligible.mr_iid,
+                        "mr scan succeeded but no agent session id in stdout"
+                    );
+                }
+                if let Err(err) = mr_reviews::upsert_from_draft_dir(
+                    pool,
+                    job.project_id,
+                    &draft_dir,
+                    session_id.as_deref(),
+                    agent,
+                    force,
+                )
+                .await
+                {
+                    warn!(
+                        run_id = job.run_id,
+                        project = %job.name,
+                        mr_iid = eligible.mr_iid,
+                        "mr draft ingest failed: {err}"
+                    );
+                    had_failure = true;
+                }
+            }
+            ExecuteOutcome::SkippedTimeout => {
+                had_timeout = true;
+            }
+            ExecuteOutcome::Failed => {
+                had_failure = true;
+                if let Some(reason) = result.error.as_deref() {
+                    warn!(
+                        run_id = job.run_id,
+                        project = %job.name,
+                        mr_iid = eligible.mr_iid,
+                        "mr review subprocess failed: {reason}"
+                    );
+                }
+            }
+        }
+    }
+
+    let duration_sec = started.elapsed().as_secs() as i64;
+    let (state, error): (&str, Option<String>) = if had_timeout {
+        ("skipped_timeout", None)
+    } else if had_failure {
+        ("failed", Some("one or more MR reviews failed".into()))
+    } else {
+        ("done", None)
+    };
+
+    finish_run_project(pool, job.id, state, duration_sec, error.as_deref()).await?;
+    finalize_run_if_complete(pool, job.run_id).await?;
+
+    info!(
+        run_id = job.run_id,
+        project = %job.name,
+        state,
+        eligible = eligible_to_run.len(),
+        "mr scan finished"
     );
 
     Ok(())

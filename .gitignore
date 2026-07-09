@@ -10,5 +10,9 @@ node_modules/
 frontend/dist/
 data/
 
+# Python
+__pycache__/
+*.pyc
+
 # Local project list (use projects.yaml.example as template)
 projects.yaml

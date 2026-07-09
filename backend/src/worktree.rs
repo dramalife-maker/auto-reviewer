@@ -299,6 +299,14 @@ pub async fn supply_worktree(
     Ok(dir)
 }
 
+/// On-demand merge-request worktree for `source_branch` (fetch + add or reuse).
+pub async fn provision_mr_worktree(
+    repo_path: &Path,
+    source_branch: &str,
+) -> Result<PathBuf, WorktreeError> {
+    supply_worktree(repo_path, source_branch, WorktreeKind::MergeRequest).await
+}
+
 /// Provision every project (best-effort) and persist provisioning health.
 ///
 /// A failure for one project marks it unhealthy and records the reason; it never
@@ -337,7 +345,39 @@ pub async fn provision_all(pool: &SqlitePool, projects: &[ResolvedProject]) {
 
 #[cfg(test)]
 mod tests {
+    use std::process::Command;
+    use std::sync::Mutex;
+
     use super::*;
+
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn git(args: &[&str], cwd: &Path) {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .expect("git");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    fn init_source(path: &Path) {
+        std::fs::create_dir_all(path).expect("source dir");
+        git(&["init", "-b", "main", "."], path);
+        git(&["config", "user.email", "t@e.com"], path);
+        git(&["config", "user.name", "T"], path);
+        std::fs::write(path.join("a.txt"), "a").expect("a.txt");
+        git(&["add", "-A"], path);
+        git(&["commit", "-m", "init"], path);
+    }
+
+    fn url_of(path: &Path) -> String {
+        path.display().to_string().replace('\\', "/")
+    }
 
     #[test]
     fn escape_replaces_non_allowed_chars() {
@@ -366,5 +406,75 @@ mod tests {
         assert_eq!(short_hash("feature/x"), short_hash("feature/x"));
         assert_ne!(short_hash("feature/x"), short_hash("feature-x"));
         assert_eq!(short_hash("feature/x").len(), 8);
+    }
+
+    #[tokio::test]
+    async fn provision_mr_worktree_creates_on_first_call() {
+        let _g = TEST_LOCK.lock().expect("test lock");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("source");
+        init_source(&source);
+        git(&["checkout", "-b", "feature/mr"], &source);
+        std::fs::write(source.join("mr.txt"), "mr").expect("mr.txt");
+        git(&["add", "-A"], &source);
+        git(&["commit", "-m", "mr"], &source);
+        git(&["checkout", "main"], &source);
+
+        let container = temp.path().join("container");
+        provision_project(&container, &url_of(&source), &["main".to_string()])
+            .await
+            .expect("provision");
+
+        let dir = provision_mr_worktree(&container, "feature/mr")
+            .await
+            .expect("provision mr worktree");
+        assert!(dir.join("mr.txt").is_file(), "mr worktree checked out branch");
+        assert_eq!(dir, worktree_dir(&container, "feature/mr", WorktreeKind::MergeRequest));
+    }
+
+    #[tokio::test]
+    async fn provision_mr_worktree_same_branch_returns_same_path() {
+        let _g = TEST_LOCK.lock().expect("test lock");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("source");
+        init_source(&source);
+        git(&["checkout", "-b", "feature/shared"], &source);
+        std::fs::write(source.join("s.txt"), "s").expect("s.txt");
+        git(&["add", "-A"], &source);
+        git(&["commit", "-m", "shared"], &source);
+        git(&["checkout", "main"], &source);
+
+        let container = temp.path().join("container");
+        provision_project(&container, &url_of(&source), &["main".to_string()])
+            .await
+            .expect("provision");
+
+        let first = provision_mr_worktree(&container, "feature/shared")
+            .await
+            .expect("first");
+        let second = provision_mr_worktree(&container, "feature/shared")
+            .await
+            .expect("second");
+        assert_eq!(first, second);
+    }
+
+    #[tokio::test]
+    async fn provision_mr_worktree_unreachable_branch_returns_err() {
+        let _g = TEST_LOCK.lock().expect("test lock");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("source");
+        init_source(&source);
+        let container = temp.path().join("container");
+        provision_project(&container, &url_of(&source), &["main".to_string()])
+            .await
+            .expect("provision");
+
+        let err = provision_mr_worktree(&container, "no/such/branch")
+            .await
+            .expect_err("missing branch");
+        assert!(
+            matches!(err, WorktreeError::BranchGone(_) | WorktreeError::Fetch(_)),
+            "got {err:?}"
+        );
     }
 }
