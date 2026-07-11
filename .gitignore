@@ -16,3 +16,7 @@ __pycache__/
 
 # Local project list (use projects.yaml.example as template)
 projects.yaml
+
+# Alternate cargo target used by local/test runs
+target-test/
+
