@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::identity;
 use crate::Error;
@@ -31,7 +31,6 @@ pub struct ParsedSummary {
 pub struct SummarySections {
     pub highlights: Vec<String>,
     pub growth: Vec<String>,
-    pub pending: Vec<String>,
 }
 
 impl SummarySections {
@@ -40,7 +39,6 @@ impl SummarySections {
         Ok(Self {
             highlights: parsed.highlights,
             growth: parsed.growth,
-            pending: parsed.pending_questions,
         })
     }
 }
@@ -111,6 +109,8 @@ async fn upsert_summary(
     let report_md_path = report_dir.join("report.md");
     let summary_md_path = parsed.summary_path.clone();
 
+    let mut tx = pool.begin().await.map_err(Error::Database)?;
+
     sqlx::query(
         "INSERT INTO reports (
             project_id, person_id, run_id, report_date, report_md_path, summary_md_path,
@@ -133,7 +133,7 @@ async fn upsert_summary(
     .bind(&parsed.frontmatter.one_line)
     .bind(parsed.frontmatter.mr_count)
     .bind(parsed.frontmatter.commit_count)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(Error::Database)?;
 
@@ -143,14 +143,14 @@ async fn upsert_summary(
     .bind(project_id)
     .bind(person_id)
     .bind(&report_date)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await
     .map_err(Error::Database)?;
 
     let raised_date = report_date.get(0..7).unwrap_or(&report_date).to_string();
     for question in &parsed.pending_questions {
-        sqlx::query(
-            "INSERT INTO pending_items (person_id, project_id, report_id, question, raised_date)
+        let insert_result = sqlx::query(
+            "INSERT OR IGNORE INTO pending_items (person_id, project_id, report_id, question, raised_date)
              VALUES (?, ?, ?, ?, ?)",
         )
         .bind(person_id)
@@ -158,11 +158,27 @@ async fn upsert_summary(
         .bind(report_id)
         .bind(question)
         .bind(&raised_date)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(Error::Database)?;
+
+        if insert_result.rows_affected() == 0 {
+            sqlx::query(
+                "UPDATE pending_items
+                 SET report_id = ?
+                 WHERE person_id = ? AND project_id = ? AND question = ? AND status = 'open'",
+            )
+            .bind(report_id)
+            .bind(person_id)
+            .bind(project_id)
+            .bind(question)
+            .execute(&mut *tx)
+            .await
+            .map_err(Error::Database)?;
+        }
     }
 
+    tx.commit().await.map_err(Error::Database)?;
     Ok(())
 }
 
@@ -238,4 +254,92 @@ pub async fn count_pending_for_person(pool: &SqlitePool, person_name: &str) -> R
     .await
     .map_err(Error::Database)?;
     Ok(count)
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct BackfillReportRow {
+    report_id: i64,
+    person_id: i64,
+    project_id: i64,
+    report_date: String,
+    summary_md_path: String,
+}
+
+/// Seed `pending_items` from existing `summary.md` files for deployments that
+/// upgraded before ingest wrote pending rows. Runs at most once per database.
+pub async fn backfill_pending_items_if_needed(pool: &SqlitePool) -> Result<(), Error> {
+    let already_done: Option<String> =
+        sqlx::query_scalar("SELECT value FROM app_meta WHERE key = 'pending_items_backfill_v1'")
+            .fetch_optional(pool)
+            .await
+            .map_err(Error::Database)?;
+
+    if already_done.is_some() {
+        return Ok(());
+    }
+
+    let inserted = backfill_pending_items(pool).await?;
+    sqlx::query("INSERT INTO app_meta (key, value) VALUES ('pending_items_backfill_v1', ?)")
+        .bind(inserted.to_string())
+        .execute(pool)
+        .await
+        .map_err(Error::Database)?;
+    Ok(())
+}
+
+/// Seed `pending_items` from existing `summary.md` files.
+pub async fn backfill_pending_items(pool: &SqlitePool) -> Result<u64, Error> {
+    let rows = sqlx::query_as::<_, BackfillReportRow>(
+        "SELECT r.id AS report_id, r.person_id, r.project_id, r.report_date, r.summary_md_path
+         FROM reports r
+         ORDER BY r.report_date, r.id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+
+    let mut inserted = 0u64;
+    for row in rows {
+        let summary_path = Path::new(&row.summary_md_path);
+        if !summary_path.is_file() {
+            continue;
+        }
+        let parsed = match parse_summary_file(summary_path) {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                warn!(
+                    summary = %summary_path.display(),
+                    error = %err,
+                    "skipping pending backfill for unreadable summary"
+                );
+                continue;
+            }
+        };
+
+        let raised_date = row.report_date.get(0..7).unwrap_or(&row.report_date).to_string();
+        for question in &parsed.pending_questions {
+            let insert_result = sqlx::query(
+                "INSERT OR IGNORE INTO pending_items (person_id, project_id, report_id, question, raised_date)
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(row.person_id)
+            .bind(row.project_id)
+            .bind(row.report_id)
+            .bind(question)
+            .bind(&raised_date)
+            .execute(pool)
+            .await
+            .map_err(Error::Database)?;
+
+            if insert_result.rows_affected() > 0 {
+                inserted += 1;
+            }
+        }
+    }
+
+    if inserted > 0 {
+        info!(inserted, "backfilled pending_items from summary files");
+    }
+
+    Ok(inserted)
 }

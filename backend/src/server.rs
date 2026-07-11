@@ -10,6 +10,7 @@ use crate::dashboard;
 use crate::error::Error;
 use crate::identity;
 use crate::mr_reviews::{self, AgentTurnResponse, MrReviewListItem, PublishResponse};
+use crate::pending_items;
 use crate::person_trends;
 use crate::projects;
 use crate::reports;
@@ -103,6 +104,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/people", get(list_people).post(create_person))
         .route("/api/people/{id}/reports/latest", get(latest_reports))
         .route("/api/people/{id}/trends", get(person_trends))
+        .route("/api/people/{id}/pending-items", get(list_pending_items))
+        .route("/api/pending-items/{id}", patch(resolve_pending_item))
         .route("/api/people/{id}/identities", get(list_person_identities).post(bind_person_identity))
         .route("/api/unmatched-authors", get(list_unmatched_authors))
         .route("/api/reports/{id}/read", patch(mark_report_read))
@@ -430,6 +433,42 @@ async fn person_trends(
     Ok(Json(response))
 }
 
+#[derive(Deserialize)]
+struct PendingItemListQuery {
+    status: Option<String>,
+}
+
+async fn list_pending_items(
+    State(state): State<AppState>,
+    Path(person_id): Path<i64>,
+    Query(query): Query<PendingItemListQuery>,
+) -> Result<Json<Vec<pending_items::PendingItem>>, ApiError> {
+    let items = pending_items::list_pending_items_for_person(
+        &state.pool,
+        person_id,
+        query.status.as_deref(),
+    )
+    .await
+    .map_err(ApiError::from)?;
+    Ok(Json(items))
+}
+
+async fn resolve_pending_item(
+    State(state): State<AppState>,
+    Path(item_id): Path<i64>,
+    Json(body): Json<pending_items::ResolvePendingItemInput>,
+) -> Result<Json<pending_items::PendingItem>, ApiError> {
+    let item = pending_items::resolve_pending_item(
+        &state.pool,
+        state.config.data_dir(),
+        item_id,
+        body,
+    )
+    .await
+    .map_err(ApiError::from)?;
+    Ok(Json(item))
+}
+
 async fn mark_report_read(
     State(state): State<AppState>,
     Path(report_id): Path<i64>,
@@ -556,14 +595,17 @@ impl IntoResponse for ApiError {
             | Error::DuplicateDisplayName
             | Error::DuplicateProjectName
             | Error::IdentityConflict
-            | Error::MrReviewConflict => StatusCode::CONFLICT,
+            | Error::MrReviewConflict
+            | Error::PendingItemAlreadyResolved => StatusCode::CONFLICT,
             Error::UnsupportedRunTrigger(_)
             | Error::InvalidPersonName
             | Error::InvalidIdentityValue
             | Error::InvalidProjectName
-            | Error::InvalidProjectConfig(_) => StatusCode::BAD_REQUEST,
+            | Error::InvalidProjectConfig(_)
+            | Error::InvalidPendingItemStatus
+            | Error::InvalidPendingItemListStatus => StatusCode::BAD_REQUEST,
             Error::NotFound => StatusCode::NOT_FOUND,
-            Error::AgentFailed(_) => StatusCode::BAD_GATEWAY,
+            Error::AgentFailed(_) | Error::NotesSyncFailed(_) => StatusCode::BAD_GATEWAY,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (status, self.0.to_string()).into_response()

@@ -421,3 +421,143 @@ commit_count: 42
     .expect("one_line");
     assert_eq!(one_line, "Stable week");
 }
+
+
+#[tokio::test]
+async fn duplicate_open_question_is_not_inserted_again() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pool = init_pool(temp.path()).await.expect("init pool");
+
+    sqlx::query("INSERT INTO people (display_name) VALUES ('Alice')")
+        .execute(&pool)
+        .await
+        .expect("insert person");
+
+    sqlx::query(
+        "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('game-backend', ?, 0)",
+    )
+    .bind(temp.path().join("repos/game-backend").display().to_string())
+    .execute(&pool)
+    .await
+    .expect("insert project");
+
+    for date in ["2026-07-05", "2026-07-12"] {
+        let summary_path = temp
+            .path()
+            .join(format!("reports/game-backend/Alice/{date}/summary.md"));
+        std::fs::create_dir_all(summary_path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(
+            &summary_path,
+            format!(
+                r#"---
+person: Alice
+project: game-backend
+date: {date}
+one_line: Stable week
+---
+
+## 待確認
+- Why choose A?
+"#
+            ),
+        )
+        .expect("write summary");
+
+        let run_result = sqlx::query(
+            "INSERT INTO runs (trigger, status, project_total) VALUES ('manual_all', 'running', 1)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert run");
+        let run_id = run_result.last_insert_rowid();
+
+        ingest_project_summaries(&pool, temp.path(), "game-backend", 1, run_id)
+            .await
+            .expect("ingest summaries");
+    }
+
+    let open_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pending_items WHERE question = 'Why choose A?' AND status = 'open'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("count");
+    assert_eq!(open_count, 1);
+}
+
+#[tokio::test]
+async fn resolved_question_may_be_raised_again() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pool = init_pool(temp.path()).await.expect("init pool");
+
+    let person_id: i64 = {
+        let result = sqlx::query("INSERT INTO people (display_name) VALUES ('Alice')")
+            .execute(&pool)
+            .await
+            .expect("insert person");
+        result.last_insert_rowid()
+    };
+
+    sqlx::query(
+        "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('game-backend', ?, 0)",
+    )
+    .bind(temp.path().join("repos/game-backend").display().to_string())
+    .execute(&pool)
+    .await
+    .expect("insert project");
+
+    sqlx::query(
+        "INSERT INTO pending_items (person_id, project_id, question, status, raised_date, resolved_date)
+         VALUES (?, 1, 'Why choose A?', 'resolved', '2026-06', '2026-07')",
+    )
+    .bind(person_id)
+    .execute(&pool)
+    .await
+    .expect("insert resolved pending item");
+
+    let summary_path = temp
+        .path()
+        .join("reports/game-backend/Alice/2026-07-12/summary.md");
+    std::fs::create_dir_all(summary_path.parent().expect("parent")).expect("mkdir");
+    std::fs::write(
+        &summary_path,
+        r#"---
+person: Alice
+project: game-backend
+date: 2026-07-12
+one_line: Stable week
+---
+
+## 待確認
+- Why choose A?
+"#,
+    )
+    .expect("write summary");
+
+    let run_result = sqlx::query(
+        "INSERT INTO runs (trigger, status, project_total) VALUES ('manual_all', 'running', 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert run");
+    let run_id = run_result.last_insert_rowid();
+
+    ingest_project_summaries(&pool, temp.path(), "game-backend", 1, run_id)
+        .await
+        .expect("ingest summaries");
+
+    let total: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM pending_items WHERE question = 'Why choose A?'")
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+    assert_eq!(total, 2);
+
+    let open_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pending_items WHERE question = 'Why choose A?' AND status = 'open'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("open count");
+    assert_eq!(open_count, 1);
+}

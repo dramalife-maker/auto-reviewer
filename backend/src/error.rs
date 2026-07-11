@@ -38,6 +38,14 @@ pub enum Error {
     MrReviewConflict,
     #[error("agent failed: {0}")]
     AgentFailed(String),
+    #[error("pending item status must be 'resolved'")]
+    InvalidPendingItemStatus,
+    #[error("pending item is already resolved")]
+    PendingItemAlreadyResolved,
+    #[error("invalid pending item list status filter; use open, resolved, or all")]
+    InvalidPendingItemListStatus,
+    #[error("failed to sync notes file: {0}")]
+    NotesSyncFailed(String),
     #[error(transparent)]
     Yaml(#[from] serde_yaml::Error),
     #[error(transparent)]

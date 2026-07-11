@@ -55,9 +55,6 @@ commit_count: 42
 
 ## 成長面向
 - Better PR sizing
-
-## 待確認
-- Architecture choice on MR 234?
 "#,
     )
     .expect("write summary");
@@ -206,4 +203,84 @@ async fn get_run_by_id_returns_terminal_status() {
     let json: Value = serde_json::from_slice(&body).expect("json");
     assert_eq!(json["status"], "success");
     assert_eq!(json["trigger"], "manual_all");
+}
+
+
+#[tokio::test]
+async fn latest_reports_pending_comes_from_open_db_rows() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let (person_id, report_id) = seed_person_with_report(&temp, &pool).await;
+
+    sqlx::query(
+        "INSERT INTO pending_items (person_id, project_id, report_id, question, status, raised_date)
+         VALUES (?, 1, ?, 'Architecture choice on MR 234?', 'open', '2026-07')",
+    )
+    .bind(person_id)
+    .bind(report_id)
+    .execute(&pool)
+    .await
+    .expect("insert pending item");
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/people/{person_id}/reports/latest"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.expect("body").to_bytes();
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    let project = &json["projects"][0];
+    let pending_items = project["pending_items"].as_array().expect("pending_items array");
+    assert_eq!(pending_items.len(), 1);
+    assert_eq!(pending_items[0]["question"], "Architecture choice on MR 234?");
+    assert!(pending_items[0]["id"].as_i64().is_some());
+    assert!(project.get("pending").is_none());
+}
+
+#[tokio::test]
+async fn latest_reports_omits_resolved_pending_items() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let (person_id, report_id) = seed_person_with_report(&temp, &pool).await;
+
+    sqlx::query(
+        "INSERT INTO pending_items (person_id, project_id, report_id, question, status, raised_date, resolved_date)
+         VALUES (?, 1, ?, 'Already resolved question', 'resolved', '2026-06', '2026-07')",
+    )
+    .bind(person_id)
+    .bind(report_id)
+    .execute(&pool)
+    .await
+    .expect("insert pending item");
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/people/{person_id}/reports/latest"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.expect("body").to_bytes();
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    let project = &json["projects"][0];
+    let pending_items = project["pending_items"].as_array().expect("pending_items array");
+    assert!(pending_items.is_empty());
 }

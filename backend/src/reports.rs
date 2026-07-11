@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use serde::Serialize;
 use sqlx::SqlitePool;
 
+use crate::pending_items::PendingItem;
 use crate::summary::SummarySections;
 use crate::Error;
 
@@ -26,7 +28,7 @@ pub struct LatestReportItem {
     pub commit_count: Option<i64>,
     pub highlights: Vec<String>,
     pub growth: Vec<String>,
-    pub pending: Vec<String>,
+    pub pending_items: Vec<PendingItem>,
 }
 
 #[derive(Debug, Serialize)]
@@ -70,7 +72,7 @@ pub async fn latest_reports_for_person(
     };
 
     let rows = sqlx::query_as::<_, ReportSummaryRow>(
-        "SELECT r.id, r.is_read, pr.name AS project_name, r.one_line, r.mr_count, r.commit_count, r.summary_md_path
+        "SELECT r.id, r.is_read, pr.id AS project_id, pr.name AS project_name, r.one_line, r.mr_count, r.commit_count, r.summary_md_path
          FROM reports r
          INNER JOIN projects pr ON pr.id = r.project_id
          WHERE r.person_id = ? AND r.report_date = ?
@@ -82,9 +84,35 @@ pub async fn latest_reports_for_person(
     .await
     .map_err(Error::Database)?;
 
+    let open_pending_items = sqlx::query_as::<_, PendingItem>(
+        "SELECT pi.id, pi.person_id, pi.project_id, pr.name AS project_name,
+                pi.report_id, pi.question, pi.status, pi.raised_date,
+                pi.resolved_date, pi.resolution_note
+         FROM pending_items pi
+         INNER JOIN projects pr ON pr.id = pi.project_id
+         WHERE pi.person_id = ? AND pi.status = 'open'
+         ORDER BY pi.project_id, pi.raised_date DESC, pi.id DESC",
+    )
+    .bind(person_id)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+
+    let mut pending_by_project: HashMap<i64, Vec<PendingItem>> = HashMap::new();
+    for item in open_pending_items {
+        pending_by_project
+            .entry(item.project_id)
+            .or_default()
+            .push(item);
+    }
+
     let mut projects = Vec::new();
     for row in rows {
         let sections = SummarySections::from_summary_file(Path::new(&row.summary_md_path))?;
+        let pending_items = pending_by_project
+            .remove(&row.project_id)
+            .unwrap_or_default();
+
         projects.push(LatestReportItem {
             id: row.id,
             is_read: row.is_read != 0,
@@ -94,7 +122,7 @@ pub async fn latest_reports_for_person(
             commit_count: row.commit_count,
             highlights: sections.highlights,
             growth: sections.growth,
-            pending: sections.pending,
+            pending_items,
         });
     }
 
@@ -108,6 +136,7 @@ pub async fn latest_reports_for_person(
 struct ReportSummaryRow {
     id: i64,
     is_read: i64,
+    project_id: i64,
     project_name: String,
     one_line: Option<String>,
     mr_count: Option<i64>,

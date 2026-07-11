@@ -252,8 +252,10 @@ claude --bare ... --append-system-prompt-file $APP_ROOT/skills/reviewer-batch/WO
 | GET | `/api/people/{id}/identities` | 列出已綁 identity |
 | POST | `/api/people/{id}/identities` | 綁定 identity `{ "kind", "value", "label?" }` |
 | GET | `/api/unmatched-authors` | 未歸戶 git author 列表 |
-| GET | `/api/people/{id}/reports/latest` | 最新週報 |
-| GET | `/api/people/{id}/trends` | 人物趨勢（長期觀察 / 成長軌跡 / 歷史待確認） |
+| GET | `/api/people/{id}/reports/latest` | 最新週報（各專案卡 `pending_items` 為 DB open 待確認，含 `id`） |
+| GET | `/api/people/{id}/trends` | 人物趨勢（長期觀察 / 成長軌跡 / 歷史待確認，`historical_pending` 為結構化物件） |
+| GET | `/api/people/{id}/pending-items` | 列出人員待確認（`?status=open\|resolved\|all`，預設 `open`） |
+| PATCH | `/api/pending-items/{id}` | 閉環待確認：`{ "status": "resolved", "resolution_note"?: string }`，僅允許 `open → resolved` |
 | PATCH | `/api/reports/{id}/read` | 標記已讀 |
 
 排程預設：每週一 09:00 台北時間（`schedule_config` 表，enabled=1）。時區由 `schedule_config.tz_offset_min` 設定（UTC 偏移分鐘數，預設 `480` = UTC+8）；`run_time` 依此時區解讀。

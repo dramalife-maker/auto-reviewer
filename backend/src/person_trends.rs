@@ -14,12 +14,22 @@ pub struct GrowthTimelineEntry {
 }
 
 #[derive(Debug, Serialize)]
+pub struct HistoricalPendingEntry {
+    pub question: String,
+    pub status: String,
+    pub raised_month: String,
+    pub resolved_month: Option<String>,
+    pub resolution_note: Option<String>,
+    pub raw_line: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct PersonTrendsResponse {
     pub person_id: i64,
     pub display_name: String,
     pub long_term_observation: String,
     pub growth_timeline: Vec<GrowthTimelineEntry>,
-    pub historical_pending: Vec<String>,
+    pub historical_pending: Vec<HistoricalPendingEntry>,
 }
 
 pub fn person_report_root(data_root: &Path) -> PathBuf {
@@ -114,12 +124,53 @@ fn is_monthly_trends_file(file_name: &str) -> bool {
         && month.chars().all(|ch| ch.is_ascii_digit())
 }
 
-fn read_historical_pending(path: &Path) -> Vec<String> {
+fn read_historical_pending(path: &Path) -> Vec<HistoricalPendingEntry> {
     let content = read_file_or_empty(path);
     content
         .lines()
         .map(str::trim)
         .filter(|line| line.starts_with("- ["))
-        .map(str::to_string)
+        .filter_map(parse_historical_pending_line)
         .collect()
+}
+
+/// Parse a single B1 line into a structured historical pending entry.
+///
+/// Open form:     `- [YYYY-MM] {question}`
+/// Resolved form:  `- [YYYY-MM→YYYY-MM] ✓ {question}` with optional ` — {note}` suffix.
+fn parse_historical_pending_line(line: &str) -> Option<HistoricalPendingEntry> {
+    let raw_line = line.to_string();
+    let rest = line.strip_prefix("- [")?;
+    let (bracket, after_bracket) = rest.split_once(']')?;
+    let after_bracket = after_bracket.trim_start();
+
+    if let Some((raised, resolved)) = bracket.split_once('\u{2192}') {
+        // Resolved line: `- [raised→resolved] ✓ question [— note]`
+        let text = after_bracket
+            .strip_prefix('\u{2713}')
+            .unwrap_or(after_bracket)
+            .trim();
+        let (question, resolution_note) = match text.split_once('\u{2014}') {
+            Some((question, note)) => (question.trim().to_string(), Some(note.trim().to_string())),
+            None => (text.to_string(), None),
+        };
+        Some(HistoricalPendingEntry {
+            question,
+            status: "resolved".to_string(),
+            raised_month: raised.trim().to_string(),
+            resolved_month: Some(resolved.trim().to_string()),
+            resolution_note,
+            raw_line,
+        })
+    } else {
+        // Open line: `- [raised] question`
+        Some(HistoricalPendingEntry {
+            question: after_bracket.trim().to_string(),
+            status: "open".to_string(),
+            raised_month: bracket.trim().to_string(),
+            resolved_month: None,
+            resolution_note: None,
+            raw_line,
+        })
+    }
 }

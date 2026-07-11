@@ -208,8 +208,33 @@ CREATE INDEX idx_pending_person_status ON pending_items(person_id, status);
 
 > **分工**：
 > - **本週 Tab / 左欄 ⚠️ 標記**：查 `pending_items WHERE status='open'`。
-> - **管理者手動閉環**：在 web 介面標 `resolved`（可寫回 skill 維護的 `_notes.md`，實作時定同步策略）。
+> - **管理者手動閉環**：透過 Closure API `PATCH /api/pending-items/{id}` 標 `resolved`（DB-first；成功後同步改寫該人物的 `_notes.md`，見下方 B1 格式）。
 > - **趨勢 Tab「歷史待確認」**：**主資料源為檔案**（`_notes.md`、各月 `YYYY-MM.md` / `summary.md` 的待確認區段）；DB 列為操作輔助，非 trend 主存儲。
+
+#### Closure API
+
+| 方法 | 路徑 | 說明 |
+|------|------|------|
+| GET | `/api/people/{id}/pending-items?status=open\|resolved\|all` | 列出某人待確認項目；預設 `open` |
+| PATCH | `/api/pending-items/{id}` | `{ "status": "resolved", "resolution_note"?: string }`，僅允許 `open → resolved` |
+
+`PATCH` 成功會將 `resolved_date` 設為依 `schedule_config.tz_offset_min` 計算的當月 `YYYY-MM`，並同步改寫人物層 `_notes.md`（DB 更新成功、檔案寫入失敗時回 HTTP 502，DB 仍保持 `resolved`）。已 `resolved` 項目再次 `PATCH` 回 409；`status` 非 `resolved` 回 400；未知 `id` 回 404。
+
+#### `_notes.md` B1 行格式
+
+- open：`- [YYYY-MM] {question}`
+- resolved：`- [YYYY-MM→YYYY-MM] ✓ {question}`，若有 `resolution_note` 則行尾加 ` — {note}`
+
+範例：
+
+```text
+- [2026-07] Why choose A?
+- [2026-06→2026-07] ✓ Earlier concern — fixed in review
+```
+
+閉環時會尋找第一筆文字完全相符的 open 行並改寫；找不到則 append 一筆 resolved 行；檔案或目錄不存在則建立後寫入。
+
+> **BREAKING**：`GET /api/people/:id/reports/latest` 各專案卡的欄位由 `pending: string[]` 改為 `pending_items`（物件陣列，含 `id`/`question`/`status` 等，僅含該專案 `status='open'` 列）。`GET /api/people/:id/trends` 的 `historical_pending` 由 `string[]` 改為結構化物件陣列（`question`/`status`/`raised_month`/`resolved_month`/`resolution_note`/`raw_line`）。
 
 ---
 

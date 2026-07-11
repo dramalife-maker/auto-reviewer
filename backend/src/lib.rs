@@ -5,6 +5,7 @@ pub mod error;
 pub mod executor;
 pub mod identity;
 pub mod mr_reviews;
+pub mod pending_items;
 pub mod person_trends;
 pub mod projects;
 pub mod reports;
@@ -50,6 +51,7 @@ pub async fn build_app() -> Result<axum::Router> {
 
 async fn init_app(config: config::AppConfig, start_worker: bool) -> Result<state::AppState> {
     let pool = db::init_pool(config.data_dir()).await?;
+    summary::backfill_pending_items_if_needed(&pool).await?;
     projects::ensure_projects_loaded(
         &pool,
         config.data_dir(),

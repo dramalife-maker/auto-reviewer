@@ -17,12 +17,14 @@ import {
   markReportRead,
   publishMrReview,
   reloadProjects,
+  resolvePendingItem,
   startManualRun,
   startMrScan,
   startProjectRun,
   updateMrReview,
   updateProject,
   updateSchedule,
+  ApiError,
 } from './api'
 import type {
   DashboardResponse,
@@ -30,6 +32,7 @@ import type {
   LatestReportsResponse,
   MrReviewItem,
   MrReviewStatus,
+  PendingItem,
   Person,
   PersonTrendsResponse,
   ProjectListItem,
@@ -85,6 +88,7 @@ export class ReviewerApp {
   private mrChatMessages: Array<{ role: 'user' | 'assistant'; text: string }> = []
   private mrChatLoading = false
   private scheduleSaving = false
+  private resolvingPendingItemIds = new Set<number>()
 
   constructor(root: HTMLElement) {
     this.root = root
@@ -196,7 +200,7 @@ export class ReviewerApp {
             </button>
           </div>
         </header>
-        ${this.bannerMessage ? `<div class="banner${this.bannerIsError ? ' error' : ''}">${escapeHtml(this.bannerMessage)}</div>` : ''}
+        ${this.bannerMessage ? `<div class="banner${this.bannerIsError ? ' error' : ''}" role="status"><span class="banner-text">${escapeHtml(this.bannerMessage)}</span><button type="button" class="banner-dismiss" id="banner-dismiss" aria-label="關閉提示">×</button></div>` : ''}
         ${this.showUnmatchedPanel ? this.renderUnmatchedPanel() : ''}
         <div class="main">
           <aside class="sidebar">
@@ -231,6 +235,12 @@ export class ReviewerApp {
         </div>
       </div>
     `
+
+    this.root.querySelector('#banner-dismiss')?.addEventListener('click', () => {
+      this.bannerMessage = null
+      this.bannerIsError = false
+      void this.renderWithStatus()
+    })
 
     this.root.querySelectorAll('[data-nav]').forEach((element) => {
       element.addEventListener('click', () => {
@@ -301,6 +311,16 @@ export class ReviewerApp {
 
     this.root.querySelector('#mark-read')?.addEventListener('click', () => {
       void this.handleMarkRead()
+    })
+
+    this.root.querySelectorAll('[data-pending-item-id]').forEach((element) => {
+      element.addEventListener('change', (event) => {
+        if (!(event.target as HTMLInputElement).checked) {
+          return
+        }
+        const itemId = Number((element as HTMLElement).dataset.pendingItemId)
+        void this.handleResolvePendingItem(itemId)
+      })
     })
 
     this.root.querySelectorAll('[data-view-tab]').forEach((element) => {
@@ -424,22 +444,6 @@ export class ReviewerApp {
 
     this.root.querySelector('#schedule-save')?.addEventListener('click', () => {
       void this.handleScheduleSave()
-    })
-
-    this.root.querySelectorAll('[data-project-mr-scan]').forEach((element) => {
-      element.addEventListener('click', (event) => {
-        event.stopPropagation()
-        const projectId = Number((element as HTMLElement).dataset.projectMrScan)
-        void this.handleMrScan(projectId)
-      })
-    })
-
-    this.root.querySelectorAll('[data-project-mr-scan-force]').forEach((element) => {
-      element.addEventListener('click', (event) => {
-        event.stopPropagation()
-        const projectId = Number((element as HTMLElement).dataset.projectMrScanForce)
-        void this.handleMrScan(projectId, true)
-      })
     })
 
     this.root.querySelector('#project-mr-scan')?.addEventListener('click', () => {
@@ -585,7 +589,6 @@ export class ReviewerApp {
       ? formatReportDateShort(project.last_report_date)
       : ''
     const runDisabled = this.activeRunId !== null || this.reloading
-    const mrScanDisabled = runDisabled || project.is_git_repo === 0
 
     const trailing = running
       ? `<span class="project-list-running">
@@ -593,7 +596,6 @@ export class ReviewerApp {
           <span class="project-list-elapsed">${formatRunElapsed(this.activeRun?.started_at ?? null, this.runElapsedTick)}</span>
         </span>`
       : `<span class="project-list-date">${escapeHtml(dateLabel)}</span>
-         ${project.is_git_repo ? `<button type="button" class="project-list-mr-scan" data-project-mr-scan="${project.id}" ${mrScanDisabled ? 'disabled' : ''} title="掃描 MR">MR</button><button type="button" class="project-list-mr-scan-force" data-project-mr-scan-force="${project.id}" ${mrScanDisabled ? 'disabled' : ''} title="強制重掃（略過收件匣草稿閘門）">強制</button>` : ''}
          <button type="button" class="project-list-run" data-project-run="${escapeHtml(project.name)}" ${runDisabled ? 'disabled' : ''}>▶ 執行</button>`
 
     return `<div class="project-list-item${active}${running ? ' running' : ''}">
@@ -1109,7 +1111,20 @@ export class ReviewerApp {
     const pending = hasPending
       ? `<section class="trends-section">
           <h3>歷史待確認</h3>
-          <ul>${trends!.historical_pending.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
+          <ul class="historical-pending-list">${trends!
+            .historical_pending.map((entry) => {
+              const monthLabel =
+                entry.status === 'resolved' && entry.resolved_month
+                  ? `[${entry.raised_month}→${entry.resolved_month}]`
+                  : `[${entry.raised_month}]`
+              return `<li class="historical-pending-item ${entry.status}">
+                  <span class="historical-pending-icon" aria-hidden="true">${entry.status === 'resolved' ? '✓' : '⚠'}</span>
+                  <span class="historical-pending-date">${escapeHtml(monthLabel)}</span>
+                  <span>${escapeHtml(entry.question)}</span>
+                  ${entry.resolution_note ? `<span class="historical-pending-note"> — ${escapeHtml(entry.resolution_note)}</span>` : ''}
+                </li>`
+            })
+            .join('')}</ul>
         </section>`
       : ''
 
@@ -1133,8 +1148,74 @@ export class ReviewerApp {
       ${stats ? `<p class="stats">${escapeHtml(stats)}</p>` : ''}
       ${renderSection('本週重點', project.highlights)}
       ${renderSection('成長面向', project.growth)}
-      ${renderSection('待確認', project.pending)}
+      ${this.renderPendingItemsSection(project.pending_items)}
     </article>`
+  }
+
+  private renderPendingItemsSection(pendingItems: PendingItem[]): string {
+    if (pendingItems.length === 0) {
+      return ''
+    }
+    const rows = pendingItems
+      .map((item) => {
+        const disabled = this.resolvingPendingItemIds.has(item.id)
+        return `<li class="pending-item-row">
+          <label class="pending-item-checkbox">
+            <input type="checkbox" data-pending-item-id="${item.id}" ${disabled ? 'disabled' : ''} />
+            <span>${escapeHtml(item.question)}</span>
+          </label>
+        </li>`
+      })
+      .join('')
+    return `<section class="section">
+      <h4>待確認</h4>
+      <ul class="pending-item-list">${rows}</ul>
+    </section>`
+  }
+
+  private removePendingItemFromReports(itemId: number): void {
+    if (!this.latestReports) {
+      return
+    }
+    this.latestReports = {
+      ...this.latestReports,
+      projects: this.latestReports.projects.map((project) => ({
+        ...project,
+        pending_items: project.pending_items.filter((item) => item.id !== itemId),
+      })),
+    }
+  }
+
+  private async refreshAfterPendingItemResolved(): Promise<void> {
+    await Promise.all([this.loadPeople(), this.loadDashboard(), this.loadPersonTrends()])
+  }
+
+  private async handleResolvePendingItem(itemId: number): Promise<void> {
+    if (this.resolvingPendingItemIds.has(itemId)) {
+      return
+    }
+    this.resolvingPendingItemIds.add(itemId)
+    await this.renderWithStatus()
+    try {
+      await resolvePendingItem(itemId)
+      this.removePendingItemFromReports(itemId)
+      await this.refreshAfterPendingItemResolved()
+      this.bannerMessage = '已標記為已釐清'
+      this.bannerIsError = false
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 502) {
+        this.removePendingItemFromReports(itemId)
+        await this.refreshAfterPendingItemResolved()
+        this.bannerMessage = '已標記為已釐清，但歷史檔案同步失敗；趨勢頁可能尚未更新'
+        this.bannerIsError = true
+      } else {
+        this.bannerMessage = error instanceof Error ? error.message : '閉環失敗'
+        this.bannerIsError = true
+      }
+    } finally {
+      this.resolvingPendingItemIds.delete(itemId)
+      await this.renderWithStatus()
+    }
   }
 
   private async switchAppView(view: AppView): Promise<void> {

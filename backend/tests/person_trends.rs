@@ -230,3 +230,113 @@ one_line: Stable week
     let json: Value = serde_json::from_slice(&body).expect("json");
     assert_eq!(json["projects"].as_array().expect("projects").len(), 1);
 }
+
+
+#[tokio::test]
+async fn historical_pending_distinguishes_open_and_resolved_lines() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let person_id = seed_person(&pool, "Alice Chen").await;
+
+    let notes_path =
+        person_trends::person_trends_dir(temp.path(), "Alice Chen").join("_notes.md");
+    std::fs::create_dir_all(notes_path.parent().expect("parent")).expect("mkdir");
+    std::fs::write(
+        &notes_path,
+        "- [2026-07] Why choose A?\n- [2026-06→2026-07] ✓ Earlier concern — fixed in review\n",
+    )
+    .expect("write");
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/people/{person_id}/trends"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.expect("body").to_bytes();
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    let pending = json["historical_pending"].as_array().expect("array");
+    assert_eq!(pending.len(), 2);
+
+    let open_entry = pending
+        .iter()
+        .find(|entry| entry["status"] == "open")
+        .expect("open entry");
+    assert_eq!(open_entry["question"], "Why choose A?");
+    assert_eq!(open_entry["raised_month"], "2026-07");
+    assert!(open_entry["resolved_month"].is_null());
+    assert!(open_entry["resolution_note"].is_null());
+
+    let resolved_entry = pending
+        .iter()
+        .find(|entry| entry["status"] == "resolved")
+        .expect("resolved entry");
+    assert_eq!(resolved_entry["question"], "Earlier concern");
+    assert_eq!(resolved_entry["raised_month"], "2026-06");
+    assert_eq!(resolved_entry["resolved_month"], "2026-07");
+    assert_eq!(resolved_entry["resolution_note"], "fixed in review");
+}
+
+#[tokio::test]
+async fn historical_pending_notes_line_parsing_examples() {
+    // Mirrors the spec's "notes line parsing" example table.
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let person_id = seed_person(&pool, "Dana").await;
+
+    let notes_path = person_trends::person_trends_dir(temp.path(), "Dana").join("_notes.md");
+    std::fs::create_dir_all(notes_path.parent().expect("parent")).expect("mkdir");
+    std::fs::write(
+        &notes_path,
+        "- [2026-07] Why choose A?\n- [2026-06→2026-07] ✓ Earlier concern — fixed in review\n",
+    )
+    .expect("write");
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/people/{person_id}/trends"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    let body = response.into_body().collect().await.expect("body").to_bytes();
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    let pending = json["historical_pending"].as_array().expect("array");
+
+    let row1 = pending
+        .iter()
+        .find(|entry| entry["raw_line"] == "- [2026-07] Why choose A?")
+        .expect("row1");
+    assert_eq!(row1["status"], "open");
+    assert_eq!(row1["raised_month"], "2026-07");
+    assert!(row1["resolved_month"].is_null());
+    assert_eq!(row1["question"], "Why choose A?");
+    assert!(row1["resolution_note"].is_null());
+
+    let row2 = pending
+        .iter()
+        .find(|entry| entry["status"] == "resolved")
+        .expect("row2");
+    assert_eq!(
+        row2["raw_line"],
+        "- [2026-06→2026-07] ✓ Earlier concern — fixed in review"
+    );
+    assert_eq!(row2["raised_month"], "2026-06");
+    assert_eq!(row2["resolved_month"], "2026-07");
+    assert_eq!(row2["question"], "Earlier concern");
+    assert_eq!(row2["resolution_note"], "fixed in review");
+}

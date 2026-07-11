@@ -152,6 +152,9 @@ body {
 }
 
 .banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
   padding: 0.75rem 1.5rem;
   background: #ecfdf5;
   color: #065f46;
@@ -162,6 +165,28 @@ body {
   background: #fef2f2;
   color: #991b1b;
   border-bottom-color: #fecaca;
+}
+
+.banner-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.banner-dismiss {
+  flex-shrink: 0;
+  margin: -0.25rem -0.5rem -0.25rem 0;
+  padding: 0.125rem 0.5rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.65;
+}
+
+.banner-dismiss:hover {
+  opacity: 1;
 }
 
 .main {
@@ -613,6 +638,63 @@ body {
 .section ul {
   margin: 0;
   padding-left: 1.25rem;
+}
+
+.pending-item-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.pending-item-row {
+  margin: 0.25rem 0;
+}
+
+.pending-item-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.875rem;
+  color: #374151;
+}
+
+.pending-item-checkbox input[type='checkbox'] {
+  margin-top: 0.15rem;
+  cursor: pointer;
+}
+
+.historical-pending-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.historical-pending-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  padding: 0.25rem 0;
+  font-size: 0.875rem;
+}
+
+.historical-pending-date {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  color: #6b7280;
+  font-variant-numeric: tabular-nums;
+}
+
+.historical-pending-item.open {
+  color: #b45309;
+}
+
+.historical-pending-item.resolved {
+  color: #15803d;
+}
+
+.historical-pending-note {
+  color: #6b7280;
 }
 
 .empty {
@@ -1255,39 +1337,6 @@ body {
   border-top: 1px dashed #e5e7eb;
   padding-top: 0.875rem;
   margin-top: 0.25rem;
-}
-
-.project-list-mr-scan {
-  border: 1px solid #c4b5fd;
-  border-radius: 0.375rem;
-  padding: 0.125rem 0.5rem;
-  background: #f5f3ff;
-  color: #6d28d9;
-  font-size: 0.75rem;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.project-list-mr-scan:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.project-list-mr-scan-force {
-  border: 1px solid #d4d4d8;
-  border-radius: 0.35rem;
-  padding: 0.15rem 0.4rem;
-  margin-left: 0.25rem;
-  background: #fafafa;
-  color: #52525b;
-  font-size: 0.7rem;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.project-list-mr-scan-force:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 .project-settings-mr-scan {

@@ -8,6 +8,7 @@ import type {
   MrReviewItem,
   MrReviewPublishResponse,
   MrReviewStatus,
+  PendingItem,
   Person,
   PersonTrendsResponse,
   ProjectListResponse,
@@ -22,11 +23,21 @@ import type {
 } from './types'
 import { apiUrl } from './config'
 
+export class ApiError extends Error {
+  readonly status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(apiUrl(path), init)
   if (!response.ok) {
     const text = await response.text()
-    throw new Error(text || response.statusText)
+    throw new ApiError(text || response.statusText, response.status)
   }
   if (response.status === 204) {
     return undefined as T
@@ -56,6 +67,14 @@ export function fetchPersonTrends(personId: number): Promise<PersonTrendsRespons
 
 export function markReportRead(reportId: number): Promise<void> {
   return request(`/api/reports/${reportId}/read`, { method: 'PATCH' })
+}
+
+export function resolvePendingItem(itemId: number, resolutionNote?: string): Promise<PendingItem> {
+  return request(`/api/pending-items/${itemId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'resolved', resolution_note: resolutionNote }),
+  })
 }
 
 export function startManualRun(): Promise<CreateRunResponse> {

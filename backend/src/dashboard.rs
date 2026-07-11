@@ -110,7 +110,9 @@ pub async fn load_dashboard(pool: &SqlitePool) -> Result<DashboardResponse, Erro
                 COALESCE((
                     SELECT COUNT(*)
                     FROM pending_items pi
-                    WHERE pi.report_id = r.id AND pi.status = 'open'
+                    WHERE pi.person_id = r.person_id
+                      AND pi.project_id = r.project_id
+                      AND pi.status = 'open'
                 ), 0) AS pending_count
          FROM reports r
          INNER JOIN people p ON p.id = r.person_id

@@ -28,6 +28,19 @@ export interface CreatePersonResponse {
   display_name: string
 }
 
+export interface PendingItem {
+  id: number
+  person_id: number
+  project_id: number
+  project_name: string
+  report_id: number | null
+  question: string
+  status: 'open' | 'resolved'
+  raised_date: string
+  resolved_date: string | null
+  resolution_note: string | null
+}
+
 export interface LatestReportItem {
   id: number
   is_read: boolean
@@ -37,7 +50,7 @@ export interface LatestReportItem {
   commit_count: number | null
   highlights: string[]
   growth: string[]
-  pending: string[]
+  pending_items: PendingItem[]
 }
 
 export interface LatestReportsResponse {
@@ -50,12 +63,21 @@ export interface GrowthTimelineEntry {
   content: string
 }
 
+export interface HistoricalPendingEntry {
+  question: string
+  status: 'open' | 'resolved'
+  raised_month: string
+  resolved_month: string | null
+  resolution_note: string | null
+  raw_line: string
+}
+
 export interface PersonTrendsResponse {
   person_id: number
   display_name: string
   long_term_observation: string
   growth_timeline: GrowthTimelineEntry[]
-  historical_pending: string[]
+  historical_pending: HistoricalPendingEntry[]
 }
 
 export interface RunProjectStatus {
