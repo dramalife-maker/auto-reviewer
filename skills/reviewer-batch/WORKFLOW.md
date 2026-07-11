@@ -17,6 +17,7 @@
    - `run_date`（本次報告日期，`YYYY-MM-DD`）
    - `since`（分析窗口起日，`YYYY-MM-DD`，含當日）
    - `authors`（已歸戶工程師陣列：`email`, `git_name`, `person_id`, `display_name`）
+   - `open_pending`（本專案目前 `status='open'` 的待確認；元素含 `id`, `person_id`, `display_name`, `question`。寫 `## 待確認` 時必須遵守下方「待確認延續規則」）
    - `published_pending_snippets`（可選陣列；相對於 `report_root` 的路徑，例如 `Alice Chen/_pending/mr-42-round-1.md`。後端依 `mr_reviews.status='published'` 預先篩選；未列於此陣列的 `_pending/` 片段**不得**折入週報）
    - `output_contract`（固定為 `output-contract.md`，格式見同目錄 appended 規格）
 3. 若 `mode` 不是 `weekly_batch`，停止並在 stderr 說明（仍 exit 0 除非無法讀 manifest）。
@@ -120,8 +121,8 @@ Read 若已存在：
 **必須**完全符合 appended `output-contract.md`：
 
 - YAML frontmatter 含 `person`, `project`, `date`, `one_line`, `mr_count`, `commit_count`
-- 三個固定 heading：`## 本週重點`、`## 成長面向`、`## 待確認`
-- 各 section 使用 `- ` bullet；`待確認` 每條將由後端寫入 `pending_items`
+- 四個固定 heading（順序）：`## 本週重點`、`## 成長面向`、`## 待確認`、`## 已釐清`
+- 各 section 使用 `- ` bullet；`待確認` 每條將由後端寫入 `pending_items`；`已釐清` 每條（須為既有 open 原文）由後端 ingest 自動 resolve
 
 `project` 必須等於 `manifest.project_name`。`date` 必須等於 `manifest.run_date`。
 
@@ -164,8 +165,18 @@ Read 若已存在：
 - **one_line**：一兩句話，管理者掃描用；含本週主軸 + 是否有待確認。
 - **本週重點**：2–5 條，具體、可帶入 1on1 討論。
 - **成長面向**：1–3 條，建設性、非評判式。
-- **待確認**：0–5 條，**問句形式**，供管理者當面釐清；避免已能在 repo 內定論的事實題。
+- **待確認**：0–5 條，**問句形式**，供管理者當面釐清；避免已能在 repo 內定論的事實題。遵守下方「待確認延續規則」。
 - **禁止**：要求使用者輸入、輸出「請確認是否寫入」、執行 `glab mr note` / merge、修改 SQLite。
+
+### 待確認延續規則（硬性）
+
+寫每位 `{person}` 的 `## 待確認` / `## 已釐清` 前，從 `manifest.open_pending` 篩出 `display_name`（或 `person_id`）對應此人的條目。對每一條 open 議題，**三選一**：
+
+1. **延續中**：本週仍相關 → 原文寫入 `## 待確認`（**禁止**同義改寫）。
+2. **已釐清**：本週確認已解決 → 原文寫入 `## 已釐清`，且**不得**再出現在 `## 待確認`。後端 ingest 會將匹配的 open 列標為 resolved（workflow 本身仍不寫 SQLite）。
+3. **省略**：仍 open 但本週不提 → 兩區都不寫該句；DB 保持 open（不自動 resolve）。
+
+**全新議題**：僅在沒有對應 `open_pending` 條目時，才可用新措辭新增到 `## 待確認`（仍受 0–5 條上限）。不得把新問題寫進 `## 已釐清`。
 
 ---
 
@@ -181,7 +192,8 @@ Read 若已存在：
 
 - [ ] 已 Read manifest.json
 - [ ] 已依 manifest `authors` 處理每位工程師（非自行 git 歸戶）
-- [ ] 每份 `summary.md` frontmatter 與三個 heading 正確
+- [ ] 已讀 `open_pending`；延續／已釐清沿用原文；未把已釐清項同時寫進待確認
+- [ ] 每份 `summary.md` frontmatter 與四個 heading 正確（含可空的 `## 已釐清`）
 - [ ] 路徑均在 `{report_root}/{person}/{run_date}/`
 - [ ] 已更新 `{report_root}/{person}/` 下 `YYYY-MM.md`（若有產 report）
 - [ ] 已更新 `{person_report_root}/{display_name}/` 下 `index.md` / `YYYY-MM.md` / `_notes.md`（若有產 report）

@@ -646,6 +646,14 @@ pub fn load_skip_summary(data_root: &Path, run_id: i64, project_id: i64) -> Skip
     SkipSummary { by_reason, items }
 }
 
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct ManifestOpenPending {
+    pub id: i64,
+    pub person_id: i64,
+    pub display_name: String,
+    pub question: String,
+}
+
 #[derive(Serialize)]
 pub struct RunManifest<'a> {
     pub mode: &'static str,
@@ -657,10 +665,29 @@ pub struct RunManifest<'a> {
     pub since: String,
     pub output_contract: &'static str,
     pub authors: Vec<ManifestAuthor>,
+    /// Open pending questions for this project so the workflow can reuse exact wording.
+    pub open_pending: Vec<ManifestOpenPending>,
     /// Observation snippets under `report_root` that may be folded into the weekly summary.
     /// Populated from `mr_reviews` rows with `status='published'`; draft/ignored snippets stay out.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub published_pending_snippets: Vec<String>,
+}
+
+pub async fn load_open_pending_for_project(
+    pool: &sqlx::SqlitePool,
+    project_id: i64,
+) -> crate::Result<Vec<ManifestOpenPending>> {
+    sqlx::query_as::<_, ManifestOpenPending>(
+        "SELECT pi.id, pi.person_id, p.display_name, pi.question
+         FROM pending_items pi
+         INNER JOIN people p ON p.id = pi.person_id
+         WHERE pi.project_id = ? AND pi.status = 'open'
+         ORDER BY pi.person_id ASC, pi.id ASC",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await
+    .map_err(crate::Error::Database)
 }
 
 pub fn manifest_path(data_root: &Path, run_id: i64, project_id: i64) -> PathBuf {
@@ -712,6 +739,7 @@ pub async fn write_weekly_manifest(
 
     let published_pending_snippets =
         crate::mr_reviews::load_published_pending_snippets(pool, project.id).await?;
+    let open_pending = load_open_pending_for_project(pool, project.id).await?;
 
     let manifest = RunManifest {
         mode: "weekly_batch",
@@ -723,6 +751,7 @@ pub async fn write_weekly_manifest(
         since,
         output_contract: "output-contract.md",
         authors,
+        open_pending,
         published_pending_snippets,
     };
 

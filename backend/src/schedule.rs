@@ -216,9 +216,22 @@ pub fn format_mr_poll_label(interval_min: i64) -> String {
     format!("每 {interval_min} 分鐘")
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct MissedWeeklyRun {
+    pub due_at: String,
+    pub label: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ScheduleUpdateInput {
+    pub enabled: Option<bool>,
+    pub weekday: Option<i64>,
+    pub run_time: Option<String>,
+    pub tz_offset_min: Option<i64>,
+    pub per_project_timeout_sec: Option<i64>,
+    pub max_concurrency: Option<i64>,
     pub mr_poll_interval_min: Option<i64>,
+    pub cadence: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -227,45 +240,243 @@ pub struct ScheduleConfigResponse {
     pub cadence: String,
     pub weekday: Option<i64>,
     pub run_time: String,
+    pub tz_offset_min: i64,
     pub mr_poll_interval_min: i64,
     pub per_project_timeout_sec: i64,
     pub max_concurrency: i64,
     pub weekly_label: String,
     pub mr_poll_label: String,
     pub next_weekly_run_at: Option<String>,
+    pub missed_weekly_run: Option<MissedWeeklyRun>,
 }
 
 pub async fn get_schedule_config_response(
     pool: &SqlitePool,
 ) -> Result<ScheduleConfigResponse, Error> {
     let config = load_schedule_config(pool).await?;
+    let missed_weekly_run = detect_missed_weekly_run(pool, &config).await?;
     Ok(ScheduleConfigResponse {
         enabled: config.enabled != 0,
         cadence: config.cadence.clone(),
         weekday: config.weekday,
         run_time: config.run_time.clone(),
+        tz_offset_min: config.tz_offset_min,
         mr_poll_interval_min: config.mr_poll_interval_min,
         per_project_timeout_sec: config.per_project_timeout_sec,
         max_concurrency: config.max_concurrency,
         weekly_label: format_schedule_label(&config),
         mr_poll_label: format_mr_poll_label(config.mr_poll_interval_min),
         next_weekly_run_at: compute_next_run_at(&config)?,
+        missed_weekly_run,
     })
+}
+
+fn validate_schedule_update(input: &ScheduleUpdateInput) -> Result<(), Error> {
+    if let Some(cadence) = &input.cadence {
+        if cadence != "weekly" {
+            return Err(Error::InvalidScheduleConfig(format!(
+                "cadence must be weekly, got {cadence}"
+            )));
+        }
+    }
+    if let Some(weekday) = input.weekday {
+        if !(0..=6).contains(&weekday) {
+            return Err(Error::InvalidScheduleConfig(format!(
+                "weekday must be 0–6, got {weekday}"
+            )));
+        }
+    }
+    if let Some(run_time) = &input.run_time {
+        let (hour, minute) = parse_run_time(run_time).map_err(|_| {
+            Error::InvalidScheduleConfig(format!("invalid run_time: {run_time}"))
+        })?;
+        if hour > 23 || minute > 59 {
+            return Err(Error::InvalidScheduleConfig(format!(
+                "invalid run_time: {run_time}"
+            )));
+        }
+    }
+    if let Some(tz_offset_min) = input.tz_offset_min {
+        let secs = (tz_offset_min as i32).checked_mul(60).ok_or_else(|| {
+            Error::InvalidScheduleConfig(format!("invalid tz_offset_min: {tz_offset_min}"))
+        })?;
+        FixedOffset::east_opt(secs).ok_or_else(|| {
+            Error::InvalidScheduleConfig(format!("invalid tz_offset_min: {tz_offset_min}"))
+        })?;
+    }
+    if let Some(timeout) = input.per_project_timeout_sec {
+        if timeout < 1 {
+            return Err(Error::InvalidScheduleConfig(
+                "per_project_timeout_sec must be >= 1".into(),
+            ));
+        }
+    }
+    if let Some(concurrency) = input.max_concurrency {
+        if concurrency < 1 {
+            return Err(Error::InvalidScheduleConfig(
+                "max_concurrency must be >= 1".into(),
+            ));
+        }
+    }
+    if let Some(interval) = input.mr_poll_interval_min {
+        validate_mr_poll_interval(interval)?;
+    }
+    Ok(())
+}
+
+fn validate_mr_poll_interval(interval: i64) -> Result<(), Error> {
+    if interval <= 0 {
+        return Ok(());
+    }
+    build_mr_poll_cron_expression(interval).map_err(|err| match err {
+        Error::SummaryParse(msg) => Error::InvalidScheduleConfig(msg),
+        other => other,
+    })?;
+    Ok(())
 }
 
 pub async fn update_schedule_config(
     pool: &SqlitePool,
     input: ScheduleUpdateInput,
 ) -> Result<ScheduleConfigResponse, Error> {
-    if let Some(interval) = input.mr_poll_interval_min {
-        build_mr_poll_cron_expression(interval)?;
-        sqlx::query("UPDATE schedule_config SET mr_poll_interval_min = ? WHERE id = 1")
-            .bind(interval)
-            .execute(pool)
-            .await
-            .map_err(Error::Database)?;
-    }
+    validate_schedule_update(&input)?;
+
+    let current = load_schedule_config(pool).await?;
+    let enabled = input
+        .enabled
+        .map(|v| if v { 1 } else { 0 })
+        .unwrap_or(current.enabled);
+    let weekday = input.weekday.or(current.weekday);
+    let run_time = input
+        .run_time
+        .clone()
+        .unwrap_or_else(|| current.run_time.clone());
+    let tz_offset_min = input.tz_offset_min.unwrap_or(current.tz_offset_min);
+    let per_project_timeout_sec = input
+        .per_project_timeout_sec
+        .unwrap_or(current.per_project_timeout_sec);
+    let max_concurrency = input
+        .max_concurrency
+        .unwrap_or(current.max_concurrency);
+    let mr_poll_interval_min = input
+        .mr_poll_interval_min
+        .unwrap_or(current.mr_poll_interval_min);
+    let cadence = input
+        .cadence
+        .clone()
+        .unwrap_or_else(|| current.cadence.clone());
+
+    sqlx::query(
+        "UPDATE schedule_config SET
+            enabled = ?,
+            cadence = ?,
+            weekday = ?,
+            run_time = ?,
+            tz_offset_min = ?,
+            per_project_timeout_sec = ?,
+            max_concurrency = ?,
+            mr_poll_interval_min = ?,
+            updated_at = datetime('now')
+         WHERE id = 1",
+    )
+    .bind(enabled)
+    .bind(cadence)
+    .bind(weekday)
+    .bind(run_time)
+    .bind(tz_offset_min)
+    .bind(per_project_timeout_sec)
+    .bind(max_concurrency)
+    .bind(mr_poll_interval_min)
+    .execute(pool)
+    .await
+    .map_err(Error::Database)?;
+
     get_schedule_config_response(pool).await
+}
+
+const MISSED_RUN_TOLERANCE_HOURS: i64 = 6;
+
+pub fn compute_last_due_at(
+    config: &ScheduleConfigRow,
+    now: chrono::DateTime<FixedOffset>,
+) -> Result<Option<chrono::DateTime<FixedOffset>>, Error> {
+    let (hour, minute) = parse_run_time(&config.run_time)?;
+    let target_weekday = spec_weekday_to_chrono_weekday(config.weekday.unwrap_or(0));
+    let run_time = NaiveTime::from_hms_opt(hour, minute, 0).ok_or_else(|| {
+        Error::SummaryParse(format!("invalid run_time: {}", config.run_time))
+    })?;
+
+    for offset in 0..8 {
+        let candidate_date = now.date_naive() - Duration::days(offset);
+        if candidate_date.weekday() != target_weekday {
+            continue;
+        }
+
+        let candidate_dt = NaiveDateTime::new(candidate_date, run_time);
+        let candidate = candidate_dt
+            .and_local_timezone(now.timezone())
+            .single()
+            .ok_or_else(|| Error::SummaryParse("ambiguous local time".into()))?;
+        if candidate < now {
+            return Ok(Some(candidate));
+        }
+    }
+
+    Ok(None)
+}
+
+fn format_missed_due_label(due_at: chrono::DateTime<FixedOffset>) -> String {
+    let weekday_names = ["一", "二", "三", "四", "五", "六", "日"];
+    let weekday = due_at.weekday().num_days_from_monday() as usize;
+    format!(
+        "週{} {} {}",
+        weekday_names[weekday],
+        due_at.format("%m-%d"),
+        due_at.format("%H:%M")
+    )
+}
+
+pub async fn detect_missed_weekly_run(
+    pool: &SqlitePool,
+    config: &ScheduleConfigRow,
+) -> Result<Option<MissedWeeklyRun>, Error> {
+    if config.enabled == 0 {
+        return Ok(None);
+    }
+
+    let tz = schedule_timezone(config)?;
+    let now = Utc::now().with_timezone(&tz);
+    let Some(due_at) = compute_last_due_at(config, now)? else {
+        return Ok(None);
+    };
+
+    let window_start = due_at - Duration::hours(MISSED_RUN_TOLERANCE_HOURS);
+    let window_start_utc = window_start
+        .with_timezone(&Utc)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
+
+    let covered: i64 = sqlx::query_scalar(
+        "SELECT EXISTS(
+            SELECT 1 FROM runs
+            WHERE trigger IN ('schedule', 'manual_all')
+              AND status IN ('success', 'partial', 'running', 'queued')
+              AND started_at >= ?
+         )",
+    )
+    .bind(&window_start_utc)
+    .fetch_one(pool)
+    .await
+    .map_err(Error::Database)?;
+
+    if covered != 0 {
+        return Ok(None);
+    }
+
+    Ok(Some(MissedWeeklyRun {
+        due_at: due_at.to_rfc3339(),
+        label: format_missed_due_label(due_at),
+    }))
 }
 
 pub fn compute_next_run_at(config: &ScheduleConfigRow) -> Result<Option<String>, Error> {
@@ -391,5 +602,30 @@ mod tests {
         let mut config = sample_config();
         config.tz_offset_min = 100_000;
         assert!(schedule_timezone(&config).is_err());
+    }
+
+    #[test]
+    fn last_due_at_is_previous_weekday_occurrence() {
+        let config = sample_config(); // Mon 09:00 UTC+8
+        let tz = schedule_timezone(&config).expect("tz");
+        // Tuesday 2026-07-07 10:00 Taipei → last due Mon 2026-07-06 09:00
+        let now = NaiveDateTime::parse_from_str("2026-07-07 10:00:00", "%Y-%m-%d %H:%M:%S")
+            .unwrap()
+            .and_local_timezone(tz)
+            .single()
+            .unwrap();
+        let due = compute_last_due_at(&config, now).expect("due").expect("some");
+        assert_eq!(due.format("%Y-%m-%d %H:%M").to_string(), "2026-07-06 09:00");
+    }
+
+    #[test]
+    fn missed_label_includes_weekday_and_time() {
+        let tz = FixedOffset::east_opt(8 * 3600).unwrap();
+        let due = NaiveDateTime::parse_from_str("2026-07-06 09:00:00", "%Y-%m-%d %H:%M:%S")
+            .unwrap()
+            .and_local_timezone(tz)
+            .single()
+            .unwrap();
+        assert_eq!(format_missed_due_label(due), "週一 07-06 09:00");
     }
 }

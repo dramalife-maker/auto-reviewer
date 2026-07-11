@@ -41,6 +41,8 @@ commit_count: 42
 ## 待確認
 - MR #234 架構選擇是主動決策還是時間壓力妥協？
 - 分區索引上線後是否觀察過實際查詢分佈？
+
+## 已釐清
 ```
 
 ---
@@ -65,19 +67,22 @@ commit_count: 42
 
 ## Body sections（Markdown）
 
-三個 **level-2 heading 名稱不可改**：
+四個 **level-2 heading 名稱不可改**（順序固定）：
 
 | Heading | 用途 | 後端行為 |
 |---------|------|----------|
 | `## 本週重點` | 2–5 條 bullet | API 渲染；不入庫 |
 | `## 成長面向` | 1–3 條 bullet | API 渲染；不入庫 |
-| `## 待確認` | 0–5 條 bullet | 每條 `- ` → 一筆 `pending_items` |
+| `## 待確認` | 0–5 條 bullet | 每條 `- ` → 一筆 `pending_items`（ingest 對 open 同文去重） |
+| `## 已釐清` | 0–N 條 bullet | 每條精確匹配 open `(person, project, question)` → resolve（含 `_notes.md`）；無匹配則忽略 |
 
 Bullet 規則：
 
 - 每條以 `- ` 開頭（hyphen + space）。
 - 空 section 仍保留 heading，下方可無 bullet。
 - section 之間不要插入其他 level-2 heading。
+- **延續既有 open**：寫入 `## 待確認` 時文字必須等於 `manifest.open_pending[].question`。
+- **已釐清**：寫入 `## 已釐清` 時文字必須等於對應 open `question`，且不得同時出現在 `## 待確認`。僅省略兩區 ≠ resolve。詳見 `WORKFLOW.md`「待確認延續規則」。
 
 ---
 
@@ -88,6 +93,7 @@ Bullet 規則：
 | frontmatter | `reports.one_line`, `mr_count`, `commit_count`, 路徑 |
 | `person` | 查既有 `people.display_name`；未知則跳過該 summary |
 | `## 待確認` bullets | `pending_items`（`raised_date` = `date` 的 `YYYY-MM`） |
+| `## 已釐清` bullets | 匹配 open 列 → `status=resolved` + 同步 `_notes.md` |
 | 檔案路徑 | `reports.summary_md_path`, `reports.report_md_path` |
 
 ---
@@ -121,4 +127,6 @@ commit_count: 3
 - 測試覆蓋率穩定
 
 ## 待確認
+
+## 已釐清
 ```

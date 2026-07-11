@@ -382,6 +382,7 @@ commit_count: 42
 
     let parsed = parse_summary_file(&summary_path).expect("parse summary");
     assert_eq!(parsed.pending_questions.len(), 2);
+    assert!(parsed.resolved_questions.is_empty());
 
     let run_result = sqlx::query(
         "INSERT INTO runs (trigger, status, project_total) VALUES ('manual_all', 'running', 1)",
@@ -483,6 +484,408 @@ one_line: Stable week
     .await
     .expect("count");
     assert_eq!(open_count, 1);
+}
+
+#[tokio::test]
+async fn summary_parser_reads_resolved_section() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let summary_path = temp.path().join("summary.md");
+    std::fs::write(
+        &summary_path,
+        r#"---
+person: Alice Chen
+project: game-backend
+date: 2026-07-05
+one_line: Cleared one item
+---
+
+## 本週重點
+- Shipping
+
+## 成長面向
+- Clarity
+
+## 待確認
+- Still open?
+
+## 已釐清
+- Why choose A?
+"#,
+    )
+    .expect("write summary");
+
+    let parsed = parse_summary_file(&summary_path).expect("parse summary");
+    assert_eq!(parsed.pending_questions, vec!["Still open?".to_string()]);
+    assert_eq!(parsed.resolved_questions, vec!["Why choose A?".to_string()]);
+}
+
+#[tokio::test]
+async fn ingest_resolved_section_closes_open_pending() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pool = init_pool(temp.path()).await.expect("init pool");
+
+    let person_id: i64 = {
+        let result = sqlx::query("INSERT INTO people (display_name) VALUES ('Alice')")
+            .execute(&pool)
+            .await
+            .expect("insert person");
+        result.last_insert_rowid()
+    };
+
+    sqlx::query(
+        "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('game-backend', ?, 0)",
+    )
+    .bind(temp.path().join("repos/game-backend").display().to_string())
+    .execute(&pool)
+    .await
+    .expect("insert project");
+
+    let open_id = sqlx::query(
+        "INSERT INTO pending_items (person_id, project_id, question, status, raised_date)
+         VALUES (?, 1, 'Why choose A?', 'open', '2026-07')",
+    )
+    .bind(person_id)
+    .execute(&pool)
+    .await
+    .expect("insert open")
+    .last_insert_rowid();
+
+    let notes_path = temp.path().join("reports/_people/Alice/_notes.md");
+    std::fs::create_dir_all(notes_path.parent().expect("parent")).expect("mkdir notes");
+    std::fs::write(&notes_path, "- [2026-07] Why choose A?\n").expect("write notes");
+
+    let summary_path = temp
+        .path()
+        .join("reports/game-backend/Alice/2026-07-12/summary.md");
+    std::fs::create_dir_all(summary_path.parent().expect("parent")).expect("mkdir");
+    std::fs::write(
+        &summary_path,
+        r#"---
+person: Alice
+project: game-backend
+date: 2026-07-12
+one_line: Cleared
+---
+
+## 待確認
+
+## 已釐清
+- Why choose A?
+"#,
+    )
+    .expect("write summary");
+
+    let run_id = sqlx::query(
+        "INSERT INTO runs (trigger, status, project_total) VALUES ('manual_all', 'running', 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert run")
+    .last_insert_rowid();
+
+    ingest_project_summaries(&pool, temp.path(), "game-backend", 1, run_id)
+        .await
+        .expect("ingest");
+
+    let status: String = sqlx::query_scalar("SELECT status FROM pending_items WHERE id = ?")
+        .bind(open_id)
+        .fetch_one(&pool)
+        .await
+        .expect("status");
+    assert_eq!(status, "resolved");
+
+    let resolved_date: Option<String> =
+        sqlx::query_scalar("SELECT resolved_date FROM pending_items WHERE id = ?")
+            .bind(open_id)
+            .fetch_one(&pool)
+            .await
+            .expect("resolved_date");
+    assert!(resolved_date.is_some());
+    assert_eq!(resolved_date.as_deref().unwrap().len(), 7);
+
+    let notes = std::fs::read_to_string(&notes_path).expect("read notes");
+    assert!(notes.contains("✓ Why choose A?"), "notes={notes}");
+}
+
+#[tokio::test]
+async fn ingest_omission_without_resolved_keeps_open() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pool = init_pool(temp.path()).await.expect("init pool");
+
+    let person_id: i64 = {
+        let result = sqlx::query("INSERT INTO people (display_name) VALUES ('Alice')")
+            .execute(&pool)
+            .await
+            .expect("insert person");
+        result.last_insert_rowid()
+    };
+
+    sqlx::query(
+        "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('game-backend', ?, 0)",
+    )
+    .bind(temp.path().join("repos/game-backend").display().to_string())
+    .execute(&pool)
+    .await
+    .expect("insert project");
+
+    let open_id = sqlx::query(
+        "INSERT INTO pending_items (person_id, project_id, question, status, raised_date)
+         VALUES (?, 1, 'Why choose A?', 'open', '2026-07')",
+    )
+    .bind(person_id)
+    .execute(&pool)
+    .await
+    .expect("insert open")
+    .last_insert_rowid();
+
+    let summary_path = temp
+        .path()
+        .join("reports/game-backend/Alice/2026-07-12/summary.md");
+    std::fs::create_dir_all(summary_path.parent().expect("parent")).expect("mkdir");
+    std::fs::write(
+        &summary_path,
+        r#"---
+person: Alice
+project: game-backend
+date: 2026-07-12
+one_line: No pending this week
+---
+
+## 待確認
+
+## 已釐清
+"#,
+    )
+    .expect("write summary");
+
+    let run_id = sqlx::query(
+        "INSERT INTO runs (trigger, status, project_total) VALUES ('manual_all', 'running', 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert run")
+    .last_insert_rowid();
+
+    ingest_project_summaries(&pool, temp.path(), "game-backend", 1, run_id)
+        .await
+        .expect("ingest");
+
+    let status: String = sqlx::query_scalar("SELECT status FROM pending_items WHERE id = ?")
+        .bind(open_id)
+        .fetch_one(&pool)
+        .await
+        .expect("status");
+    assert_eq!(status, "open");
+}
+
+#[tokio::test]
+async fn ingest_unknown_resolved_bullet_is_ignored() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pool = init_pool(temp.path()).await.expect("init pool");
+
+    sqlx::query("INSERT INTO people (display_name) VALUES ('Alice')")
+        .execute(&pool)
+        .await
+        .expect("insert person");
+
+    sqlx::query(
+        "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('game-backend', ?, 0)",
+    )
+    .bind(temp.path().join("repos/game-backend").display().to_string())
+    .execute(&pool)
+    .await
+    .expect("insert project");
+
+    let summary_path = temp
+        .path()
+        .join("reports/game-backend/Alice/2026-07-12/summary.md");
+    std::fs::create_dir_all(summary_path.parent().expect("parent")).expect("mkdir");
+    std::fs::write(
+        &summary_path,
+        r#"---
+person: Alice
+project: game-backend
+date: 2026-07-12
+one_line: Noise
+---
+
+## 待確認
+
+## 已釐清
+- Never seen?
+"#,
+    )
+    .expect("write summary");
+
+    let run_id = sqlx::query(
+        "INSERT INTO runs (trigger, status, project_total) VALUES ('manual_all', 'running', 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert run")
+    .last_insert_rowid();
+
+    ingest_project_summaries(&pool, temp.path(), "game-backend", 1, run_id)
+        .await
+        .expect("ingest");
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pending_items WHERE question = 'Never seen?'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("count");
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
+async fn ingest_notes_sync_failure_keeps_pending_resolved() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pool = init_pool(temp.path()).await.expect("init pool");
+
+    let person_id: i64 = {
+        let result = sqlx::query("INSERT INTO people (display_name) VALUES ('Alice')")
+            .execute(&pool)
+            .await
+            .expect("insert person");
+        result.last_insert_rowid()
+    };
+
+    sqlx::query(
+        "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('game-backend', ?, 0)",
+    )
+    .bind(temp.path().join("repos/game-backend").display().to_string())
+    .execute(&pool)
+    .await
+    .expect("insert project");
+
+    let open_id = sqlx::query(
+        "INSERT INTO pending_items (person_id, project_id, question, status, raised_date)
+         VALUES (?, 1, 'Why choose A?', 'open', '2026-07')",
+    )
+    .bind(person_id)
+    .execute(&pool)
+    .await
+    .expect("insert open")
+    .last_insert_rowid();
+
+    // Block notes sync: make the person trends path a file so create_dir_all fails.
+    let people_root = temp.path().join("reports/_people");
+    std::fs::create_dir_all(&people_root).expect("mkdir _people");
+    std::fs::write(people_root.join("Alice"), "not a directory").expect("block notes path");
+
+    let summary_path = temp
+        .path()
+        .join("reports/game-backend/Alice/2026-07-12/summary.md");
+    std::fs::create_dir_all(summary_path.parent().expect("parent")).expect("mkdir");
+    std::fs::write(
+        &summary_path,
+        r#"---
+person: Alice
+project: game-backend
+date: 2026-07-12
+one_line: Cleared
+---
+
+## 待確認
+
+## 已釐清
+- Why choose A?
+"#,
+    )
+    .expect("write summary");
+
+    let run_id = sqlx::query(
+        "INSERT INTO runs (trigger, status, project_total) VALUES ('manual_all', 'running', 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert run")
+    .last_insert_rowid();
+
+    ingest_project_summaries(&pool, temp.path(), "game-backend", 1, run_id)
+        .await
+        .expect("ingest continues despite notes failure");
+
+    let status: String = sqlx::query_scalar("SELECT status FROM pending_items WHERE id = ?")
+        .bind(open_id)
+        .fetch_one(&pool)
+        .await
+        .expect("status");
+    assert_eq!(status, "resolved");
+}
+
+#[tokio::test]
+async fn ingest_dual_section_still_resolves_open() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pool = init_pool(temp.path()).await.expect("init pool");
+
+    let person_id: i64 = {
+        let result = sqlx::query("INSERT INTO people (display_name) VALUES ('Alice')")
+            .execute(&pool)
+            .await
+            .expect("insert person");
+        result.last_insert_rowid()
+    };
+
+    sqlx::query(
+        "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('game-backend', ?, 0)",
+    )
+    .bind(temp.path().join("repos/game-backend").display().to_string())
+    .execute(&pool)
+    .await
+    .expect("insert project");
+
+    let open_id = sqlx::query(
+        "INSERT INTO pending_items (person_id, project_id, question, status, raised_date)
+         VALUES (?, 1, 'Why choose A?', 'open', '2026-07')",
+    )
+    .bind(person_id)
+    .execute(&pool)
+    .await
+    .expect("insert open")
+    .last_insert_rowid();
+
+    let summary_path = temp
+        .path()
+        .join("reports/game-backend/Alice/2026-07-12/summary.md");
+    std::fs::create_dir_all(summary_path.parent().expect("parent")).expect("mkdir");
+    std::fs::write(
+        &summary_path,
+        r#"---
+person: Alice
+project: game-backend
+date: 2026-07-12
+one_line: Dual
+---
+
+## 待確認
+- Why choose A?
+
+## 已釐清
+- Why choose A?
+"#,
+    )
+    .expect("write summary");
+
+    let run_id = sqlx::query(
+        "INSERT INTO runs (trigger, status, project_total) VALUES ('manual_all', 'running', 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert run")
+    .last_insert_rowid();
+
+    ingest_project_summaries(&pool, temp.path(), "game-backend", 1, run_id)
+        .await
+        .expect("ingest");
+
+    let status: String = sqlx::query_scalar("SELECT status FROM pending_items WHERE id = ?")
+        .bind(open_id)
+        .fetch_one(&pool)
+        .await
+        .expect("status");
+    assert_eq!(status, "resolved");
 }
 
 #[tokio::test]

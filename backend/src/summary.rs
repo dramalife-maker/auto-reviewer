@@ -22,6 +22,7 @@ pub struct SummaryFrontmatter {
 pub struct ParsedSummary {
     pub frontmatter: SummaryFrontmatter,
     pub pending_questions: Vec<String>,
+    pub resolved_questions: Vec<String>,
     pub highlights: Vec<String>,
     pub growth: Vec<String>,
     pub summary_path: PathBuf,
@@ -50,6 +51,7 @@ pub fn parse_summary_file(path: &Path) -> Result<ParsedSummary, Error> {
         serde_yaml::from_str(yaml).map_err(|err| Error::SummaryParse(err.to_string()))?;
     Ok(ParsedSummary {
         pending_questions: extract_bullet_section(body, "## 待確認"),
+        resolved_questions: extract_bullet_section(body, "## 已釐清"),
         highlights: extract_bullet_section(body, "## 本週重點"),
         growth: extract_bullet_section(body, "## 成長面向"),
         frontmatter,
@@ -77,7 +79,7 @@ pub async fn ingest_project_summaries(
         let person_dir = entry.path();
         for summary in find_summary_files(&person_dir)? {
             let parsed = parse_summary_file(&summary)?;
-            upsert_summary(pool, project_id, run_id, &parsed).await?;
+            upsert_summary(pool, data_root, project_id, run_id, &parsed).await?;
         }
     }
 
@@ -86,6 +88,7 @@ pub async fn ingest_project_summaries(
 
 async fn upsert_summary(
     pool: &SqlitePool,
+    data_root: &Path,
     project_id: i64,
     run_id: i64,
     parsed: &ParsedSummary,
@@ -179,7 +182,78 @@ async fn upsert_summary(
     }
 
     tx.commit().await.map_err(Error::Database)?;
+
+    for question in &parsed.resolved_questions {
+        if parsed.pending_questions.iter().any(|q| q == question) {
+            warn!(
+                person_id,
+                project_id,
+                question,
+                "question appears in both ## 待確認 and ## 已釐清; resolving open match if any"
+            );
+        }
+        resolve_from_summary_cleared(pool, data_root, person_id, project_id, question).await?;
+    }
+
     Ok(())
+}
+
+/// Resolve an open pending item listed under `## 已釐清`. Missing matches are ignored.
+/// Notes sync failures are logged and do not abort ingest (DB remains resolved).
+async fn resolve_from_summary_cleared(
+    pool: &SqlitePool,
+    data_root: &Path,
+    person_id: i64,
+    project_id: i64,
+    question: &str,
+) -> Result<(), Error> {
+    let item_id: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM pending_items
+         WHERE person_id = ? AND project_id = ? AND question = ? AND status = 'open'",
+    )
+    .bind(person_id)
+    .bind(project_id)
+    .bind(question)
+    .fetch_optional(pool)
+    .await
+    .map_err(Error::Database)?;
+
+    let Some(item_id) = item_id else {
+        warn!(
+            person_id,
+            project_id,
+            question,
+            "skipping 已釐清 bullet with no matching open pending item"
+        );
+        return Ok(());
+    };
+
+    match crate::pending_items::resolve_pending_item(
+        pool,
+        data_root,
+        item_id,
+        crate::pending_items::ResolvePendingItemInput {
+            status: "resolved".into(),
+            resolution_note: None,
+        },
+    )
+    .await
+    {
+        Ok(_) => Ok(()),
+        // pending_items already logged NotesSyncFailed; DB remains resolved — continue ingest.
+        Err(Error::NotesSyncFailed(_)) => Ok(()),
+        Err(Error::PendingItemAlreadyResolved) | Err(Error::NotFound) => {
+            warn!(
+                item_id,
+                person_id,
+                project_id,
+                question,
+                "已釐清 resolve skipped: item already resolved or missing"
+            );
+            Ok(())
+        }
+        Err(err) => Err(err),
+    }
 }
 
 fn find_summary_files(person_dir: &Path) -> Result<Vec<PathBuf>, Error> {

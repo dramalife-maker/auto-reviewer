@@ -222,14 +222,14 @@ export function startMrScan(projectId: number, options?: { force?: boolean }): P
   return request(`/api/projects/${projectId}/mr-scan${query}`, { method: 'POST' })
 }
 
-export function fetchSchedule(): Promise<ScheduleConfigResponse> {
-  return request('/api/schedule')
-}
-
 export function updateSchedule(body: ScheduleUpdateInput): Promise<ScheduleConfigResponse> {
   return request('/api/schedule', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
+}
+
+export function catchUpSchedule(): Promise<CreateRunResponse> {
+  return request('/api/schedule/catch-up', { method: 'POST' })
 }

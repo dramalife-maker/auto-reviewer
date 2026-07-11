@@ -1354,6 +1354,87 @@ body {
   line-height: 1.4;
 }
 
+.schedule-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem 0.75rem;
+  margin: 0.6rem 0;
+}
+
+.schedule-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  color: #6b7280;
+}
+
+.schedule-field input,
+.schedule-field select {
+  font: inherit;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #d1d5db;
+  border-radius: 0.375rem;
+  background: #fff;
+  color: inherit;
+}
+
+.schedule-field input[type='checkbox'] {
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.35rem;
+}
+
+.schedule-save-row {
+  margin-top: 0.75rem;
+}
+
+.schedule-catchup-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #f59e0b;
+  background: #fffbeb;
+  border-radius: 0.5rem;
+}
+
+.schedule-catchup-text {
+  font-size: 0.9rem;
+}
+
+.schedule-catchup-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.schedule-catchup-btn {
+  font: inherit;
+  padding: 0.35rem 0.75rem;
+  border: none;
+  border-radius: 0.375rem;
+  background: #d97706;
+  color: #fff;
+  cursor: pointer;
+}
+
+.schedule-catchup-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.schedule-catchup-dismiss {
+  font: inherit;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid #d1d5db;
+  border-radius: 0.375rem;
+  background: transparent;
+  cursor: pointer;
+}
+
 .project-field-mr-gates {
   border-top: 1px dashed #e5e7eb;
   padding-top: 0.875rem;

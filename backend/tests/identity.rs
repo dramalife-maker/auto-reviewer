@@ -200,6 +200,75 @@ async fn manifest_includes_person_report_root() {
         .to_string()
         .replace('\\', "/");
     assert_eq!(json["person_report_root"], expected);
+    let open_pending = json["open_pending"].as_array().expect("open_pending array");
+    assert!(open_pending.is_empty());
+}
+
+#[tokio::test]
+async fn weekly_manifest_includes_open_pending_items() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::env::set_var("DATA_ROOT_DIR", temp.path());
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let repo = temp.path().join("repo");
+    init_repo_with_commits(
+        &repo,
+        &[("alice@co.com", "Alice", "alice work")],
+    );
+
+    sqlx::query(
+        "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('alpha', ?, 1)",
+    )
+    .bind(repo.display().to_string())
+    .execute(&pool)
+    .await
+    .expect("insert project");
+
+    let person_id = create_person(&pool, "Alice Chen")
+        .await
+        .expect("create person");
+    bind_identity(&pool, person_id, KIND_GIT_EMAIL, "alice@co.com", None)
+        .await
+        .expect("bind alice");
+
+    let open_result = sqlx::query(
+        "INSERT INTO pending_items (person_id, project_id, question, status, raised_date)
+         VALUES (?, 1, 'Why choose A?', 'open', '2026-07')",
+    )
+    .bind(person_id)
+    .execute(&pool)
+    .await
+    .expect("insert open pending");
+    let open_id = open_result.last_insert_rowid();
+
+    sqlx::query(
+        "INSERT INTO pending_items (person_id, project_id, question, status, raised_date, resolved_date)
+         VALUES (?, 1, 'Already done?', 'resolved', '2026-06', '2026-07')",
+    )
+    .bind(person_id)
+    .execute(&pool)
+    .await
+    .expect("insert resolved pending");
+
+    let project = ProjectRow {
+        id: 1,
+        name: "alpha".into(),
+        repo_path: repo.display().to_string(),
+    };
+    let manifest_path =
+        write_weekly_manifest(&pool, temp.path(), 42, &project, &project.repo_path)
+            .await
+            .expect("write manifest");
+
+    let json: Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).expect("read manifest"))
+            .expect("parse manifest");
+    let open_pending = json["open_pending"].as_array().expect("open_pending array");
+    assert_eq!(open_pending.len(), 1);
+    assert_eq!(open_pending[0]["id"], open_id);
+    assert_eq!(open_pending[0]["person_id"], person_id);
+    assert_eq!(open_pending[0]["display_name"], "Alice Chen");
+    assert_eq!(open_pending[0]["question"], "Why choose A?");
 }
 
 #[tokio::test]

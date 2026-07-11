@@ -28,6 +28,7 @@ import {
   updateMrReview,
   updateProject,
   updateSchedule,
+  catchUpSchedule,
   ApiError,
 } from './api'
 import type {
@@ -49,6 +50,16 @@ import type {
 
 const TERMINAL_STATUSES = new Set(['success', 'partial', 'failed'])
 const DEFAULT_MR_SKIP_LABELS = ['wip', 'do-not-review', 'no-ai-review']
+const CATCHUP_DISMISS_KEY = 'schedule-catchup-dismissed-due'
+const WEEKDAY_OPTIONS = [
+  { value: 0, label: '週一' },
+  { value: 1, label: '週二' },
+  { value: 2, label: '週三' },
+  { value: 3, label: '週四' },
+  { value: 4, label: '週五' },
+  { value: 5, label: '週六' },
+  { value: 6, label: '週日' },
+]
 const IDENTITY_KINDS: Array<{ value: IdentityKind; label: string }> = [
   { value: 'git_email', label: 'Git email' },
   { value: 'gitlab_user', label: 'GitLab username' },
@@ -107,6 +118,7 @@ export class ReviewerApp {
   private mrChatMessages: Array<{ role: 'user' | 'assistant'; text: string }> = []
   private mrChatLoading = false
   private scheduleSaving = false
+  private catchUpLoading = false
   private resolvingPendingItemIds = new Set<number>()
   private runsList: RunListItem[] = []
   private runsTotal = 0
@@ -496,6 +508,14 @@ export class ReviewerApp {
       void this.handleScheduleSave()
     })
 
+    this.root.querySelector('#schedule-catchup-run')?.addEventListener('click', () => {
+      void this.handleScheduleCatchUp()
+    })
+
+    this.root.querySelector('#schedule-catchup-dismiss')?.addEventListener('click', () => {
+      this.handleScheduleCatchUpDismiss()
+    })
+
     this.root.querySelector('#project-mr-scan')?.addEventListener('click', () => {
       const project = this.selectedProject
       if (project) {
@@ -550,6 +570,27 @@ export class ReviewerApp {
     const scheduleStatus = schedule?.enabled
       ? '<div class="schedule-status active"><span aria-hidden="true">✓</span> 排程器運行中</div>'
       : '<div class="schedule-status inactive">排程已停用</div>'
+    const weekdayOptions = WEEKDAY_OPTIONS.map(
+      (opt) =>
+        `<option value="${opt.value}"${schedule?.weekday === opt.value ? ' selected' : ''}>${opt.label}</option>`,
+    ).join('')
+    const missed = schedule?.missed_weekly_run ?? null
+    const catchUpDismissed =
+      missed !== null && sessionStorage.getItem(CATCHUP_DISMISS_KEY) === missed.due_at
+    const catchUpBanner =
+      missed && !catchUpDismissed
+        ? `<div class="schedule-catchup-banner" role="status">
+            <div class="schedule-catchup-text">
+              錯過週報排程：${escapeHtml(missed.label)}
+            </div>
+            <div class="schedule-catchup-actions">
+              <button id="schedule-catchup-run" class="schedule-catchup-btn" type="button" ${this.catchUpLoading || this.activeRunId ? 'disabled' : ''}>
+                ${this.catchUpLoading ? '補跑中…' : '立即補跑'}
+              </button>
+              <button id="schedule-catchup-dismiss" class="schedule-catchup-dismiss" type="button">稍後</button>
+            </div>
+          </div>`
+        : ''
 
     const recentRuns = dashboard?.recent_runs ?? []
     const recentRunRows =
@@ -578,6 +619,8 @@ export class ReviewerApp {
           ${this.activeRunId ? '執行中…' : '▶ 立即執行'}
         </button>
       </div>
+
+      ${catchUpBanner}
 
       <div class="dashboard-stats">
         <article class="stat-card">
@@ -618,10 +661,37 @@ export class ReviewerApp {
           <h3 class="panel-title">排程</h3>
           <div class="schedule-section">
             <div class="schedule-section-title">週報（軌道 1）</div>
-            <div class="schedule-row"><span aria-hidden="true">📅</span> ${escapeHtml(schedule?.label ?? '—')}</div>
+            <div class="schedule-row muted">頻率：每週（唯讀）</div>
+            <div class="schedule-form-grid">
+              <label class="schedule-field">
+                <span>啟用</span>
+                <input id="schedule-enabled" type="checkbox" ${schedule?.enabled ? 'checked' : ''} />
+              </label>
+              <label class="schedule-field">
+                <span>星期</span>
+                <select id="schedule-weekday">${weekdayOptions}</select>
+              </label>
+              <label class="schedule-field">
+                <span>時間（HH:MM）</span>
+                <input id="schedule-run-time" type="text" value="${escapeHtml(schedule?.run_time ?? '09:00')}" pattern="\\d{2}:\\d{2}" />
+              </label>
+              <label class="schedule-field">
+                <span>時區偏移（分）</span>
+                <input id="schedule-tz-offset" type="number" step="1" value="${schedule?.tz_offset_min ?? 480}" />
+              </label>
+              <label class="schedule-field">
+                <span>專案逾時（秒）</span>
+                <input id="schedule-timeout" type="number" min="1" step="1" value="${schedule?.per_project_timeout_sec ?? 600}" />
+              </label>
+              <label class="schedule-field">
+                <span>最大並發</span>
+                <input id="schedule-concurrency" type="number" min="1" step="1" value="${schedule?.max_concurrency ?? 2}" />
+              </label>
+            </div>
             <div class="schedule-row muted">
               <span aria-hidden="true">🕒</span>
               ${schedule?.next_run_at ? `下次 ${escapeHtml(schedule.next_run_at)}` : '無下次排程'}
+              · ${escapeHtml(schedule?.label ?? '—')}
             </div>
             ${scheduleStatus}
           </div>
@@ -630,24 +700,26 @@ export class ReviewerApp {
             <div class="schedule-row">
               <span aria-hidden="true">🔁</span>
               ${escapeHtml(schedule?.mr_poll_label ?? '—')}
-              ${schedule?.mr_poll_interval_min && schedule.mr_poll_interval_min <= 0 ? '（已停用）' : ''}
+              ${schedule?.mr_poll_interval_min != null && schedule.mr_poll_interval_min <= 0 ? '（已停用）' : ''}
             </div>
             <div class="schedule-mr-poll-edit">
-              <label class="schedule-mr-poll-label" for="schedule-mr-poll-interval">間隔（分鐘）</label>
+              <label class="schedule-mr-poll-label" for="schedule-mr-poll-interval">間隔（分鐘，≤0 停用）</label>
               <input
                 id="schedule-mr-poll-interval"
                 class="schedule-mr-poll-input"
                 type="number"
-                min="1"
                 step="1"
                 value="${schedule?.mr_poll_interval_min ?? 60}"
               />
-              <button id="schedule-save" class="schedule-save-btn" type="button" ${this.scheduleSaving ? 'disabled' : ''}>
-                ${this.scheduleSaving ? '儲存中…' : '儲存'}
-              </button>
             </div>
-            <p class="schedule-field-hint">≥60 時須為 60 的倍數（如 60、120）。變更後需重啟 reviewer-server 才會套用新 cron。</p>
+            <p class="schedule-field-hint">≥60 時須為 60 的倍數（如 60、120）。</p>
           </div>
+          <div class="schedule-save-row">
+            <button id="schedule-save" class="schedule-save-btn" type="button" ${this.scheduleSaving ? 'disabled' : ''}>
+              ${this.scheduleSaving ? '儲存中…' : '儲存排程'}
+            </button>
+          </div>
+          <p class="schedule-field-hint">影響 cron 的欄位（啟用／星期／時間／時區／MR 間隔）需重啟 reviewer-server 才生效；逾時與並發於下一場 run 即生效。</p>
         </section>
       </div>
     </div>`
@@ -1302,20 +1374,77 @@ export class ReviewerApp {
   }
 
   private async handleScheduleSave(): Promise<void> {
-    const input = this.root.querySelector('#schedule-mr-poll-interval') as HTMLInputElement | null
-    const value = Number(input?.value)
-    if (!Number.isFinite(value) || value < 1) {
-      this.bannerMessage = 'MR 輪詢間隔必須為正整數（分鐘）'
+    const enabledInput = this.root.querySelector('#schedule-enabled') as HTMLInputElement | null
+    const weekdayInput = this.root.querySelector('#schedule-weekday') as HTMLSelectElement | null
+    const runTimeInput = this.root.querySelector('#schedule-run-time') as HTMLInputElement | null
+    const tzInput = this.root.querySelector('#schedule-tz-offset') as HTMLInputElement | null
+    const timeoutInput = this.root.querySelector('#schedule-timeout') as HTMLInputElement | null
+    const concurrencyInput = this.root.querySelector(
+      '#schedule-concurrency',
+    ) as HTMLInputElement | null
+    const mrPollInput = this.root.querySelector(
+      '#schedule-mr-poll-interval',
+    ) as HTMLInputElement | null
+
+    const weekday = Number(weekdayInput?.value)
+    const runTime = (runTimeInput?.value ?? '').trim()
+    const tzOffset = Number(tzInput?.value)
+    const timeout = Number(timeoutInput?.value)
+    const concurrency = Number(concurrencyInput?.value)
+    const mrPoll = Number(mrPollInput?.value)
+
+    if (!/^\d{1,2}:\d{2}$/.test(runTime)) {
+      this.bannerMessage = '執行時間格式須為 HH:MM'
       this.bannerIsError = true
       await this.renderWithStatus()
       return
     }
+    if (!Number.isFinite(weekday) || weekday < 0 || weekday > 6) {
+      this.bannerMessage = '星期必須為 0–6'
+      this.bannerIsError = true
+      await this.renderWithStatus()
+      return
+    }
+    if (!Number.isFinite(tzOffset)) {
+      this.bannerMessage = '時區偏移必須為整數（分鐘）'
+      this.bannerIsError = true
+      await this.renderWithStatus()
+      return
+    }
+    if (!Number.isFinite(timeout) || timeout < 1) {
+      this.bannerMessage = '專案逾時必須 ≥ 1 秒'
+      this.bannerIsError = true
+      await this.renderWithStatus()
+      return
+    }
+    if (!Number.isFinite(concurrency) || concurrency < 1) {
+      this.bannerMessage = '最大並發必須 ≥ 1'
+      this.bannerIsError = true
+      await this.renderWithStatus()
+      return
+    }
+    if (!Number.isFinite(mrPoll)) {
+      this.bannerMessage = 'MR 輪詢間隔必須為整數（分鐘；≤0 停用）'
+      this.bannerIsError = true
+      await this.renderWithStatus()
+      return
+    }
+
     this.scheduleSaving = true
     await this.renderWithStatus()
     try {
-      await updateSchedule({ mr_poll_interval_min: Math.trunc(value) })
+      await updateSchedule({
+        enabled: Boolean(enabledInput?.checked),
+        weekday: Math.trunc(weekday),
+        run_time: runTime.length === 4 ? `0${runTime}` : runTime,
+        tz_offset_min: Math.trunc(tzOffset),
+        per_project_timeout_sec: Math.trunc(timeout),
+        max_concurrency: Math.trunc(concurrency),
+        mr_poll_interval_min: Math.trunc(mrPoll),
+      })
       await this.loadDashboard()
-      this.bannerMessage = '排程設定已儲存（重啟服務後套用新 cron）'
+      this.bannerMessage =
+        '排程已儲存。影響 cron 的欄位需重啟 reviewer-server；逾時／並發於下一場 run 生效。'
       this.bannerIsError = false
     } catch (error) {
       this.bannerMessage = error instanceof Error ? error.message : '儲存排程失敗'
@@ -1324,6 +1453,38 @@ export class ReviewerApp {
       this.scheduleSaving = false
       await this.renderWithStatus()
     }
+  }
+
+  private async handleScheduleCatchUp(): Promise<void> {
+    if (this.catchUpLoading || this.activeRunId) {
+      return
+    }
+    this.catchUpLoading = true
+    await this.renderWithStatus()
+    try {
+      const response = await catchUpSchedule()
+      sessionStorage.removeItem(CATCHUP_DISMISS_KEY)
+      this.activeRunId = response.run_id
+      this.bannerMessage = `已啟動補跑 · run #${response.run_id}`
+      this.bannerIsError = false
+      await this.loadDashboard()
+      this.render(`執行中 · run #${response.run_id}`)
+      this.startPolling(response.run_id)
+    } catch (error) {
+      this.bannerMessage = error instanceof Error ? error.message : '補跑失敗'
+      this.bannerIsError = true
+      await this.renderWithStatus()
+    } finally {
+      this.catchUpLoading = false
+    }
+  }
+
+  private handleScheduleCatchUpDismiss(): void {
+    const dueAt = this.dashboard?.schedule?.missed_weekly_run?.due_at
+    if (dueAt) {
+      sessionStorage.setItem(CATCHUP_DISMISS_KEY, dueAt)
+    }
+    void this.renderWithStatus()
   }
 
   private async handleProjectRun(projectName?: string): Promise<void> {

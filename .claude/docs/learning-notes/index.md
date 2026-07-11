@@ -27,6 +27,8 @@
 | 日期 | 檔案 | 摘要 |
 |------|------|------|
 | 2026-07-08 | 2026-07-08/reviewer-model-env.md | model 用通用 `REVIEWER_MODEL` 而非 `REVIEWER_CURSOR_MODEL`；未設定則不傳 CLI `--model` |
+| 2026-07-11 | 2026-07-11/omit-vs-resolved-pending.md | 週報省略待確認 ≠ resolve；已釐清需 `## 已釐清` 顯式訊號 + ingest；含 project 維度 open 索引注意 |
+| 2026-07-11 | 2026-07-11/sessionstorage-dismiss-spec.md | sessionStorage dismiss 與「reload MUST 再現」互斥；acceptance 須對齊儲存體真實行為 |
 
 ## 競態條件 (Race Condition)
 

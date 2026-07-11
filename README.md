@@ -249,7 +249,10 @@ claude --bare ... --append-system-prompt-file $APP_ROOT/skills/reviewer-batch/WO
 | 方法 | 路徑 | 說明 |
 |------|------|------|
 | GET | `/health` | 健康檢查 |
-| GET | `/api/dashboard` | 控制台：`last_run`、`stats`、`recent_reports`、`recent_runs`（最多 5 筆，同 list item 欄位）、`schedule` |
+| GET | `/api/dashboard` | 控制台：`last_run`、`stats`、`recent_reports`、`recent_runs`（最多 5 筆，同 list item 欄位）、`schedule`（含可編輯欄位與 `missed_weekly_run`） |
+| GET | `/api/schedule` | 排程設定全文（含 `missed_weekly_run`） |
+| PATCH | `/api/schedule` | 更新排程：可選 `enabled`／`weekday`（0–6）／`run_time`（HH:MM）／`tz_offset_min`／`per_project_timeout_sec`（≥1）／`max_concurrency`（≥1）／`mr_poll_interval_min`（≤0 停用；≥60 須為 60 倍數）／`cadence`（僅允許 `weekly`）；非法值 400 |
+| POST | `/api/schedule/catch-up` | 確認週報補跑：建立等同 `manual_all` 的批次 run，回 `202 { run_id }`；衝突 409 |
 | GET | `/api/runs` | 執行紀錄列表：`{ runs, total }`；query：`limit`（預設 50、最大 200）、`offset`、`trigger`、`status`；依 `started_at` 降序 |
 | POST | `/api/runs` | `{ "trigger": "manual_all" }` 全部執行 |
 | GET | `/api/runs/{id}` | run 明細：含 `duration_sec`／`note`、各專案時間與錯誤；已結束的 MR trigger（`mr_poll`／`manual_mr_poll`）另附 per-project `skip_summary`（來自 `eligible_mrs.json` 的 `skipped[]`，`items` 上限 100；進行中的 run 省略以減輕 polling IO） |
@@ -270,6 +273,10 @@ claude --bare ... --append-system-prompt-file $APP_ROOT/skills/reviewer-batch/WO
 執行紀錄 UI 依賴 `GET /api/runs` 與 dashboard `recent_runs`：前後端請**同版部署**；僅升級前端而留舊後端時，歷史頁會失敗（應顯示錯誤，而非「尚無紀錄」）。
 
 排程預設：每週一 09:00 台北時間（`schedule_config` 表，enabled=1）。時區由 `schedule_config.tz_offset_min` 設定（UTC 偏移分鐘數，預設 `480` = UTC+8）；`run_time` 依此時區解讀。
+
+**生效範圍：** 影響 cron 註冊的欄位（`enabled`／`weekday`／`run_time`／`tz_offset_min`／`mr_poll_interval_min`）寫入 DB 後需重啟 `reviewer-server` 才套用新 cron；`per_project_timeout_sec`／`max_concurrency` 由 worker 每次 run 讀 DB，下一場即生效。
+
+**漏跑偵測與補跑：** `enabled=1` 時計算最近一個已過期的週報 `due_at`；若無 `trigger IN (schedule, manual_all)` 且 `started_at >= due_at - 6h`、狀態為 `success`／`partial`／`running`／`queued` 的覆蓋 run，則 `missed_weekly_run` 為 `{ due_at, label }`，否則為 `null`。控制台顯示補跑橫幅；`POST /api/schedule/catch-up` 手動確認後建立批次 run（「稍後」僅 sessionStorage 隱藏，不寫 DB）。
 
 ## 測試
 

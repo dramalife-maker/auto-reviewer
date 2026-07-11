@@ -236,12 +236,23 @@ export interface DashboardRecentReport {
   pending_count: number
 }
 
+export interface MissedWeeklyRun {
+  due_at: string
+  label: string
+}
+
 export interface DashboardSchedule {
   label: string
   next_run_at: string | null
   enabled: boolean
+  weekday: number | null
+  run_time: string
+  tz_offset_min: number
+  per_project_timeout_sec: number
+  max_concurrency: number
   mr_poll_interval_min: number
   mr_poll_label: string
+  missed_weekly_run: MissedWeeklyRun | null
 }
 
 export interface ScheduleConfigResponse {
@@ -249,16 +260,25 @@ export interface ScheduleConfigResponse {
   cadence: string
   weekday: number | null
   run_time: string
+  tz_offset_min: number
   mr_poll_interval_min: number
   per_project_timeout_sec: number
   max_concurrency: number
   weekly_label: string
   mr_poll_label: string
   next_weekly_run_at: string | null
+  missed_weekly_run: MissedWeeklyRun | null
 }
 
 export interface ScheduleUpdateInput {
+  enabled?: boolean
+  weekday?: number
+  run_time?: string
+  tz_offset_min?: number
+  per_project_timeout_sec?: number
+  max_concurrency?: number
   mr_poll_interval_min?: number
+  cadence?: string
 }
 
 export interface DashboardResponse {

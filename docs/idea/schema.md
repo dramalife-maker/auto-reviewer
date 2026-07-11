@@ -151,6 +151,10 @@ INSERT INTO schedule_config (id) VALUES (1);  -- 初始化單列
 ```
 
 > 排程由後端內建 `tokio-cron-scheduler` 驅動（spec §7.3 已決），非 OS cron、非桌面常駐。
+>
+> **API：** `GET`／`PATCH /api/schedule` 讀寫上表；`PATCH` 可更新 `enabled`、`weekday`、`run_time`、`tz_offset_min`、`per_project_timeout_sec`、`max_concurrency`、`mr_poll_interval_min`；`cadence` 本輪僅允許 `weekly`（其他值 → 400）。影響 cron 的欄位需重啟 `reviewer-server`；`per_project_timeout_sec`／`max_concurrency` 下一場 run 即生效。
+>
+> **漏跑：** `enabled=1` 時推算最近 `due_at`；無覆蓋的 `schedule`／`manual_all` run（`started_at >= due_at - 6h`，狀態 success／partial／running／queued）則回傳 `missed_weekly_run`。`POST /api/schedule/catch-up` 建立等同 `manual_all` 的補跑（衝突 409）。MR 輪詢不做漏跑補償。
 
 ### 2.6 `unmatched_authors` — 未歸戶 author（待人工指認）
 
@@ -340,11 +344,35 @@ $DATA_ROOT_DIR/runs/<run_id>/projects/<project_id>/manifest.json
   "project_name": "game-backend",
   "repo_path": "/data/reviewer/repos/game-backend",
   "report_root": "/data/reviewer/reports/game-backend",
+  "person_report_root": "/data/reviewer/reports/_people",
   "run_date": "2026-07-05",
   "since": "2026-06-28",
-  "output_contract": "output-contract.md"
+  "output_contract": "output-contract.md",
+  "authors": [
+    {
+      "email": "alice@co.com",
+      "git_name": "Alice",
+      "person_id": 1,
+      "display_name": "Alice Chen"
+    }
+  ],
+  "open_pending": [
+    {
+      "id": 7,
+      "person_id": 1,
+      "display_name": "Alice Chen",
+      "question": "Why choose A?"
+    }
+  ],
+  "published_pending_snippets": []
 }
 ```
+
+| 欄位 | 說明 |
+|------|------|
+| `authors` | 本窗口已歸戶工程師；workflow 僅為這些人產報 |
+| `open_pending` | 本專案目前 `pending_items.status='open'`；元素含 `id` / `person_id` / `display_name` / `question`。workflow 延續議題必須原句沿用；不再相關可省略（不自動 resolve） |
+| `published_pending_snippets` | 可折入週報的已發佈 MR 觀察片段路徑（相對 `report_root`） |
 
 **MR 輪詢（`mode: mr_poll`）** 另含：
 
@@ -437,13 +465,16 @@ commit_count: 42
 ## 待確認
 - MR #234 架構選擇是主動決策還是時間壓力妥協？
 - 分區索引上線後是否觀察過實際查詢分佈？
+
+## 已釐清
 ```
 
 解析規則：
 - **frontmatter**（`---` 區塊）：抽 `person` / `project` / `date` / `one_line` / `mr_count` / `commit_count` → 寫入 `reports` 對應欄位。
 - **`## 待確認`** 下每個 `-` 項 → 一筆 `pending_items`（`raised_date` = frontmatter `date` 的 YYYY-MM）；workflow 亦應寫入月檔 / `_notes.md` 供趨勢讀檔。
+- **`## 已釐清`** 下每個 `-` 項：若存在同人同專案且 `question` 完全相同的 open `pending_items`，ingest **自動 resolve**（`resolved_date` = schedule 時區月份；同步 `_notes.md` resolved 行）。無匹配則忽略。僅省略待確認、未列於此區 → **不** resolve。
 - **`## 本週重點` / `## 成長面向`**：API 直接回傳 md 或渲染結果，不需入庫（內容已在 summary.md）。
-- heading 名稱為固定契約，workflow 與後端都依賴；變更需同步雙方。
+- heading 名稱為固定契約（四區：本週重點／成長面向／待確認／已釐清），workflow 與後端都依賴；變更需同步雙方。
 
 > `report.md`（完整版）無格式約束，純供深讀；前端以「完整 md」連結由 API 提供 raw 內容。
 
@@ -466,6 +497,7 @@ commit_count: 42
    e. 解析每份 summary.md frontmatter + 區段：
       - reports：upsert（UNIQUE project_id+person_id+report_date）
       - pending_items：新增 open 項（沿用未閉環的舊項則不重複）
+      - `## 已釐清`：匹配 open 項 → resolve + 同步 `_notes.md`（notes 失敗不中止批次）
       - 歸戶：author 命中 person_identities → person_id；未命中 → unmatched_authors
    f. 重算 participation（該專案出現的 person_id 集合）
    g. state='done' / 'skipped_timeout'（逾時）/ 'failed'
@@ -520,9 +552,13 @@ SELECT
   (SELECT COUNT(*) FROM pending_items WHERE status = 'open') AS pending,
   (SELECT COUNT(*) FROM mr_reviews WHERE status = 'draft') AS mr_drafts;
 
--- 漏跑補償檢查（後端服務啟動時）
-SELECT MAX(started_at) AS last_run FROM runs WHERE trigger = 'schedule';
--- 與 schedule_config 推算的「上次應執行時間」比較，若無對應紀錄則提示補跑
+-- 漏跑補償檢查（dashboard／GET schedule）
+-- 推算最近 due_at；查詢是否有覆蓋 run：
+SELECT COUNT(*) FROM runs
+WHERE trigger IN ('schedule', 'manual_all')
+  AND status IN ('success', 'partial', 'running', 'queued')
+  AND started_at >= ?;  -- due_at - 6 hours (UTC)
+-- 無覆蓋 → missed_weekly_run；POST /api/schedule/catch-up 手動補跑
 ```
 
 **趨勢 Tab**：無固定 SQL；後端讀 `$DATA_ROOT_DIR/reports/<name>/<person>/` 下檔案組 API（§6，spec §2.6）。

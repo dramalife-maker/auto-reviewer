@@ -2,7 +2,10 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 
 use crate::runs::{self, RunListItem};
-use crate::schedule::{compute_next_run_at, format_mr_poll_label, format_schedule_label, load_schedule_config};
+use crate::schedule::{
+    compute_next_run_at, detect_missed_weekly_run, format_mr_poll_label, format_schedule_label,
+    load_schedule_config,
+};
 use crate::Error;
 
 #[derive(Debug, Serialize)]
@@ -36,8 +39,14 @@ pub struct DashboardSchedule {
     pub label: String,
     pub next_run_at: Option<String>,
     pub enabled: bool,
+    pub weekday: Option<i64>,
+    pub run_time: String,
+    pub tz_offset_min: i64,
+    pub per_project_timeout_sec: i64,
+    pub max_concurrency: i64,
     pub mr_poll_interval_min: i64,
     pub mr_poll_label: String,
+    pub missed_weekly_run: Option<crate::schedule::MissedWeeklyRun>,
 }
 
 #[derive(Debug, Serialize)]
@@ -144,8 +153,14 @@ pub async fn load_dashboard(pool: &SqlitePool) -> Result<DashboardResponse, Erro
         label: format_schedule_label(&schedule_config),
         next_run_at: compute_next_run_at(&schedule_config)?,
         enabled: schedule_config.enabled != 0,
+        weekday: schedule_config.weekday,
+        run_time: schedule_config.run_time.clone(),
+        tz_offset_min: schedule_config.tz_offset_min,
+        per_project_timeout_sec: schedule_config.per_project_timeout_sec,
+        max_concurrency: schedule_config.max_concurrency,
         mr_poll_interval_min: schedule_config.mr_poll_interval_min,
         mr_poll_label: format_mr_poll_label(schedule_config.mr_poll_interval_min),
+        missed_weekly_run: detect_missed_weekly_run(pool, &schedule_config).await?,
     };
 
     let recent_runs = runs::list_recent_runs(pool, 5).await?;

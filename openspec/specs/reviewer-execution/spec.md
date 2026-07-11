@@ -466,3 +466,223 @@ tests:
   - backend/tests/person_trends.rs
   - backend/tests/runs_execution.rs
 -->
+
+---
+### Requirement: Weekly batch manifest includes open pending items
+
+Before spawning the reviewer-batch subprocess, the backend MUST include an `open_pending` array on the weekly `manifest.json` for that project.
+
+Each element MUST contain: `id` (pending item id), `person_id`, `display_name` (canonical `people.display_name`), and `question`.
+
+The array MUST contain every `pending_items` row for that `project_id` with `status='open'`, ordered stably by `person_id` ascending then `id` ascending.
+
+When no open pending rows exist for the project, `open_pending` MUST be an empty array.
+
+#### Scenario: Manifest lists open pending for the project
+
+- **GIVEN** project G has an open pending item for person Alice with question `Why choose A?`
+- **AND** project G has a resolved pending item with a different question
+- **WHEN** the weekly manifest is written for project G
+- **THEN** `open_pending` contains exactly one element for Alice with that question and its numeric `id`
+- **AND** the resolved item is omitted
+
+##### Example: open pending shape
+
+- **GIVEN** open row `id=7`, `person_id=1`, `display_name="Alice Chen"`, `question="Why choose A?"`
+- **WHEN** the weekly manifest is written
+- **THEN** `open_pending` includes `{ "id": 7, "person_id": 1, "display_name": "Alice Chen", "question": "Why choose A?" }`
+
+#### Scenario: Empty open pending when none exist
+
+- **GIVEN** project G has no open pending items
+- **WHEN** the weekly manifest is written for project G
+- **THEN** `open_pending` is an empty array
+
+
+<!-- @trace
+source: manifest-open-pending-reuse
+updated: 2026-07-11
+code:
+  - backend/src/server.rs
+  - frontend/src/style.css
+  - backend/src/summary.rs
+  - backend/src/dashboard.rs
+  - skills/reviewer-batch/output-contract.md
+  - README.md
+  - backend/migrations/012_pending_open_by_project.sql
+  - frontend/src/api.ts
+  - skills/reviewer-batch/WORKFLOW.md
+  - frontend/src/types.ts
+  - backend/src/schedule.rs
+  - backend/src/runs.rs
+  - docs/idea/schema.md
+  - frontend/src/app.ts
+  - backend/src/error.rs
+tests:
+  - backend/tests/runs_execution.rs
+  - backend/tests/schedule_api.rs
+  - backend/tests/identity.rs
+-->
+
+---
+### Requirement: Reviewer-batch reuses open pending question text verbatim
+
+The reviewer-batch workflow MUST read `manifest.open_pending` when composing `## 待確認` for each author.
+
+For each `open_pending` entry that matches the current author by `person_id` or `display_name`, the workflow MUST choose exactly one of the following for this run's `## 待確認`:
+
+1. Include a bullet whose text is exactly equal to that entry's `question` (no paraphrase or rewording), or
+2. Omit that question from `## 待確認` entirely when the issue is no longer relevant for this run.
+
+Omitting an open question MUST NOT resolve it in the database (the worker and workflow do not write SQLite).
+
+New questions that do not correspond to any `open_pending` entry for that author MUST be allowed as additional bullets under the usual 0–5 limit, using new wording only for genuinely new issues.
+
+#### Scenario: Continuing open issue keeps exact wording
+
+- **GIVEN** `open_pending` contains `{ "display_name": "Alice Chen", "question": "Why choose A?" }`
+- **AND** the issue remains relevant this week
+- **WHEN** the workflow writes Alice Chen's `summary.md`
+- **THEN** `## 待確認` includes a bullet whose text is exactly `Why choose A?`
+
+#### Scenario: Stale open issue omitted from summary
+
+- **GIVEN** `open_pending` contains an open question for Alice Chen
+- **AND** the workflow judges the issue no longer relevant this week
+- **WHEN** the workflow writes Alice Chen's `summary.md`
+- **THEN** that question is absent from `## 待確認`
+- **AND** no database resolve is performed by the workflow
+
+<!-- @trace
+source: manifest-open-pending-reuse
+updated: 2026-07-11
+code:
+  - backend/src/server.rs
+  - frontend/src/style.css
+  - backend/src/summary.rs
+  - backend/src/dashboard.rs
+  - skills/reviewer-batch/output-contract.md
+  - README.md
+  - backend/migrations/012_pending_open_by_project.sql
+  - frontend/src/api.ts
+  - skills/reviewer-batch/WORKFLOW.md
+  - frontend/src/types.ts
+  - backend/src/schedule.rs
+  - backend/src/runs.rs
+  - docs/idea/schema.md
+  - frontend/src/app.ts
+  - backend/src/error.rs
+tests:
+  - backend/tests/runs_execution.rs
+  - backend/tests/schedule_api.rs
+  - backend/tests/identity.rs
+-->
+
+---
+### Requirement: Weekly summary includes resolved section for closed pending
+
+The reviewer-batch `summary.md` contract MUST include a fourth level-2 heading `## 已釐清` after `## 待確認`.
+
+Bullets under `## 已釐清` MUST use `- ` list markers. The section MUST remain valid when empty (heading present, zero bullets).
+
+When the workflow determines that an `open_pending` entry for the current author is resolved this run, it MUST write that entry's `question` text verbatim as a bullet under `## 已釐清`, and MUST NOT also list that question under `## 待確認`.
+
+Omitting a question from both `## 待確認` and `## 已釐清` MUST leave the corresponding open database row unchanged.
+
+#### Scenario: Resolved open issue listed under 已釐清
+
+- **GIVEN** `open_pending` contains `{ "display_name": "Alice Chen", "question": "Why choose A?" }`
+- **AND** the workflow judges the issue resolved this week
+- **WHEN** the workflow writes Alice Chen's `summary.md`
+- **THEN** `## 已釐清` includes a bullet whose text is exactly `Why choose A?`
+- **AND** `## 待確認` does not include that text
+
+#### Scenario: Omitted open issue stays open at workflow layer
+
+- **GIVEN** an open pending question for Alice Chen
+- **AND** the workflow omits it from both `## 待確認` and `## 已釐清`
+- **WHEN** the summary is written
+- **THEN** the workflow does not write SQLite
+- **AND** closure of that row is not requested by the summary file
+
+
+<!-- @trace
+source: summary-resolved-pending
+updated: 2026-07-11
+code:
+  - frontend/src/types.ts
+  - backend/src/runs.rs
+  - backend/src/schedule.rs
+  - docs/idea/schema.md
+  - backend/src/dashboard.rs
+  - frontend/src/app.ts
+  - frontend/src/style.css
+  - backend/migrations/012_pending_open_by_project.sql
+  - backend/src/server.rs
+  - frontend/src/api.ts
+  - README.md
+  - skills/reviewer-batch/WORKFLOW.md
+  - backend/src/summary.rs
+  - skills/reviewer-batch/output-contract.md
+  - backend/src/error.rs
+tests:
+  - backend/tests/identity.rs
+  - backend/tests/schedule_api.rs
+  - backend/tests/runs_execution.rs
+-->
+
+---
+### Requirement: Summary ingestion auto-resolves matching open pending from 已釐清
+
+After upserting a weekly `summary.md`, the backend MUST parse bullets under `## 已釐清`.
+
+For each bullet text Q, if an open `pending_items` row exists for the summary's resolved `person_id`, the summary's `project_id`, and `question` exactly equal to Q, the backend MUST resolve that row using the same database fields as manual closure: `status='resolved'`, `resolved_date` set to the schedule-timezone calendar month `YYYY-MM`, and `resolution_note` left null when not provided by the summary.
+
+The backend MUST attempt to sync the person `_notes.md` resolved-line format after a successful database resolve. If notes sync fails, the backend MUST leave the row `resolved`, MUST log a warning, and MUST continue ingesting remaining summaries.
+
+A `## 已釐清` bullet with no matching open row MUST be ignored without failing the ingest of that summary.
+
+#### Scenario: Exact open question in 已釐清 becomes resolved
+
+- **GIVEN** an open pending item for person Alice, project G, question `Why choose A?`
+- **WHEN** a weekly summary for Alice and project G is ingested with that exact text under `## 已釐清`
+- **THEN** that pending item has `status` equal to `resolved`
+- **AND** `resolved_date` matches `YYYY-MM` for the schedule timezone
+
+#### Scenario: 待確認 omission without 已釐清 does not resolve
+
+- **GIVEN** an open pending item for person Alice, project G, question `Why choose A?`
+- **WHEN** a weekly summary for Alice and project G is ingested with empty `## 已釐清` and without that question under `## 待確認`
+- **THEN** that pending item remains `status` equal to `open`
+
+#### Scenario: Unknown 已釐清 bullet is ignored
+
+- **GIVEN** no open pending item with question `Never seen?`
+- **WHEN** a summary is ingested containing `- Never seen?` under `## 已釐清`
+- **THEN** ingest succeeds
+- **AND** no pending row is created solely from the 已釐清 section
+
+<!-- @trace
+source: summary-resolved-pending
+updated: 2026-07-11
+code:
+  - frontend/src/types.ts
+  - backend/src/runs.rs
+  - backend/src/schedule.rs
+  - docs/idea/schema.md
+  - backend/src/dashboard.rs
+  - frontend/src/app.ts
+  - frontend/src/style.css
+  - backend/migrations/012_pending_open_by_project.sql
+  - backend/src/server.rs
+  - frontend/src/api.ts
+  - README.md
+  - skills/reviewer-batch/WORKFLOW.md
+  - backend/src/summary.rs
+  - skills/reviewer-batch/output-contract.md
+  - backend/src/error.rs
+tests:
+  - backend/tests/identity.rs
+  - backend/tests/schedule_api.rs
+  - backend/tests/runs_execution.rs
+-->

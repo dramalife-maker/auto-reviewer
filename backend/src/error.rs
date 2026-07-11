@@ -48,6 +48,8 @@ pub enum Error {
     InvalidPendingItemListStatus,
     #[error("invalid runs list query: {0}")]
     InvalidRunsListQuery(String),
+    #[error("invalid schedule configuration: {0}")]
+    InvalidScheduleConfig(String),
     #[error("failed to sync notes file: {0}")]
     NotesSyncFailed(String),
     #[error(transparent)]

@@ -83,6 +83,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/runs/{id}", get(get_run))
         .route("/api/dashboard", get(get_dashboard))
         .route("/api/schedule", get(get_schedule).patch(update_schedule))
+        .route("/api/schedule/catch-up", post(catch_up_schedule))
         .route("/api/people", get(list_people).post(create_person))
         .route("/api/people/{id}", get(get_person).patch(rename_person))
         .route("/api/people/{id}/reports/latest", get(latest_reports))
@@ -379,6 +380,20 @@ async fn update_schedule(
         .await
         .map_err(ApiError::from)?;
     Ok(Json(response))
+}
+
+async fn catch_up_schedule(
+    State(state): State<AppState>,
+) -> Result<(StatusCode, Json<CreateRunResponse>), ApiError> {
+    let run_id = runs::create_manual_all_run(&state.pool)
+        .await
+        .map_err(ApiError::from)?;
+
+    if let Some(worker) = &state.worker {
+        worker.wake();
+    }
+
+    Ok((StatusCode::ACCEPTED, Json(CreateRunResponse { run_id })))
 }
 
 async fn list_people(State(state): State<AppState>) -> Result<Json<Vec<reports::PersonListItem>>, ApiError> {
@@ -698,7 +713,8 @@ impl IntoResponse for ApiError {
             | Error::InvalidProjectConfig(_)
             | Error::InvalidPendingItemStatus
             | Error::InvalidPendingItemListStatus
-            | Error::InvalidRunsListQuery(_) => StatusCode::BAD_REQUEST,
+            | Error::InvalidRunsListQuery(_)
+            | Error::InvalidScheduleConfig(_) => StatusCode::BAD_REQUEST,
             Error::NotFound => StatusCode::NOT_FOUND,
             Error::AgentFailed(_) | Error::NotesSyncFailed(_) => StatusCode::BAD_GATEWAY,
             _ => StatusCode::INTERNAL_SERVER_ERROR,

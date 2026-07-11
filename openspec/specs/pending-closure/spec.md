@@ -32,6 +32,7 @@ Unknown `person_id` MUST return HTTP 404.
 - **WHEN** a client calls `GET /api/people/{id}/pending-items` for a non-existent person id
 - **THEN** the response status is 404
 
+---
 ### Requirement: Open pending items can be resolved via API
 
 The backend SHALL expose `PATCH /api/pending-items/{id}` accepting JSON body `{ "status": "resolved", "resolution_note"?: string }`.
@@ -70,6 +71,7 @@ Re-opening (`resolved` → `open`) MUST NOT be supported by this endpoint.
 - **WHEN** a client sends `PATCH /api/pending-items/{id}` with `{ "status": "open" }`
 - **THEN** the response status is 400
 
+---
 ### Requirement: Resolving a pending item syncs person-level notes file
 
 After a successful database update to `resolved`, the backend MUST update `{DATA_ROOT_DIR}/reports/_people/{display_name}/_notes.md` as follows:
@@ -115,6 +117,7 @@ If the notes file write fails after the database update succeeded, the endpoint 
 | `- [2026-07] Why choose A?` | (empty) | `2026-08` | `- [2026-07→2026-08] ✓ Why choose A?` |
 | `- [2026-07] Why choose A?` | `Chose B` | `2026-08` | `- [2026-07→2026-08] ✓ Why choose A? — Chose B` |
 
+---
 ### Requirement: Weekly summary ingestion deduplicates open pending questions
 
 When ingesting `## 待確認` bullets from a weekly `summary.md` into `pending_items`, the backend MUST skip inserting a row when an existing row already has the same `person_id`, `project_id`, and `question` with `status='open'`.
@@ -133,6 +136,7 @@ A previously `resolved` row with the same question MUST NOT block insertion of a
 - **WHEN** a weekly summary for the same person and project is ingested containing bullet Q
 - **THEN** a new open `pending_items` row is created for Q
 
+---
 ### Requirement: Weekly report UI resolves pending items via checkbox
 
 The report reader weekly project cards MUST render each open `pending_items` entry as a checkbox bound to the item `id`.
@@ -149,3 +153,44 @@ Re-opening from the UI MUST NOT be offered.
 - **THEN** the client sends `PATCH /api/pending-items/{id}` with status `resolved`
 - **AND** on success the item disappears from the weekly card
 - **AND** the people list open-pending badge decreases
+
+---
+### Requirement: Weekly ingest resolves open pending via shared closure semantics
+
+When weekly summary ingestion resolves an open pending item because its question appears under `## 已釐清`, the system MUST apply the same closure field updates as `PATCH /api/pending-items/{id}` for an open row: set `status` to `resolved`, set `resolved_date` to the schedule-timezone month `YYYY-MM`, and leave `resolution_note` null when the summary does not supply a note.
+
+After a successful database update, the system MUST update `{DATA_ROOT_DIR}/reports/_people/{display_name}/_notes.md` using the same resolved-line rewrite rules as manual closure.
+
+If the notes file write fails after the database update succeeded during ingest, the pending item MUST remain `resolved`, and the ingest MUST continue (notes failure MUST NOT abort the whole project ingest).
+
+#### Scenario: Ingest resolve rewrites matching open notes line
+
+- **GIVEN** `_notes.md` contains `- [2026-07] Why choose A?`
+- **AND** a matching open `pending_items` row exists
+- **WHEN** weekly ingest resolves that item via `## 已釐清` in month `2026-07`
+- **THEN** that notes line becomes `- [2026-07→2026-07] ✓ Why choose A?`
+
+<!-- @trace
+source: summary-resolved-pending
+updated: 2026-07-11
+code:
+  - frontend/src/types.ts
+  - backend/src/runs.rs
+  - backend/src/schedule.rs
+  - docs/idea/schema.md
+  - backend/src/dashboard.rs
+  - frontend/src/app.ts
+  - frontend/src/style.css
+  - backend/migrations/012_pending_open_by_project.sql
+  - backend/src/server.rs
+  - frontend/src/api.ts
+  - README.md
+  - skills/reviewer-batch/WORKFLOW.md
+  - backend/src/summary.rs
+  - skills/reviewer-batch/output-contract.md
+  - backend/src/error.rs
+tests:
+  - backend/tests/identity.rs
+  - backend/tests/schedule_api.rs
+  - backend/tests/runs_execution.rs
+-->
