@@ -1,7 +1,7 @@
 use axum::extract::{Path, Query, State};
 use axum::http::{header, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -102,11 +102,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/dashboard", get(get_dashboard))
         .route("/api/schedule", get(get_schedule).patch(update_schedule))
         .route("/api/people", get(list_people).post(create_person))
+        .route("/api/people/{id}", get(get_person).patch(rename_person))
         .route("/api/people/{id}/reports/latest", get(latest_reports))
         .route("/api/people/{id}/trends", get(person_trends))
         .route("/api/people/{id}/pending-items", get(list_pending_items))
         .route("/api/pending-items/{id}", patch(resolve_pending_item))
         .route("/api/people/{id}/identities", get(list_person_identities).post(bind_person_identity))
+        .route("/api/people/{id}/identities/{identity_id}", delete(unbind_person_identity))
         .route("/api/unmatched-authors", get(list_unmatched_authors))
         .route("/api/reports/{id}/read", patch(mark_report_read))
         .route("/api/projects", get(list_projects).post(create_project))
@@ -364,6 +366,37 @@ async fn create_person(
     ))
 }
 
+async fn get_person(
+    State(state): State<AppState>,
+    Path(person_id): Path<i64>,
+) -> Result<Json<identity::PersonDetail>, ApiError> {
+    let detail = identity::get_person_detail(&state.pool, person_id)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(detail))
+}
+
+#[derive(Deserialize)]
+struct RenamePersonRequest {
+    display_name: String,
+}
+
+async fn rename_person(
+    State(state): State<AppState>,
+    Path(person_id): Path<i64>,
+    Json(body): Json<RenamePersonRequest>,
+) -> Result<Json<identity::PersonDetail>, ApiError> {
+    let detail = identity::rename_person(
+        &state.pool,
+        state.config.data_dir(),
+        person_id,
+        &body.display_name,
+    )
+    .await
+    .map_err(ApiError::from)?;
+    Ok(Json(detail))
+}
+
 async fn list_unmatched_authors(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<identity::UnmatchedAuthorItem>>, ApiError> {
@@ -405,6 +438,16 @@ async fn list_person_identities(
         .await
         .map_err(ApiError::from)?;
     Ok(Json(items))
+}
+
+async fn unbind_person_identity(
+    State(state): State<AppState>,
+    Path((person_id, identity_id)): Path<(i64, i64)>,
+) -> Result<StatusCode, ApiError> {
+    identity::unbind_identity(&state.pool, person_id, identity_id)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn latest_reports(
@@ -593,6 +636,7 @@ impl IntoResponse for ApiError {
         let status = match &self.0 {
             Error::RunConflict
             | Error::DuplicateDisplayName
+            | Error::PeopleDirectoryConflict
             | Error::DuplicateProjectName
             | Error::IdentityConflict
             | Error::MrReviewConflict

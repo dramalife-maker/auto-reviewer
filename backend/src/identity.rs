@@ -323,6 +323,153 @@ pub async fn list_identities_for_person(
     .map_err(Error::Database)
 }
 
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct PersonProjectItem {
+    pub id: i64,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PersonDetail {
+    pub id: i64,
+    pub display_name: String,
+    pub identities: Vec<IdentityItem>,
+    pub projects: Vec<PersonProjectItem>,
+}
+
+pub async fn get_person_detail(pool: &SqlitePool, person_id: i64) -> Result<PersonDetail, Error> {
+    let display_name: Option<String> =
+        sqlx::query_scalar("SELECT display_name FROM people WHERE id = ?")
+            .bind(person_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(Error::Database)?;
+    let Some(display_name) = display_name else {
+        return Err(Error::NotFound);
+    };
+
+    let identities = list_identities_for_person(pool, person_id).await?;
+    let projects = sqlx::query_as::<_, PersonProjectItem>(
+        "SELECT id, name FROM projects
+         WHERE id IN (
+             SELECT project_id FROM reports WHERE person_id = ?
+             UNION
+             SELECT project_id FROM participation WHERE person_id = ?
+         )
+         ORDER BY name",
+    )
+    .bind(person_id)
+    .bind(person_id)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+
+    Ok(PersonDetail {
+        id: person_id,
+        display_name,
+        identities,
+        projects,
+    })
+}
+
+pub async fn rename_person(
+    pool: &SqlitePool,
+    data_root: &Path,
+    person_id: i64,
+    new_display_name: &str,
+) -> Result<PersonDetail, Error> {
+    let new_display_name = new_display_name.trim();
+    if new_display_name.is_empty() {
+        return Err(Error::InvalidPersonName);
+    }
+
+    let old_display_name: Option<String> =
+        sqlx::query_scalar("SELECT display_name FROM people WHERE id = ?")
+            .bind(person_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(Error::Database)?;
+    let Some(old_display_name) = old_display_name else {
+        return Err(Error::NotFound);
+    };
+
+    if old_display_name == new_display_name {
+        return get_person_detail(pool, person_id).await;
+    }
+
+    let duplicate: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM people WHERE display_name = ? AND id != ?",
+    )
+    .bind(new_display_name)
+    .bind(person_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(Error::Database)?;
+    if duplicate.is_some() {
+        return Err(Error::DuplicateDisplayName);
+    }
+
+    let old_dir = crate::person_trends::person_trends_dir(data_root, &old_display_name);
+    let new_dir = crate::person_trends::person_trends_dir(data_root, new_display_name);
+
+    if new_dir.exists() {
+        return Err(Error::PeopleDirectoryConflict);
+    }
+
+    sqlx::query(
+        "UPDATE people SET display_name = ?, updated_at = datetime('now') WHERE id = ?",
+    )
+    .bind(new_display_name)
+    .bind(person_id)
+    .execute(pool)
+    .await
+    .map_err(Error::Database)?;
+
+    if old_dir.exists() {
+        if let Err(err) = std::fs::rename(&old_dir, &new_dir) {
+            let _ = sqlx::query(
+                "UPDATE people SET display_name = ?, updated_at = datetime('now') WHERE id = ?",
+            )
+            .bind(&old_display_name)
+            .bind(person_id)
+            .execute(pool)
+            .await;
+            return Err(Error::Io(err));
+        }
+    }
+
+    get_person_detail(pool, person_id).await
+}
+
+pub async fn unbind_identity(
+    pool: &SqlitePool,
+    person_id: i64,
+    identity_id: i64,
+) -> Result<(), Error> {
+    let person_exists: Option<i64> = sqlx::query_scalar("SELECT id FROM people WHERE id = ?")
+        .bind(person_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Error::Database)?;
+    if person_exists.is_none() {
+        return Err(Error::NotFound);
+    }
+
+    let result = sqlx::query(
+        "DELETE FROM person_identities WHERE id = ? AND person_id = ?",
+    )
+    .bind(identity_id)
+    .bind(person_id)
+    .execute(pool)
+    .await
+    .map_err(Error::Database)?;
+
+    if result.rows_affected() == 0 {
+        return Err(Error::NotFound);
+    }
+    Ok(())
+}
+
 fn normalize_identity_value(kind: &str, value: &str) -> Result<String, Error> {
     let trimmed = value.trim();
     if trimmed.is_empty() {

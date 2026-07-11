@@ -28,6 +28,27 @@ export interface CreatePersonResponse {
   display_name: string
 }
 
+export interface IdentityItem {
+  id: number
+  kind: string
+  value: string
+  label: string | null
+}
+
+export interface PersonProjectItem {
+  id: number
+  name: string
+}
+
+export interface PersonDetail {
+  id: number
+  display_name: string
+  identities: IdentityItem[]
+  projects: PersonProjectItem[]
+}
+
+export type IdentityKind = 'git_email' | 'gitlab_user' | 'glab_user'
+
 export interface PendingItem {
   id: number
   person_id: number

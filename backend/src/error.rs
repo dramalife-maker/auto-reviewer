@@ -20,6 +20,8 @@ pub enum Error {
     NotFound,
     #[error("person display_name already exists")]
     DuplicateDisplayName,
+    #[error("people directory already exists for the new display name")]
+    PeopleDirectoryConflict,
     #[error("identity is already bound to another person")]
     IdentityConflict,
     #[error("invalid person display_name")]

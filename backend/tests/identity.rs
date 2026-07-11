@@ -554,6 +554,426 @@ one_line: Should be skipped
     assert_eq!(people_count, 0);
 }
 
+#[tokio::test]
+async fn person_detail_api_returns_identities_and_projects() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+
+    let person_id = create_person(&pool, "Alice Chen").await.expect("create");
+    bind_identity(&pool, person_id, KIND_GIT_EMAIL, "alice@co.com", Some("work"))
+        .await
+        .expect("bind email");
+    bind_identity(&pool, person_id, "gitlab_user", "alice.chen", None)
+        .await
+        .expect("bind gitlab");
+
+    sqlx::query(
+        "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('game-backend', ?, 0), ('web-portal', ?, 0)",
+    )
+    .bind(temp.path().join("repos/game-backend").display().to_string())
+    .bind(temp.path().join("repos/web-portal").display().to_string())
+    .execute(&pool)
+    .await
+    .expect("insert projects");
+
+    let run_id = sqlx::query(
+        "INSERT INTO runs (trigger, status, project_total) VALUES ('manual_all', 'success', 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert run")
+    .last_insert_rowid();
+
+    sqlx::query(
+        "INSERT INTO reports (project_id, person_id, run_id, report_date, report_md_path, summary_md_path)
+         VALUES (1, ?, ?, '2026-07-05', 'r.md', 's.md')",
+    )
+    .bind(person_id)
+    .bind(run_id)
+    .execute(&pool)
+    .await
+    .expect("insert report");
+
+    sqlx::query("INSERT INTO participation (project_id, person_id) VALUES (2, ?)")
+        .bind(person_id)
+        .execute(&pool)
+        .await
+        .expect("insert participation");
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/people/{person_id}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.expect("body").to_bytes();
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(json["id"], person_id);
+    assert_eq!(json["display_name"], "Alice Chen");
+    assert_eq!(json["identities"].as_array().expect("identities").len(), 2);
+    let project_names: Vec<&str> = json["projects"]
+        .as_array()
+        .expect("projects")
+        .iter()
+        .map(|p| p["name"].as_str().expect("name"))
+        .collect();
+    assert!(project_names.contains(&"game-backend"));
+    assert!(project_names.contains(&"web-portal"));
+}
+
+#[tokio::test]
+async fn person_detail_api_empty_projects() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let person_id = create_person(&pool, "Solo").await.expect("create");
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/people/{person_id}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.expect("body").to_bytes();
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(json["projects"].as_array().expect("projects").len(), 0);
+    assert_eq!(json["identities"].as_array().expect("identities").len(), 0);
+}
+
+#[tokio::test]
+async fn person_detail_api_unknown_returns_404() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/people/99999")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn rename_person_updates_database_and_people_directory() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let person_id = create_person(&pool, "Alice").await.expect("create");
+
+    let old_dir = temp.path().join("reports").join("_people").join("Alice");
+    std::fs::create_dir_all(&old_dir).expect("mkdir");
+    std::fs::write(old_dir.join("index.md"), "notes").expect("write");
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/people/{person_id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"display_name":"Alice Chen"}"#))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.expect("body").to_bytes();
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(json["display_name"], "Alice Chen");
+
+    let stored: String = sqlx::query_scalar("SELECT display_name FROM people WHERE id = ?")
+        .bind(person_id)
+        .fetch_one(&pool)
+        .await
+        .expect("stored name");
+    assert_eq!(stored, "Alice Chen");
+
+    let new_dir = temp.path().join("reports").join("_people").join("Alice Chen");
+    assert!(new_dir.is_dir(), "renamed directory should exist");
+    assert!(!old_dir.exists(), "old directory should be gone");
+    assert!(new_dir.join("index.md").is_file());
+}
+
+#[tokio::test]
+async fn rename_person_rejects_colliding_destination_directory() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let person_id = create_person(&pool, "Alice").await.expect("create");
+
+    let people_root = temp.path().join("reports").join("_people");
+    std::fs::create_dir_all(people_root.join("Alice")).expect("mkdir alice");
+    std::fs::create_dir_all(people_root.join("Alice Chen")).expect("mkdir collision");
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/people/{person_id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"display_name":"Alice Chen"}"#))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    let stored: String = sqlx::query_scalar("SELECT display_name FROM people WHERE id = ?")
+        .bind(person_id)
+        .fetch_one(&pool)
+        .await
+        .expect("stored name");
+    assert_eq!(stored, "Alice");
+}
+
+#[tokio::test]
+async fn rename_person_rejects_duplicate_display_name() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let _alice = create_person(&pool, "Alice").await.expect("alice");
+    let bob = create_person(&pool, "Bob").await.expect("bob");
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/people/{bob}"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"display_name":"Alice"}"#))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn delete_identity_from_person_api() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let person_id = create_person(&pool, "Alice Chen").await.expect("create");
+    bind_identity(&pool, person_id, KIND_GIT_EMAIL, "alice@co.com", None)
+        .await
+        .expect("bind email");
+    bind_identity(&pool, person_id, "gitlab_user", "alice.chen", None)
+        .await
+        .expect("bind gitlab");
+
+    let identities = identity::list_identities_for_person(&pool, person_id)
+        .await
+        .expect("list");
+    let identity_id = identities
+        .iter()
+        .find(|item| item.kind == "gitlab_user")
+        .expect("gitlab identity")
+        .id;
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/people/{person_id}/identities/{identity_id}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let list = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/people/{person_id}/identities"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(list.status(), StatusCode::OK);
+    let body = list.into_body().collect().await.expect("body").to_bytes();
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(json.as_array().expect("array").len(), 1);
+    assert_eq!(json[0]["kind"], "git_email");
+}
+
+#[tokio::test]
+async fn delete_identity_wrong_person_returns_404() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let person_a = create_person(&pool, "Alice").await.expect("alice");
+    let person_b = create_person(&pool, "Bob").await.expect("bob");
+    bind_identity(&pool, person_a, KIND_GIT_EMAIL, "alice@co.com", None)
+        .await
+        .expect("bind");
+    let identities = identity::list_identities_for_person(&pool, person_a)
+        .await
+        .expect("list");
+    let identity_id = identities[0].id;
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/people/{person_b}/identities/{identity_id}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let remaining = identity::list_identities_for_person(&pool, person_a)
+        .await
+        .expect("list");
+    assert_eq!(remaining.len(), 1);
+}
+
+#[tokio::test]
+async fn deleting_last_identity_is_allowed() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let person_id = create_person(&pool, "Alice").await.expect("create");
+    bind_identity(&pool, person_id, KIND_GIT_EMAIL, "alice@co.com", None)
+        .await
+        .expect("bind");
+    let identities = identity::list_identities_for_person(&pool, person_id)
+        .await
+        .expect("list");
+    let identity_id = identities[0].id;
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/people/{person_id}/identities/{identity_id}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let list = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/people/{person_id}/identities"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    let body = list.into_body().collect().await.expect("body").to_bytes();
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(json.as_array().expect("array").len(), 0);
+}
+
+#[tokio::test]
+async fn bind_gitlab_user_identity_preserves_case() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let person_id = create_person(&pool, "Alice Chen").await.expect("create");
+
+    let app = build_app().await.expect("build app");
+    let bind = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/people/{person_id}/identities"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"kind":"gitlab_user","value":"  Alice.Chen  "}"#,
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(bind.status(), StatusCode::NO_CONTENT);
+
+    let identities = identity::list_identities_for_person(&pool, person_id)
+        .await
+        .expect("list");
+    assert_eq!(identities.len(), 1);
+    assert_eq!(identities[0].kind, "gitlab_user");
+    assert_eq!(identities[0].value, "Alice.Chen");
+}
+
+#[tokio::test]
+async fn same_person_rebind_is_noop() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let person_id = create_person(&pool, "Alice Chen").await.expect("create");
+    bind_identity(&pool, person_id, KIND_GIT_EMAIL, "alice@co.com", None)
+        .await
+        .expect("bind");
+
+    let app = build_app().await.expect("build app");
+    let rebind = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/people/{person_id}/identities"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"kind":"git_email","value":"alice@co.com"}"#,
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(rebind.status(), StatusCode::NO_CONTENT);
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM person_identities WHERE person_id = ? AND kind = ? AND value = ?",
+    )
+    .bind(person_id)
+    .bind(KIND_GIT_EMAIL)
+    .bind("alice@co.com")
+    .fetch_one(&pool)
+    .await
+    .expect("count");
+    assert_eq!(count, 1);
+}
+
 async fn setup_env(temp: &tempfile::TempDir) {
     std::env::set_var("DATA_ROOT_DIR", temp.path());
     let yaml_path = temp.path().join("projects.yaml");

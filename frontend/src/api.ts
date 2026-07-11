@@ -10,6 +10,7 @@ import type {
   MrReviewStatus,
   PendingItem,
   Person,
+  PersonDetail,
   PersonTrendsResponse,
   ProjectListResponse,
   ProjectInput,
@@ -137,6 +138,18 @@ export function createPerson(displayName: string): Promise<CreatePersonResponse>
   })
 }
 
+export function fetchPersonDetail(personId: number): Promise<PersonDetail> {
+  return request(`/api/people/${personId}`)
+}
+
+export function renamePerson(personId: number, displayName: string): Promise<PersonDetail> {
+  return request(`/api/people/${personId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ display_name: displayName }),
+  })
+}
+
 export function bindIdentity(
   personId: number,
   kind: string,
@@ -147,6 +160,12 @@ export function bindIdentity(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ kind, value, label }),
+  })
+}
+
+export function unbindIdentity(personId: number, identityId: number): Promise<void> {
+  return request(`/api/people/${personId}/identities/${identityId}`, {
+    method: 'DELETE',
   })
 }
 

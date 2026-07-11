@@ -77,7 +77,7 @@ CREATE TABLE people (
 CREATE TABLE person_identities (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     person_id   INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
-    kind        TEXT    NOT NULL,            -- 'email' | 'glab_user'
+    kind        TEXT    NOT NULL,            -- 'git_email' | 'gitlab_user' | 'glab_user'
     value       TEXT    NOT NULL,            -- 例 "alice@team.io" 或 "alice_w"
     label       TEXT,                        -- 顯示標籤："公司" | "個人" | "glab user"
     created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
@@ -90,6 +90,17 @@ CREATE INDEX idx_identities_lookup ON person_identities(kind, value);
 ```
 
 > 歸戶：執行時取 commit author email / glab MR author，以 `(kind, value)` 命中 `person_identities` → 得 `person_id`。命中不到的 author 進入 `unmatched_authors`（見 2.6）。
+> `git_email` 會 trim + 小寫；`gitlab_user` / `glab_user` 只 trim、不強制小寫。同人重複 bind 為 no-op；跨人衝突回 409。
+
+#### People settings API
+
+| 方法 | 路徑 | 說明 |
+|------|------|------|
+| GET | `/api/people/{id}` | 詳情：`display_name`、`identities`、`projects`（`reports` ∪ `participation` 去重專案名） |
+| PATCH | `/api/people/{id}` | 更名 `{ "display_name" }`；同步 rename `reports/_people/{old}/` → `{new}/` |
+| DELETE | `/api/people/{id}/identities/{identity_id}` | 解除綁定（允許刪到零）；錯人／不存在回 404 |
+
+**更名限制**：只更新 DB 與人物層 `_people/` 目錄。不搬專案層 `reports/{project}/{display_name}/`，不改歷史 summary frontmatter。目標目錄已存在或顯示名重名 → 409；目錄 rename 失敗則回滾 DB 顯示名。
 
 ### 2.3 `projects` — 專案
 

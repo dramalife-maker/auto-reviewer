@@ -9,6 +9,7 @@ import {
   fetchLatestReports,
   fetchMrReviews,
   fetchPeople,
+  fetchPersonDetail,
   fetchPersonTrends,
   fetchProjects,
   fetchRun,
@@ -17,10 +18,12 @@ import {
   markReportRead,
   publishMrReview,
   reloadProjects,
+  renamePerson,
   resolvePendingItem,
   startManualRun,
   startMrScan,
   startProjectRun,
+  unbindIdentity,
   updateMrReview,
   updateProject,
   updateSchedule,
@@ -28,12 +31,14 @@ import {
 } from './api'
 import type {
   DashboardResponse,
+  IdentityKind,
   LatestReportItem,
   LatestReportsResponse,
   MrReviewItem,
   MrReviewStatus,
   PendingItem,
   Person,
+  PersonDetail,
   PersonTrendsResponse,
   ProjectListItem,
   RunStatus,
@@ -42,7 +47,12 @@ import type {
 
 const TERMINAL_STATUSES = new Set(['success', 'partial', 'failed'])
 const DEFAULT_MR_SKIP_LABELS = ['wip', 'do-not-review', 'no-ai-review']
-type AppView = 'dashboard' | 'reports' | 'projects' | 'mr-inbox'
+const IDENTITY_KINDS: Array<{ value: IdentityKind; label: string }> = [
+  { value: 'git_email', label: 'Git email' },
+  { value: 'gitlab_user', label: 'GitLab username' },
+  { value: 'glab_user', label: 'glab user' },
+]
+type AppView = 'dashboard' | 'reports' | 'projects' | 'people' | 'mr-inbox'
 type SourceType = 'gitlab' | 'local'
 
 interface ProjectDraft {
@@ -79,6 +89,13 @@ export class ReviewerApp {
   private selectedProjectName: string | null = null
   private projectDraft: ProjectDraft | null = null
   private isCreatingProject = false
+  private selectedSettingsPersonId: number | null = null
+  private personDetail: PersonDetail | null = null
+  private isCreatingPerson = false
+  private newPersonName = ''
+  private identityDraftKind: IdentityKind = 'git_email'
+  private identityDraftValue = ''
+  private peopleSettingsSaving = false
   private mrReviews: MrReviewItem[] = []
   private selectedMrReviewId: number | null = null
   private mrStatusFilter: MrReviewStatus = 'draft'
@@ -211,6 +228,9 @@ export class ReviewerApp {
               <button type="button" class="nav-item ${this.appView === 'projects' ? 'active' : ''}" data-nav="projects">
                 專案設定
               </button>
+              <button type="button" class="nav-item ${this.appView === 'people' ? 'active' : ''}" data-nav="people">
+                人員設定
+              </button>
               <button type="button" class="nav-item ${this.appView === 'reports' ? 'active' : ''}" data-nav="reports">
                 報告閱讀器
               </button>
@@ -227,9 +247,11 @@ export class ReviewerApp {
                 ? this.renderDashboard()
                 : this.appView === 'projects'
                   ? this.renderProjectSettings()
-                  : this.appView === 'mr-inbox'
-                    ? this.renderMrInbox()
-                    : this.renderContent()
+                  : this.appView === 'people'
+                    ? this.renderPeopleSettings()
+                    : this.appView === 'mr-inbox'
+                      ? this.renderMrInbox()
+                      : this.renderContent()
             }
           </section>
         </div>
@@ -273,6 +295,8 @@ export class ReviewerApp {
       this.showUnmatchedPanel = false
       void this.renderWithStatus()
     })
+
+    this.bindPeopleSettingsEvents()
 
     this.root.querySelectorAll('[data-bind-existing]').forEach((element) => {
       element.addEventListener('click', () => {
@@ -763,6 +787,340 @@ export class ReviewerApp {
     return this.projects.find((project) => project.name === this.selectedProjectName) ?? null
   }
 
+  private renderPeopleSettings(): string {
+    const listItems = this.people
+      .map((person) => {
+        const active =
+          !this.isCreatingPerson && person.id === this.selectedSettingsPersonId ? ' active' : ''
+        return `<button type="button" class="people-settings-list-item${active}" data-settings-person-id="${person.id}">
+          <span class="people-settings-list-name">${escapeHtml(person.display_name)}</span>
+          <span class="people-settings-list-meta">${person.identity_count} identities</span>
+        </button>`
+      })
+      .join('')
+
+    if (this.isCreatingPerson) {
+      return `<div class="people-settings">
+        <div class="people-settings-toolbar">
+          <h2 class="people-settings-page-title">人員設定</h2>
+        </div>
+        <div class="people-settings-shell">
+          <aside class="people-settings-list">
+            <div class="people-settings-list-header">
+              <span>人員</span>
+              <button id="people-add" class="people-settings-add" type="button" aria-label="新增人員">＋</button>
+            </div>
+            <div class="people-settings-list-items">
+              ${listItems || '<p class="people-list-empty">尚無人員</p>'}
+            </div>
+          </aside>
+          <div class="people-settings-detail">
+            <div class="people-settings-detail-header">
+              <h2>新增人員</h2>
+            </div>
+            <div class="people-field">
+              <label for="people-new-name">顯示名 <span class="required" aria-hidden="true">*</span></label>
+              <input id="people-new-name" class="people-input" type="text" value="${escapeHtml(this.newPersonName)}" placeholder="Alice Chen" />
+            </div>
+            <div class="people-settings-actions">
+              <button id="people-create-cancel" class="people-settings-cancel" type="button">取消</button>
+              <button id="people-create-save" class="people-settings-save" type="button" ${this.peopleSettingsSaving ? 'disabled' : ''}>建立</button>
+            </div>
+          </div>
+        </div>
+      </div>`
+    }
+
+    const detail = this.personDetail
+    if (!detail) {
+      return `<div class="people-settings">
+        <div class="people-settings-toolbar">
+          <h2 class="people-settings-page-title">人員設定</h2>
+        </div>
+        <div class="people-settings-shell">
+          <aside class="people-settings-list">
+            <div class="people-settings-list-header">
+              <span>人員</span>
+              <button id="people-add" class="people-settings-add" type="button" aria-label="新增人員">＋</button>
+            </div>
+            <div class="people-settings-list-items">
+              ${listItems || '<p class="people-list-empty">尚無人員</p>'}
+            </div>
+          </aside>
+          <div class="people-settings-detail">
+            <p class="people-settings-empty">選擇左側人員，或新增一位人員。</p>
+          </div>
+        </div>
+      </div>`
+    }
+
+    const identityRows =
+      detail.identities.length > 0
+        ? detail.identities
+            .map(
+              (identity) => `<div class="people-identity-row">
+                <span class="people-identity-kind">${escapeHtml(identity.kind)}</span>
+                <span class="people-identity-value mono">${escapeHtml(identity.value)}</span>
+                ${identity.label ? `<span class="people-identity-label">${escapeHtml(identity.label)}</span>` : ''}
+                <button type="button" class="people-identity-remove" data-unbind-identity="${identity.id}" ${this.peopleSettingsSaving ? 'disabled' : ''}>移除</button>
+              </div>`,
+            )
+            .join('')
+        : '<p class="people-identities-empty">尚無 identity；未歸戶 commit 會進入佇列。</p>'
+
+    const projectRows =
+      detail.projects.length > 0
+        ? detail.projects
+            .map(
+              (project) =>
+                `<li class="people-project-item">${escapeHtml(project.name)}</li>`,
+            )
+            .join('')
+        : '<p class="people-projects-empty">尚無參與專案（來自報告或 participation）</p>'
+
+    const kindOptions = IDENTITY_KINDS.map(
+      (kind) =>
+        `<option value="${kind.value}" ${this.identityDraftKind === kind.value ? 'selected' : ''}>${kind.label}</option>`,
+    ).join('')
+
+    return `<div class="people-settings">
+      <div class="people-settings-toolbar">
+        <h2 class="people-settings-page-title">人員設定</h2>
+      </div>
+      <h2 class="sr-only">人員設定頁，左側為人員清單，右側為選定人員的詳細設定</h2>
+      <div class="people-settings-shell">
+        <aside class="people-settings-list">
+          <div class="people-settings-list-header">
+            <span>人員</span>
+            <button id="people-add" class="people-settings-add" type="button" aria-label="新增人員">＋</button>
+          </div>
+          <div class="people-settings-list-items">
+            ${listItems || '<p class="people-list-empty">尚無人員</p>'}
+          </div>
+        </aside>
+        <div class="people-settings-detail">
+          <div class="people-settings-detail-header">
+            <h2>${escapeHtml(detail.display_name)}</h2>
+          </div>
+          <div class="people-field">
+            <label for="people-display-name">顯示名</label>
+            <div class="people-display-name-row">
+              <input id="people-display-name" class="people-input" type="text" value="${escapeHtml(detail.display_name)}" />
+              <button id="people-rename-save" class="people-settings-save" type="button" ${this.peopleSettingsSaving ? 'disabled' : ''}>儲存</button>
+            </div>
+            <p class="people-field-hint">更名會同步 rename <code>reports/_people/{顯示名}/</code>；專案層報告目錄不會搬移。</p>
+          </div>
+          <div class="people-field">
+            <label>Identities</label>
+            <div class="people-identity-list">${identityRows}</div>
+            <div class="people-identity-add">
+              <select id="people-identity-kind" class="people-input" aria-label="identity kind">
+                ${kindOptions}
+              </select>
+              <input id="people-identity-value" class="people-input mono" type="text" value="${escapeHtml(this.identityDraftValue)}" placeholder="value" />
+              <button id="people-identity-bind" class="people-settings-save" type="button" ${this.peopleSettingsSaving ? 'disabled' : ''}>新增</button>
+            </div>
+          </div>
+          <div class="people-field">
+            <label>參與專案 <span class="muted">(唯讀)</span></label>
+            ${
+              detail.projects.length > 0
+                ? `<ul class="people-project-list">${projectRows}</ul>`
+                : projectRows
+            }
+          </div>
+        </div>
+      </div>
+    </div>`
+  }
+
+  private bindPeopleSettingsEvents(): void {
+    this.root.querySelector('#people-add')?.addEventListener('click', () => {
+      this.isCreatingPerson = true
+      this.newPersonName = ''
+      this.personDetail = null
+      void this.renderWithStatus()
+    })
+
+    this.root.querySelectorAll('[data-settings-person-id]').forEach((element) => {
+      element.addEventListener('click', () => {
+        const personId = Number((element as HTMLElement).dataset.settingsPersonId)
+        void this.selectSettingsPerson(personId)
+      })
+    })
+
+    this.root.querySelector('#people-create-cancel')?.addEventListener('click', () => {
+      this.isCreatingPerson = false
+      this.newPersonName = ''
+      void this.switchAppView('people')
+    })
+
+    this.root.querySelector('#people-create-save')?.addEventListener('click', () => {
+      const input = this.root.querySelector('#people-new-name') as HTMLInputElement | null
+      void this.handleCreatePerson(input?.value ?? '')
+    })
+
+    this.root.querySelector('#people-rename-save')?.addEventListener('click', () => {
+      const input = this.root.querySelector('#people-display-name') as HTMLInputElement | null
+      void this.handleRenamePerson(input?.value ?? '')
+    })
+
+    this.root.querySelector('#people-identity-kind')?.addEventListener('change', (event) => {
+      this.identityDraftKind = (event.target as HTMLSelectElement).value as IdentityKind
+    })
+
+    this.root.querySelector('#people-identity-value')?.addEventListener('input', (event) => {
+      this.identityDraftValue = (event.target as HTMLInputElement).value
+    })
+
+    this.root.querySelector('#people-identity-bind')?.addEventListener('click', () => {
+      const kind = (this.root.querySelector('#people-identity-kind') as HTMLSelectElement | null)
+        ?.value as IdentityKind | undefined
+      const value = (this.root.querySelector('#people-identity-value') as HTMLInputElement | null)
+        ?.value
+      void this.handleBindSettingsIdentity(kind ?? 'git_email', value ?? '')
+    })
+
+    this.root.querySelectorAll('[data-unbind-identity]').forEach((element) => {
+      element.addEventListener('click', () => {
+        const identityId = Number((element as HTMLElement).dataset.unbindIdentity)
+        void this.handleUnbindIdentity(identityId)
+      })
+    })
+  }
+
+  private async loadPersonDetail(personId: number): Promise<void> {
+    try {
+      this.personDetail = await fetchPersonDetail(personId)
+    } catch (error) {
+      this.personDetail = null
+      this.bannerMessage = error instanceof Error ? error.message : '無法載入人員詳情'
+      this.bannerIsError = true
+    }
+  }
+
+  private async selectSettingsPerson(personId: number): Promise<void> {
+    this.isCreatingPerson = false
+    this.selectedSettingsPersonId = personId
+    this.identityDraftValue = ''
+    this.identityDraftKind = 'git_email'
+    await this.loadPersonDetail(personId)
+    this.render(await this.statusLine())
+  }
+
+  private async handleCreatePerson(displayName: string): Promise<void> {
+    const trimmed = displayName.trim()
+    if (!trimmed || this.peopleSettingsSaving) {
+      return
+    }
+    this.peopleSettingsSaving = true
+    await this.renderWithStatus()
+    try {
+      const created = await createPerson(trimmed)
+      await this.loadPeople()
+      this.isCreatingPerson = false
+      this.newPersonName = ''
+      this.selectedSettingsPersonId = created.id
+      await this.loadPersonDetail(created.id)
+      this.bannerMessage = `已建立 ${created.display_name}`
+      this.bannerIsError = false
+    } catch (error) {
+      this.bannerMessage = error instanceof Error ? error.message : '建立人員失敗'
+      this.bannerIsError = true
+    } finally {
+      this.peopleSettingsSaving = false
+      await this.renderWithStatus()
+    }
+  }
+
+  private async handleRenamePerson(displayName: string): Promise<void> {
+    if (this.selectedSettingsPersonId === null || this.peopleSettingsSaving) {
+      return
+    }
+    const trimmed = displayName.trim()
+    if (!trimmed) {
+      this.bannerMessage = '顯示名不可為空'
+      this.bannerIsError = true
+      await this.renderWithStatus()
+      return
+    }
+    this.peopleSettingsSaving = true
+    await this.renderWithStatus()
+    try {
+      this.personDetail = await renamePerson(this.selectedSettingsPersonId, trimmed)
+      await this.loadPeople()
+      this.bannerMessage = '已更新顯示名'
+      this.bannerIsError = false
+    } catch (error) {
+      this.bannerMessage = error instanceof Error ? error.message : '更名失敗'
+      this.bannerIsError = true
+    } finally {
+      this.peopleSettingsSaving = false
+      await this.renderWithStatus()
+    }
+  }
+
+  private async handleBindSettingsIdentity(kind: IdentityKind, value: string): Promise<void> {
+    if (this.selectedSettingsPersonId === null || this.peopleSettingsSaving) {
+      return
+    }
+    const trimmed = value.trim()
+    if (!trimmed) {
+      this.bannerMessage = 'identity value 不可為空'
+      this.bannerIsError = true
+      await this.renderWithStatus()
+      return
+    }
+    if (this.personDetail?.identities.some((item) => item.kind === kind && item.value === trimmed)) {
+      this.bannerMessage = '此 identity 已綁定'
+      this.bannerIsError = false
+      return
+    }
+    this.peopleSettingsSaving = true
+    await this.renderWithStatus()
+    try {
+      await bindIdentity(this.selectedSettingsPersonId, kind, trimmed)
+      this.identityDraftValue = ''
+      await Promise.all([
+        this.loadPersonDetail(this.selectedSettingsPersonId),
+        this.loadPeople(),
+        this.loadUnmatchedAuthors(),
+      ])
+      this.bannerMessage = '已新增 identity'
+      this.bannerIsError = false
+    } catch (error) {
+      this.bannerMessage = error instanceof Error ? error.message : '綁定失敗'
+      this.bannerIsError = true
+    } finally {
+      this.peopleSettingsSaving = false
+      await this.renderWithStatus()
+    }
+  }
+
+  private async handleUnbindIdentity(identityId: number): Promise<void> {
+    if (this.selectedSettingsPersonId === null || this.peopleSettingsSaving) {
+      return
+    }
+    this.peopleSettingsSaving = true
+    await this.renderWithStatus()
+    try {
+      await unbindIdentity(this.selectedSettingsPersonId, identityId)
+      await Promise.all([
+        this.loadPersonDetail(this.selectedSettingsPersonId),
+        this.loadPeople(),
+        this.loadUnmatchedAuthors(),
+      ])
+      this.bannerMessage = '已移除 identity'
+      this.bannerIsError = false
+    } catch (error) {
+      this.bannerMessage = error instanceof Error ? error.message : '移除失敗'
+      this.bannerIsError = true
+    } finally {
+      this.peopleSettingsSaving = false
+      await this.renderWithStatus()
+    }
+  }
+
   private emptyProjectDraft(): ProjectDraft {
     return {
       name: '',
@@ -1239,6 +1597,17 @@ export class ReviewerApp {
         } catch {
           // poll loop will recover
         }
+      }
+    }
+    if (view === 'people') {
+      await this.loadPeople()
+      if (this.isCreatingPerson) {
+        this.personDetail = null
+      } else if (this.selectedSettingsPersonId !== null) {
+        await this.loadPersonDetail(this.selectedSettingsPersonId)
+      } else if (this.people.length > 0) {
+        this.selectedSettingsPersonId = this.people[0].id
+        await this.loadPersonDetail(this.selectedSettingsPersonId)
       }
     }
     this.render(await this.statusLine())

@@ -192,12 +192,12 @@ VITE_API_BASE=/reviewer
 
 ## 人員歸戶（git email）
 
-同一工程師可能有多個 git email（同 repo 不同帳號、跨 GitLab/GitHub）。系統以 `git_email` identity 將 commit 歸到單一 `people` 列。**未綁定的 email 不會產出週報**，也不會自動建立人員。
+同一工程師可能有多個 git email（同 repo 不同帳號、跨 GitLab/GitHub）。系統以 `git_email` identity 將 commit 歸到單一 `people` 列；亦可綁定 `gitlab_user` / `glab_user`。**未綁定的 email 不會產出週報**，也不會自動建立人員。
 
 ### 建議流程（預先綁定）
 
-1. `POST /api/people` 建立人員（`display_name` 即週報目錄名）
-2. `POST /api/people/{id}/identities` 綁定已知 email（`kind: "git_email"`）
+1. Web UI「人員設定」或 `POST /api/people` 建立人員（`display_name` 即週報／人物層目錄名）
+2. `POST /api/people/{id}/identities` 綁定 identity（`kind`: `git_email`｜`gitlab_user`｜`glab_user`）
 3. 執行 review（全部執行或排程）
 
 ### 事後指認（未歸戶佇列）
@@ -207,6 +207,10 @@ VITE_API_BASE=/reviewer
 3. 重新執行 review，該工程師才會出現在左欄並產出週報
 
 `summary.md` frontmatter 的 `person` 必須等於 canonical `display_name`；後端 ingestion 不再自動 INSERT 新人員。
+
+### 更名限制
+
+`PATCH /api/people/{id}` 會更新 `people.display_name`，並在存在時 rename `reports/_people/{old}/` → `reports/_people/{new}/`。目標目錄已存在或顯示名重名回 409。**不會**搬移專案層 `reports/{project}/{display_name}/`，也不改寫歷史 `summary.md` frontmatter。
 
 ## Headless 執行
 
@@ -249,8 +253,11 @@ claude --bare ... --append-system-prompt-file $APP_ROOT/skills/reviewer-batch/WO
 | GET | `/api/runs/{id}` | 查詢 run 狀態 |
 | GET | `/api/people` | 人員列表（含未讀數、`identity_count`） |
 | POST | `/api/people` | 建立人員 `{ "display_name": "..." }` |
+| GET | `/api/people/{id}` | 人員詳情（`display_name`、`identities`、參與專案 `projects`） |
+| PATCH | `/api/people/{id}` | 更名 `{ "display_name": "..." }`；同步 rename `reports/_people/{old}/`（專案層報告不搬） |
 | GET | `/api/people/{id}/identities` | 列出已綁 identity |
-| POST | `/api/people/{id}/identities` | 綁定 identity `{ "kind", "value", "label?" }` |
+| POST | `/api/people/{id}/identities` | 綁定 identity `{ "kind", "value", "label?" }`（`git_email`／`gitlab_user`／`glab_user`） |
+| DELETE | `/api/people/{id}/identities/{identity_id}` | 解除綁定（允許刪到零） |
 | GET | `/api/unmatched-authors` | 未歸戶 git author 列表 |
 | GET | `/api/people/{id}/reports/latest` | 最新週報（各專案卡 `pending_items` 為 DB open 待確認，含 `id`） |
 | GET | `/api/people/{id}/trends` | 人物趨勢（長期觀察 / 成長軌跡 / 歷史待確認，`historical_pending` 為結構化物件） |
