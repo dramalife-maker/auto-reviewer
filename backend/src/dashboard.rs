@@ -1,6 +1,7 @@
 use serde::Serialize;
 use sqlx::SqlitePool;
 
+use crate::runs::{self, RunListItem};
 use crate::schedule::{compute_next_run_at, format_mr_poll_label, format_schedule_label, load_schedule_config};
 use crate::Error;
 
@@ -44,6 +45,7 @@ pub struct DashboardResponse {
     pub last_run: Option<DashboardLastRun>,
     pub stats: DashboardStats,
     pub recent_reports: Vec<DashboardRecentReport>,
+    pub recent_runs: Vec<RunListItem>,
     pub schedule: DashboardSchedule,
 }
 
@@ -146,10 +148,13 @@ pub async fn load_dashboard(pool: &SqlitePool) -> Result<DashboardResponse, Erro
         mr_poll_label: format_mr_poll_label(schedule_config.mr_poll_interval_min),
     };
 
+    let recent_runs = runs::list_recent_runs(pool, 5).await?;
+
     Ok(DashboardResponse {
         last_run,
         stats,
         recent_reports,
+        recent_runs,
         schedule,
     })
 }

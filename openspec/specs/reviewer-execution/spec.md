@@ -402,3 +402,67 @@ tests:
 -->
 
 ---
+### Requirement: Dashboard includes recent runs
+
+The backend SHALL include `recent_runs` on `GET /api/dashboard` as an array of up to five run list items (same fields as `GET /api/runs` list items), ordered by `started_at` descending.
+
+When no runs exist, `recent_runs` MUST be an empty array.
+
+#### Scenario: Dashboard returns latest five runs
+
+- **GIVEN** more than five runs exist
+- **WHEN** a client calls `GET /api/dashboard`
+- **THEN** `recent_runs` contains exactly five items
+- **AND** they are the newest by `started_at`
+
+<!-- @trace
+source: run-history-observability
+updated: 2026-07-11
+code:
+  - docs/idea/schema.md
+  - frontend/src/types.ts
+  - .kiro/prompts/spectra-debug.prompt.md
+  - .kiro/skills/spectra-ingest/SKILL.md
+  - backend/src/summary.rs
+  - backend/src/runs.rs
+  - .kiro/prompts/spectra-commit.prompt.md
+  - .kiro/skills/spectra-discuss/SKILL.md
+  - .kiro/skills/spectra-archive/SKILL.md
+  - .kiro/prompts/spectra-apply.prompt.md
+  - .kiro/prompts/spectra-propose.prompt.md
+  - backend/src/person_trends.rs
+  - frontend/src/api.ts
+  - .kiro/prompts/spectra-ask.prompt.md
+  - frontend/src/app.ts
+  - .kiro/skills/spectra-commit/SKILL.md
+  - .kiro/skills/spectra-ask/SKILL.md
+  - backend/src/lib.rs
+  - .kiro/skills/spectra-drift/SKILL.md
+  - README.md
+  - backend/src/error.rs
+  - backend/src/reports.rs
+  - backend/src/identity.rs
+  - .kiro/skills/spectra-audit/SKILL.md
+  - .kiro/prompts/spectra-drift.prompt.md
+  - .kiro/prompts/spectra-archive.prompt.md
+  - backend/src/server.rs
+  - .kiro/skills/spectra-debug/SKILL.md
+  - docs/idea/roadmap-workflow-growth.md
+  - backend/migrations/010_pending_items_indexes.sql
+  - .kiro/prompts/spectra-audit.prompt.md
+  - .spectra.yaml
+  - backend/src/pending_items.rs
+  - backend/src/dashboard.rs
+  - .kiro/skills/spectra-propose/SKILL.md
+  - .kiro/skills/spectra-apply/SKILL.md
+  - frontend/src/style.css
+  - .kiro/prompts/spectra-discuss.prompt.md
+  - .kiro/prompts/spectra-ingest.prompt.md
+tests:
+  - backend/tests/pending_items.rs
+  - backend/tests/identity.rs
+  - backend/tests/dashboard.rs
+  - backend/tests/report_reader.rs
+  - backend/tests/person_trends.rs
+  - backend/tests/runs_execution.rs
+-->

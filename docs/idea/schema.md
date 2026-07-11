@@ -256,7 +256,7 @@ CREATE INDEX idx_pending_person_status ON pending_items(person_id, status);
 ```sql
 CREATE TABLE runs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    trigger     TEXT    NOT NULL,            -- 'schedule' | 'manual_all' | 'manual_project' | 'mr_poll'
+    trigger     TEXT    NOT NULL,            -- 'schedule' | 'manual_all' | 'manual_project' | 'mr_poll' | 'manual_mr_poll'
     status      TEXT    NOT NULL DEFAULT 'running', -- 'running' | 'success' | 'partial' | 'failed'
     started_at  TEXT    NOT NULL DEFAULT (datetime('now')),
     finished_at TEXT,
@@ -267,9 +267,11 @@ CREATE TABLE runs (
 );
 
 CREATE INDEX idx_runs_started ON runs(started_at DESC);
+CREATE INDEX idx_runs_status_started ON runs(status, started_at DESC);
+CREATE INDEX idx_runs_trigger_started ON runs(trigger, started_at DESC);
 ```
 
-> `status='partial'`：有專案逾時跳過（規格 §7.2）。`trigger='mr_poll'` 供軌道 2 輪詢紀錄（可選）。
+> `status='partial'`：有專案逾時跳過（規格 §7.2）。`trigger='mr_poll'`／`manual_mr_poll` 供軌道 2 輪詢／手動掃描紀錄。
 
 ### 4.2 `run_projects` — 單次執行內各專案明細
 
@@ -291,6 +293,34 @@ CREATE INDEX idx_run_projects_run ON run_projects(run_id);
 
 > 執行面板 / 專案清單列的即時狀態由本表驅動（佇列中 / 分析中 / 完成 / 逾時跳過）。
 > 去重鎖（規格 §6.3）：插入前檢查同 `project_id` 是否已有 `state IN ('queued','running')` 的列。
+
+### 4.2.1 執行紀錄 API（Web 可觀測）
+
+| 方法 | 路徑 | 說明 |
+|------|------|------|
+| GET | `/api/runs` | `{ "runs": [...], "total": N }`；每筆：`id`、`trigger`、`status`、`started_at`、`finished_at`、`duration_sec`、`project_total`、`project_skipped`。Query：`limit`（預設 50、最大 200）、`offset`、`trigger`、`status`。非法 limit／offset → 400。 |
+| GET | `/api/runs/{id}` | 明細：run 級 `duration_sec`／`note`；各專案 `name`／`state`／`error`／`started_at`／`finished_at`／`duration_sec`。未知 id → 404。 |
+| GET | `/api/dashboard` | 另含 `recent_runs`：最多 5 筆 list item，依 `started_at` 降序。 |
+
+**MR skip 摘要**（僅 `trigger` 為 `mr_poll`／`manual_mr_poll`）：各專案物件附 `skip_summary`：
+
+```json
+{
+  "by_reason": { "inbox_draft": 1, "gitlab_draft": 1 },
+  "items": [
+    { "mr_iid": 12, "skip_reason": "inbox_draft" },
+    { "mr_iid": 8, "skip_reason": "gitlab_draft" }
+  ]
+}
+```
+
+來源為檔案（**不建 skip DB 表**）：
+
+```
+$DATA_ROOT_DIR/runs/<run_id>/projects/<project_id>/eligible_mrs.json
+```
+
+讀取該檔 `skipped[]` 彙總；`items` 最多 100 筆（`by_reason` 仍為完整計數）。缺檔或無法讀取 → 空摘要（`by_reason: {}`、`items: []`），整份明細仍 200。非 MR trigger、或 run 仍為 `status='running'`（polling 熱路徑）不附 `skip_summary`（省略欄位）。已結束的 MR run 在讀檔時走 blocking 執行緒，避免卡住 async runtime。
 
 ### 4.3 `manifest.json` — headless 執行契約（檔案，非 SQLite）
 

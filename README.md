@@ -249,8 +249,10 @@ claude --bare ... --append-system-prompt-file $APP_ROOT/skills/reviewer-batch/WO
 | 方法 | 路徑 | 說明 |
 |------|------|------|
 | GET | `/health` | 健康檢查 |
+| GET | `/api/dashboard` | 控制台：`last_run`、`stats`、`recent_reports`、`recent_runs`（最多 5 筆，同 list item 欄位）、`schedule` |
+| GET | `/api/runs` | 執行紀錄列表：`{ runs, total }`；query：`limit`（預設 50、最大 200）、`offset`、`trigger`、`status`；依 `started_at` 降序 |
 | POST | `/api/runs` | `{ "trigger": "manual_all" }` 全部執行 |
-| GET | `/api/runs/{id}` | 查詢 run 狀態 |
+| GET | `/api/runs/{id}` | run 明細：含 `duration_sec`／`note`、各專案時間與錯誤；已結束的 MR trigger（`mr_poll`／`manual_mr_poll`）另附 per-project `skip_summary`（來自 `eligible_mrs.json` 的 `skipped[]`，`items` 上限 100；進行中的 run 省略以減輕 polling IO） |
 | GET | `/api/people` | 人員列表（含未讀數、`identity_count`） |
 | POST | `/api/people` | 建立人員 `{ "display_name": "..." }` |
 | GET | `/api/people/{id}` | 人員詳情（`display_name`、`identities`、參與專案 `projects`） |
@@ -264,6 +266,8 @@ claude --bare ... --append-system-prompt-file $APP_ROOT/skills/reviewer-batch/WO
 | GET | `/api/people/{id}/pending-items` | 列出人員待確認（`?status=open\|resolved\|all`，預設 `open`） |
 | PATCH | `/api/pending-items/{id}` | 閉環待確認：`{ "status": "resolved", "resolution_note"?: string }`，僅允許 `open → resolved` |
 | PATCH | `/api/reports/{id}/read` | 標記已讀 |
+
+執行紀錄 UI 依賴 `GET /api/runs` 與 dashboard `recent_runs`：前後端請**同版部署**；僅升級前端而留舊後端時，歷史頁會失敗（應顯示錯誤，而非「尚無紀錄」）。
 
 排程預設：每週一 09:00 台北時間（`schedule_config` 表，enabled=1）。時區由 `schedule_config.tz_offset_min` 設定（UTC 偏移分鐘數，預設 `480` = UTC+8）；`run_time` 依此時區解讀。
 

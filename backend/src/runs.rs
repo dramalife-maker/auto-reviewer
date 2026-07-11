@@ -423,20 +423,23 @@ pub async fn count_run_projects_by_state(
     Ok(row.get(0))
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize)]
 pub struct RunRow {
     pub id: i64,
     pub trigger: String,
     pub status: String,
     pub started_at: String,
     pub finished_at: Option<String>,
+    pub duration_sec: Option<i64>,
     pub project_total: Option<i64>,
     pub project_skipped: i64,
+    pub note: Option<String>,
 }
 
 pub async fn get_run(pool: &sqlx::SqlitePool, run_id: i64) -> crate::Result<Option<RunRow>> {
     sqlx::query_as::<_, RunRow>(
-        "SELECT id, trigger, status, started_at, finished_at, project_total, project_skipped
+        "SELECT id, trigger, status, started_at, finished_at, duration_sec,
+                project_total, project_skipped, note
          FROM runs WHERE id = ?",
     )
     .bind(run_id)
@@ -445,11 +448,136 @@ pub async fn get_run(pool: &sqlx::SqlitePool, run_id: i64) -> crate::Result<Opti
     .map_err(crate::Error::Database)
 }
 
+#[derive(Debug, Clone)]
+pub struct ListRunsFilter {
+    pub limit: i64,
+    pub offset: i64,
+    pub trigger: Option<String>,
+    pub status: Option<String>,
+}
+
+impl ListRunsFilter {
+    pub fn from_query(
+        limit: Option<i64>,
+        offset: Option<i64>,
+        trigger: Option<String>,
+        status: Option<String>,
+    ) -> crate::Result<Self> {
+        let limit = limit.unwrap_or(50);
+        let offset = offset.unwrap_or(0);
+        if limit < 1 || limit > 200 {
+            return Err(crate::Error::InvalidRunsListQuery(
+                "limit must be between 1 and 200".into(),
+            ));
+        }
+        if offset < 0 {
+            return Err(crate::Error::InvalidRunsListQuery(
+                "offset must be non-negative".into(),
+            ));
+        }
+        Ok(Self {
+            limit,
+            offset,
+            trigger: trigger.filter(|t| !t.is_empty()),
+            status: status.filter(|s| !s.is_empty()),
+        })
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ListRunsResponse {
+    pub runs: Vec<RunListItem>,
+    pub total: i64,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, Serialize)]
+pub struct RunListItem {
+    pub id: i64,
+    pub trigger: String,
+    pub status: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub duration_sec: Option<i64>,
+    pub project_total: Option<i64>,
+    pub project_skipped: i64,
+}
+
+pub async fn list_recent_runs(
+    pool: &sqlx::SqlitePool,
+    limit: i64,
+) -> crate::Result<Vec<RunListItem>> {
+    sqlx::query_as::<_, RunListItem>(
+        "SELECT id, trigger, status, started_at, finished_at, duration_sec,
+                project_total, project_skipped
+         FROM runs
+         ORDER BY started_at DESC
+         LIMIT ?",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(crate::Error::Database)
+}
+
+pub async fn list_runs(
+    pool: &sqlx::SqlitePool,
+    filter: &ListRunsFilter,
+) -> crate::Result<ListRunsResponse> {
+    let mut count_qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new("SELECT COUNT(*) FROM runs");
+    push_run_filters(&mut count_qb, filter);
+    let total: i64 = count_qb
+        .build_query_scalar()
+        .fetch_one(pool)
+        .await
+        .map_err(crate::Error::Database)?;
+
+    let mut list_qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+        "SELECT id, trigger, status, started_at, finished_at, duration_sec,
+                project_total, project_skipped
+         FROM runs",
+    );
+    push_run_filters(&mut list_qb, filter);
+    list_qb.push(" ORDER BY started_at DESC LIMIT ");
+    list_qb.push_bind(filter.limit);
+    list_qb.push(" OFFSET ");
+    list_qb.push_bind(filter.offset);
+
+    let runs = list_qb
+        .build_query_as::<RunListItem>()
+        .fetch_all(pool)
+        .await
+        .map_err(crate::Error::Database)?;
+
+    Ok(ListRunsResponse { runs, total })
+}
+
+fn push_run_filters<'args>(
+    qb: &mut sqlx::QueryBuilder<'args, sqlx::Sqlite>,
+    filter: &'args ListRunsFilter,
+) {
+    let mut has_where = false;
+    if let Some(trigger) = filter.trigger.as_ref() {
+        qb.push(if has_where { " AND " } else { " WHERE " });
+        qb.push("trigger = ");
+        qb.push_bind(trigger);
+        has_where = true;
+    }
+    if let Some(status) = filter.status.as_ref() {
+        qb.push(if has_where { " AND " } else { " WHERE " });
+        qb.push("status = ");
+        qb.push_bind(status);
+    }
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, Serialize)]
 pub struct RunProjectStatusRow {
+    pub project_id: i64,
     pub name: String,
     pub state: String,
     pub error: Option<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub duration_sec: Option<i64>,
 }
 
 pub async fn list_run_project_statuses(
@@ -457,7 +585,8 @@ pub async fn list_run_project_statuses(
     run_id: i64,
 ) -> crate::Result<Vec<RunProjectStatusRow>> {
     sqlx::query_as::<_, RunProjectStatusRow>(
-        "SELECT p.name, rp.state, rp.error
+        "SELECT rp.project_id, p.name, rp.state, rp.error,
+                rp.started_at, rp.finished_at, rp.duration_sec
          FROM run_projects rp
          INNER JOIN projects p ON p.id = rp.project_id
          WHERE rp.run_id = ?
@@ -467,6 +596,54 @@ pub async fn list_run_project_statuses(
     .fetch_all(pool)
     .await
     .map_err(crate::Error::Database)
+}
+
+const SKIP_SUMMARY_ITEMS_CAP: usize = 100;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SkipSummaryItem {
+    pub mr_iid: i64,
+    pub skip_reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SkipSummary {
+    pub by_reason: std::collections::BTreeMap<String, i64>,
+    pub items: Vec<SkipSummaryItem>,
+}
+
+impl SkipSummary {
+    pub fn empty() -> Self {
+        Self {
+            by_reason: std::collections::BTreeMap::new(),
+            items: Vec::new(),
+        }
+    }
+}
+
+/// Build skip summary from `eligible_mrs.json`. Missing/unreadable → empty summary.
+pub fn load_skip_summary(data_root: &Path, run_id: i64, project_id: i64) -> SkipSummary {
+    let path = eligible_mrs_path(data_root, run_id, project_id);
+    let Ok(file) = crate::mr_reviews::read_eligible_mrs(&path) else {
+        return SkipSummary::empty();
+    };
+
+    let mut by_reason = std::collections::BTreeMap::new();
+    for skipped in &file.skipped {
+        *by_reason.entry(skipped.skip_reason.clone()).or_insert(0) += 1;
+    }
+
+    let items = file
+        .skipped
+        .into_iter()
+        .take(SKIP_SUMMARY_ITEMS_CAP)
+        .map(|skipped| SkipSummaryItem {
+            mr_iid: skipped.mr_iid,
+            skip_reason: skipped.skip_reason,
+        })
+        .collect();
+
+    SkipSummary { by_reason, items }
 }
 
 #[derive(Serialize)]

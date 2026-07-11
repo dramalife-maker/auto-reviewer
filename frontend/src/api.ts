@@ -18,6 +18,7 @@ import type {
   ProjectUpdateInput,
   ReloadProjectsResponse,
   RunStatus,
+  RunsListResponse,
   ScheduleConfigResponse,
   ScheduleUpdateInput,
   UnmatchedAuthor,
@@ -96,6 +97,21 @@ export function startProjectRun(projectName: string): Promise<CreateRunResponse>
 
 export function fetchRun(runId: number): Promise<RunStatus> {
   return request(`/api/runs/${runId}`)
+}
+
+export function fetchRuns(params?: {
+  limit?: number
+  offset?: number
+  trigger?: string
+  status?: string
+}): Promise<RunsListResponse> {
+  const search = new URLSearchParams()
+  if (params?.limit != null) search.set('limit', String(params.limit))
+  if (params?.offset != null) search.set('offset', String(params.offset))
+  if (params?.trigger) search.set('trigger', params.trigger)
+  if (params?.status) search.set('status', params.status)
+  const query = search.toString()
+  return request(`/api/runs${query ? `?${query}` : ''}`)
 }
 
 export function reloadProjects(): Promise<ReloadProjectsResponse> {

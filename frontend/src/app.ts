@@ -13,6 +13,7 @@ import {
   fetchPersonTrends,
   fetchProjects,
   fetchRun,
+  fetchRuns,
   fetchUnmatchedAuthors,
   ignoreMrReview,
   markReportRead,
@@ -41,6 +42,7 @@ import type {
   PersonDetail,
   PersonTrendsResponse,
   ProjectListItem,
+  RunListItem,
   RunStatus,
   UnmatchedAuthor,
 } from './types'
@@ -52,7 +54,7 @@ const IDENTITY_KINDS: Array<{ value: IdentityKind; label: string }> = [
   { value: 'gitlab_user', label: 'GitLab username' },
   { value: 'glab_user', label: 'glab user' },
 ]
-type AppView = 'dashboard' | 'reports' | 'projects' | 'people' | 'mr-inbox'
+type AppView = 'dashboard' | 'reports' | 'projects' | 'people' | 'mr-inbox' | 'runs'
 type SourceType = 'gitlab' | 'local'
 
 interface ProjectDraft {
@@ -106,6 +108,11 @@ export class ReviewerApp {
   private mrChatLoading = false
   private scheduleSaving = false
   private resolvingPendingItemIds = new Set<number>()
+  private runsList: RunListItem[] = []
+  private runsTotal = 0
+  private selectedHistoryRunId: number | null = null
+  private selectedHistoryRun: RunStatus | null = null
+  private runsLoading = false
 
   constructor(root: HTMLElement) {
     this.root = root
@@ -238,6 +245,9 @@ export class ReviewerApp {
                 MR 收件匣
                 ${this.mrDraftBadge()}
               </button>
+              <button type="button" class="nav-item ${this.appView === 'runs' ? 'active' : ''}" data-nav="runs">
+                執行紀錄
+              </button>
             </nav>
             ${this.appView === 'reports' ? `<h2>人員</h2>${this.renderPeopleList()}` : ''}
           </aside>
@@ -251,7 +261,9 @@ export class ReviewerApp {
                     ? this.renderPeopleSettings()
                     : this.appView === 'mr-inbox'
                       ? this.renderMrInbox()
-                      : this.renderContent()
+                      : this.appView === 'runs'
+                        ? this.renderRunsHistory()
+                        : this.renderContent()
             }
           </section>
         </div>
@@ -279,6 +291,20 @@ export class ReviewerApp {
       element.addEventListener('click', () => {
         const personId = Number((element as HTMLElement).dataset.recentPerson)
         void this.openPersonReport(personId)
+      })
+    })
+
+    this.root.querySelectorAll('[data-recent-run]').forEach((element) => {
+      element.addEventListener('click', () => {
+        const runId = Number((element as HTMLElement).dataset.recentRun)
+        void this.openRunHistory(runId)
+      })
+    })
+
+    this.root.querySelectorAll('[data-history-run]').forEach((element) => {
+      element.addEventListener('click', () => {
+        const runId = Number((element as HTMLElement).dataset.historyRun)
+        void this.selectHistoryRun(runId)
       })
     })
 
@@ -525,6 +551,23 @@ export class ReviewerApp {
       ? '<div class="schedule-status active"><span aria-hidden="true">✓</span> 排程器運行中</div>'
       : '<div class="schedule-status inactive">排程已停用</div>'
 
+    const recentRuns = dashboard?.recent_runs ?? []
+    const recentRunRows =
+      recentRuns.length === 0
+        ? '<p class="empty dashboard-empty">尚無執行紀錄</p>'
+        : recentRuns
+            .map((run) => {
+              const statusClass = runStatusClass(run.status)
+              return `<button type="button" class="recent-run-row" data-recent-run="${run.id}">
+                <span class="recent-run-main">
+                  <span class="run-status-pill ${statusClass}">${escapeHtml(run.status)}</span>
+                  <span class="recent-run-trigger">${escapeHtml(humanizeTrigger(run.trigger))}</span>
+                </span>
+                <span class="recent-run-meta">${escapeHtml(formatTimestamp(run.started_at))}${formatDurationSuffix(run.duration_sec)}</span>
+              </button>`
+            })
+            .join('')
+
     return `<div class="dashboard">
       <div class="dashboard-header">
         <div>
@@ -563,6 +606,13 @@ export class ReviewerApp {
         <section class="dashboard-panel">
           <h3 class="panel-title">最近報告</h3>
           <div class="recent-list">${recentRows}</div>
+        </section>
+        <section class="dashboard-panel">
+          <div class="panel-title-row">
+            <h3 class="panel-title">最近執行</h3>
+            <button type="button" class="panel-link" data-nav="runs">查看全部</button>
+          </div>
+          <div class="recent-run-list">${recentRunRows}</div>
         </section>
         <section class="dashboard-panel">
           <h3 class="panel-title">排程</h3>
@@ -1584,6 +1634,9 @@ export class ReviewerApp {
     if (view === 'mr-inbox') {
       await this.loadMrReviews()
     }
+    if (view === 'runs') {
+      await this.loadRunsHistory()
+    }
     if (view === 'projects') {
       if (this.projects.length === 0) {
         await this.loadProjects()
@@ -1681,6 +1734,174 @@ export class ReviewerApp {
   private syncMrEditorFromSelection(): void {
     const selected = this.selectedMrReview
     this.mrEditorBody = selected?.draft_body ?? ''
+  }
+
+  private async loadRunsHistory(): Promise<void> {
+    this.runsLoading = true
+    try {
+      const response = await fetchRuns({ limit: 50 })
+      this.runsList = response.runs
+      this.runsTotal = response.total
+      if (this.selectedHistoryRunId === null && this.runsList.length > 0) {
+        this.selectedHistoryRunId = this.runsList[0].id
+      }
+      if (this.selectedHistoryRunId !== null) {
+        try {
+          this.selectedHistoryRun = await fetchRun(this.selectedHistoryRunId)
+        } catch {
+          this.selectedHistoryRun = null
+          this.bannerMessage = `無法載入 Run #${this.selectedHistoryRunId}`
+          this.bannerIsError = true
+        }
+      } else {
+        this.selectedHistoryRun = null
+      }
+    } catch {
+      this.runsList = []
+      this.runsTotal = 0
+      this.selectedHistoryRun = null
+      this.bannerMessage = '無法載入執行紀錄'
+      this.bannerIsError = true
+    } finally {
+      this.runsLoading = false
+    }
+  }
+
+  private async openRunHistory(runId: number): Promise<void> {
+    this.selectedHistoryRunId = runId
+    this.appView = 'runs'
+    await this.loadRunsHistory()
+    this.render(await this.statusLine())
+  }
+
+  private async selectHistoryRun(runId: number): Promise<void> {
+    this.selectedHistoryRunId = runId
+    try {
+      this.selectedHistoryRun = await fetchRun(runId)
+    } catch {
+      this.selectedHistoryRun = null
+      this.bannerMessage = `無法載入 Run #${runId}`
+      this.bannerIsError = true
+    }
+    if (this.appView === 'runs') {
+      this.render(await this.statusLine())
+    }
+  }
+
+  private renderRunsHistory(): string {
+    const listItems =
+      this.runsList.length === 0
+        ? `<p class="runs-list-empty">${this.runsLoading ? '載入中…' : '尚無執行紀錄'}</p>`
+        : this.runsList
+            .map((run) => {
+              const active = run.id === this.selectedHistoryRunId ? ' active' : ''
+              const statusClass = runStatusClass(run.status)
+              return `<button type="button" class="runs-list-item${active}" data-history-run="${run.id}">
+                <span class="runs-list-title">
+                  <span class="run-status-pill ${statusClass}">${escapeHtml(run.status)}</span>
+                  #${run.id} ${escapeHtml(humanizeTrigger(run.trigger))}
+                </span>
+                <span class="runs-list-meta">${escapeHtml(formatTimestamp(run.started_at))}${formatDurationSuffix(run.duration_sec)}</span>
+                <span class="runs-list-meta">專案 ${run.project_total ?? 0}${run.project_skipped > 0 ? ` · 略過 ${run.project_skipped}` : ''}</span>
+              </button>`
+            })
+            .join('')
+
+    const detail = this.selectedHistoryRun
+      ? this.renderRunHistoryDetail(this.selectedHistoryRun)
+      : `<div class="runs-detail-empty"><p>選擇左側執行以檢視明細</p></div>`
+
+    return `<div class="runs-history">
+      <div class="runs-history-header">
+        <div>
+          <h2 class="runs-history-title">執行紀錄</h2>
+          <p class="runs-history-subtitle">顯示最近 ${this.runsList.length}／共 ${this.runsTotal} 筆 · 依開始時間新到舊</p>
+        </div>
+      </div>
+      <div class="runs-history-body">
+        <aside class="runs-history-list">${listItems}</aside>
+        <section class="runs-history-detail">${detail}</section>
+      </div>
+    </div>`
+  }
+
+  private renderRunHistoryDetail(run: RunStatus): string {
+    const highlight = run.status === 'failed' || run.status === 'partial'
+    const projects =
+      run.projects.length === 0
+        ? '<p class="runs-detail-empty-inline">此 run 沒有專案列</p>'
+        : run.projects
+            .map((project) => {
+              const projectHighlight =
+                project.state === 'failed' || project.state === 'skipped_timeout'
+                  ? ' highlight-fail'
+                  : ''
+              const errorLine = project.error
+                ? `<div class="runs-project-error">${escapeHtml(humanizeProjectError(project.error))}</div>`
+                : ''
+              const skipBlock = hasSkipSummary(project.skip_summary)
+                ? this.renderSkipSummary(project.skip_summary!)
+                : ''
+              return `<article class="runs-project-card${projectHighlight}">
+                <div class="runs-project-head">
+                  <strong>${escapeHtml(project.name)}</strong>
+                  <span class="run-status-pill ${runStatusClass(project.state)}">${escapeHtml(project.state)}</span>
+                  <span class="runs-project-duration">${formatDurationLabel(project.duration_sec)}</span>
+                </div>
+                ${errorLine}
+                ${skipBlock}
+              </article>`
+            })
+            .join('')
+
+    return `<div class="runs-detail ${highlight ? 'highlight-fail' : ''}">
+      <div class="runs-detail-header">
+        <h3>Run #${run.id}</h3>
+        <span class="run-status-pill ${runStatusClass(run.status)}">${escapeHtml(run.status)}</span>
+      </div>
+      <dl class="runs-detail-meta">
+        <div><dt>觸發</dt><dd>${escapeHtml(humanizeTrigger(run.trigger))}</dd></div>
+        <div><dt>開始</dt><dd>${escapeHtml(formatTimestamp(run.started_at))}</dd></div>
+        <div><dt>結束</dt><dd>${run.finished_at ? escapeHtml(formatTimestamp(run.finished_at)) : '—'}</dd></div>
+        <div><dt>耗時</dt><dd>${formatDurationLabel(run.duration_sec)}</dd></div>
+        <div><dt>專案</dt><dd>${run.project_total ?? 0}${run.project_skipped > 0 ? `（略過 ${run.project_skipped}）` : ''}</dd></div>
+        ${run.note ? `<div class="runs-detail-note"><dt>備註</dt><dd>${escapeHtml(run.note)}</dd></div>` : ''}
+      </dl>
+      <h4 class="runs-detail-section">專案結果</h4>
+      <div class="runs-project-list">${projects}</div>
+    </div>`
+  }
+
+  private renderSkipSummary(summary: {
+    by_reason: Record<string, number>
+    items: Array<{ mr_iid: number; skip_reason: string }>
+  }): string {
+    const reasons = Object.entries(summary.by_reason)
+    const grouped = new Map<string, number[]>()
+    for (const item of summary.items) {
+      const list = grouped.get(item.skip_reason) ?? []
+      list.push(item.mr_iid)
+      grouped.set(item.skip_reason, list)
+    }
+
+    const reasonBlocks = reasons
+      .map(([reason, count]) => {
+        const iids = grouped.get(reason) ?? []
+        const iidText =
+          iids.length > 0
+            ? iids.map((iid) => `!${iid}`).join(', ')
+            : '（items 已截斷）'
+        return `<div class="runs-skip-group">
+          <div class="runs-skip-reason">${escapeHtml(reason)} <span class="runs-skip-count">×${count}</span></div>
+          <div class="runs-skip-iids">${escapeHtml(iidText)}</div>
+        </div>`
+      })
+      .join('')
+
+    return `<div class="runs-skip-summary">
+      <div class="runs-skip-title">MR Skip 摘要</div>
+      ${reasonBlocks}
+    </div>`
   }
 
   private renderMrInbox(): string {
@@ -2178,6 +2399,55 @@ function formatDurationSuffix(durationSec: number | null | undefined): string {
     return ` · 耗時 ${minutes}m ${seconds}s`
   }
   return ` · 耗時 ${seconds}s`
+}
+
+function formatDurationLabel(durationSec: number | null | undefined): string {
+  if (durationSec == null || durationSec < 0) {
+    return '—'
+  }
+  const minutes = Math.floor(durationSec / 60)
+  const seconds = durationSec % 60
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`
+  }
+  return `${seconds}s`
+}
+
+function humanizeTrigger(trigger: string): string {
+  switch (trigger) {
+    case 'manual_all':
+      return '手動全部'
+    case 'manual_project':
+      return '手動專案'
+    case 'schedule':
+      return '週排程'
+    case 'mr_poll':
+      return 'MR 輪詢'
+    case 'manual_mr_poll':
+      return '手動 MR 掃描'
+    default:
+      return trigger
+  }
+}
+
+function runStatusClass(status: string): string {
+  if (status === 'failed' || status === 'skipped_timeout') return 'fail'
+  if (status === 'success' || status === 'done') return 'ok'
+  if (status === 'partial' || status === 'running' || status === 'queued') return 'warn'
+  return 'neutral'
+}
+
+function hasSkipSummary(
+  summary:
+    | {
+        by_reason: Record<string, number>
+        items: Array<{ mr_iid: number; skip_reason: string }>
+      }
+    | null
+    | undefined,
+): boolean {
+  if (!summary) return false
+  return Object.keys(summary.by_reason).length > 0 || summary.items.length > 0
 }
 
 function formatRunCompleteBanner(run: RunStatus): { message: string; isError: boolean } {

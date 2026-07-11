@@ -46,6 +46,8 @@ pub enum Error {
     PendingItemAlreadyResolved,
     #[error("invalid pending item list status filter; use open, resolved, or all")]
     InvalidPendingItemListStatus,
+    #[error("invalid runs list query: {0}")]
+    InvalidRunsListQuery(String),
     #[error("failed to sync notes file: {0}")]
     NotesSyncFailed(String),
     #[error(transparent)]

@@ -14,7 +14,7 @@ use crate::pending_items;
 use crate::person_trends;
 use crate::projects;
 use crate::reports;
-use crate::runs::{self, RunRow};
+use crate::runs;
 use crate::schedule::{self, ScheduleConfigResponse, ScheduleUpdateInput};
 use crate::state::AppState;
 use crate::worktree;
@@ -54,16 +54,11 @@ pub struct RunProjectStatusResponse {
     pub name: String,
     pub state: String,
     pub error: Option<String>,
-}
-
-impl From<runs::RunProjectStatusRow> for RunProjectStatusResponse {
-    fn from(row: runs::RunProjectStatusRow) -> Self {
-        Self {
-            name: row.name,
-            state: row.state,
-            error: row.error,
-        }
-    }
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub duration_sec: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skip_summary: Option<runs::SkipSummary>,
 }
 
 #[derive(Serialize)]
@@ -73,31 +68,18 @@ pub struct RunStatusResponse {
     pub status: String,
     pub started_at: String,
     pub finished_at: Option<String>,
+    pub duration_sec: Option<i64>,
+    pub note: Option<String>,
     pub project_total: Option<i64>,
     pub project_skipped: i64,
     pub projects: Vec<RunProjectStatusResponse>,
-}
-
-impl From<RunRow> for RunStatusResponse {
-    fn from(row: RunRow) -> Self {
-        Self {
-            id: row.id,
-            trigger: row.trigger,
-            status: row.status,
-            started_at: row.started_at,
-            finished_at: row.finished_at,
-            project_total: row.project_total,
-            project_skipped: row.project_skipped,
-            projects: Vec::new(),
-        }
-    }
 }
 
 pub fn router(state: AppState) -> Router {
     let cors_origins = state.config.cors_allow_origins().to_vec();
     let router = Router::new()
         .route("/health", get(health))
-        .route("/api/runs", post(create_run))
+        .route("/api/runs", get(list_runs).post(create_run))
         .route("/api/runs/{id}", get(get_run))
         .route("/api/dashboard", get(get_dashboard))
         .route("/api/schedule", get(get_schedule).patch(update_schedule))
@@ -192,6 +174,30 @@ async fn create_run(
     Ok((StatusCode::CREATED, Json(CreateRunResponse { run_id })))
 }
 
+#[derive(Deserialize)]
+struct ListRunsQuery {
+    limit: Option<i64>,
+    offset: Option<i64>,
+    trigger: Option<String>,
+    status: Option<String>,
+}
+
+async fn list_runs(
+    State(state): State<AppState>,
+    Query(query): Query<ListRunsQuery>,
+) -> Result<Json<runs::ListRunsResponse>, ApiError> {
+    let filter = runs::ListRunsFilter::from_query(
+        query.limit,
+        query.offset,
+        query.trigger,
+        query.status,
+    )?;
+    let response = runs::list_runs(&state.pool, &filter)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(response))
+}
+
 async fn get_run(
     State(state): State<AppState>,
     Path(run_id): Path<i64>,
@@ -200,18 +206,62 @@ async fn get_run(
         .await
         .map_err(ApiError::from)?
         .ok_or(Error::NotFound)?;
-    let projects = runs::list_run_project_statuses(&state.pool, run_id)
+    let project_rows = runs::list_run_project_statuses(&state.pool, run_id)
         .await
         .map_err(ApiError::from)?;
+    // Skip file IO while run is still active (2s polling path); history of finished MR runs loads summaries.
+    let include_skip = runs::is_mr_trigger(&run.trigger) && run.status != "running";
+    let skip_summaries = if include_skip {
+        let data_dir = state.config.data_dir().to_path_buf();
+        let project_ids: Vec<i64> = project_rows.iter().map(|row| row.project_id).collect();
+        tokio::task::spawn_blocking(move || {
+            project_ids
+                .into_iter()
+                .map(|project_id| runs::load_skip_summary(&data_dir, run_id, project_id))
+                .collect::<Vec<_>>()
+        })
+        .await
+                    .map_err(|err| {
+                        ApiError::from(Error::Io(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("skip summary join: {err}"),
+                        )))
+                    })?
+    } else {
+        Vec::new()
+    };
+
+    let projects = project_rows
+        .into_iter()
+        .enumerate()
+        .map(|(idx, row)| {
+            let skip_summary = if include_skip {
+                skip_summaries.get(idx).cloned()
+            } else {
+                None
+            };
+            RunProjectStatusResponse {
+                name: row.name,
+                state: row.state,
+                error: row.error,
+                started_at: row.started_at,
+                finished_at: row.finished_at,
+                duration_sec: row.duration_sec,
+                skip_summary,
+            }
+        })
+        .collect();
     Ok(Json(RunStatusResponse {
         id: run.id,
         trigger: run.trigger,
         status: run.status,
         started_at: run.started_at,
         finished_at: run.finished_at,
+        duration_sec: run.duration_sec,
+        note: run.note,
         project_total: run.project_total,
         project_skipped: run.project_skipped,
-        projects: projects.into_iter().map(Into::into).collect(),
+        projects,
     }))
 }
 
@@ -647,7 +697,8 @@ impl IntoResponse for ApiError {
             | Error::InvalidProjectName
             | Error::InvalidProjectConfig(_)
             | Error::InvalidPendingItemStatus
-            | Error::InvalidPendingItemListStatus => StatusCode::BAD_REQUEST,
+            | Error::InvalidPendingItemListStatus
+            | Error::InvalidRunsListQuery(_) => StatusCode::BAD_REQUEST,
             Error::NotFound => StatusCode::NOT_FOUND,
             Error::AgentFailed(_) | Error::NotesSyncFailed(_) => StatusCode::BAD_GATEWAY,
             _ => StatusCode::INTERNAL_SERVER_ERROR,

@@ -105,6 +105,36 @@ export interface RunProjectStatus {
   name: string
   state: string
   error: string | null
+  started_at: string | null
+  finished_at: string | null
+  duration_sec: number | null
+  skip_summary?: SkipSummary | null
+}
+
+export interface SkipSummaryItem {
+  mr_iid: number
+  skip_reason: string
+}
+
+export interface SkipSummary {
+  by_reason: Record<string, number>
+  items: SkipSummaryItem[]
+}
+
+export interface RunListItem {
+  id: number
+  trigger: string
+  status: string
+  started_at: string
+  finished_at: string | null
+  duration_sec: number | null
+  project_total: number | null
+  project_skipped: number
+}
+
+export interface RunsListResponse {
+  runs: RunListItem[]
+  total: number
 }
 
 export interface RunStatus {
@@ -113,6 +143,8 @@ export interface RunStatus {
   status: string
   started_at: string
   finished_at: string | null
+  duration_sec: number | null
+  note: string | null
   project_total: number | null
   project_skipped: number
   projects: RunProjectStatus[]
@@ -233,6 +265,7 @@ export interface DashboardResponse {
   last_run: DashboardLastRun | null
   stats: DashboardStats
   recent_reports: DashboardRecentReport[]
+  recent_runs: RunListItem[]
   schedule: DashboardSchedule
 }
 

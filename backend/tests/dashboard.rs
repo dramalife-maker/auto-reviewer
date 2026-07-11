@@ -95,4 +95,45 @@ async fn dashboard_returns_stats_and_schedule() {
     assert_eq!(json["recent_reports"][0]["person_name"], "Alice");
     assert_eq!(json["schedule"]["label"], "每週一 09:00");
     assert!(json["schedule"]["enabled"].as_bool().unwrap_or(false));
+    assert_eq!(json["recent_runs"].as_array().expect("recent_runs").len(), 1);
+    assert_eq!(json["recent_runs"][0]["trigger"], "manual_all");
+}
+
+#[tokio::test]
+async fn dashboard_recent_runs_returns_latest_five() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    for i in 1..=7 {
+        sqlx::query(
+            "INSERT INTO runs (trigger, status, started_at, finished_at, duration_sec)
+             VALUES ('manual_all', 'success', ?, ?, 60)",
+        )
+        .bind(format!("2026-07-{i:02} 09:00:00"))
+        .bind(format!("2026-07-{i:02} 09:01:00"))
+        .execute(&pool)
+        .await
+        .expect("insert run");
+    }
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/dashboard")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.expect("body").to_bytes();
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    let recent = json["recent_runs"].as_array().expect("recent_runs");
+    assert_eq!(recent.len(), 5);
+    assert_eq!(recent[0]["started_at"], "2026-07-07 09:00:00");
+    assert_eq!(recent[4]["started_at"], "2026-07-03 09:00:00");
 }
