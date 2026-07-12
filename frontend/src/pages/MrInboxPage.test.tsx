@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -65,5 +65,26 @@ describe('MrInboxPage', () => {
 
     await waitFor(() => expect(fetchMrReviews).toHaveBeenLastCalledWith('draft'))
     expect(screen.getByRole('tab', { name: '草稿' })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('toggles markdown preview for the selected review', async () => {
+    const user = userEvent.setup()
+    renderPage('/mr-inbox')
+
+    await screen.findByLabelText('Review 草稿')
+
+    const modeGroup = screen.getByRole('group', { name: '編輯模式' })
+    await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
+
+    expect(within(modeGroup).getByRole('button', { name: 'Preview' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    expect(screen.getByLabelText('Markdown 預覽')).toHaveTextContent('body draft')
+    expect(screen.queryByLabelText('Review 草稿')).not.toBeInTheDocument()
+
+    await user.click(within(modeGroup).getByRole('button', { name: '編輯' }))
+
+    expect(screen.getByLabelText('Review 草稿')).toBeInTheDocument()
   })
 })

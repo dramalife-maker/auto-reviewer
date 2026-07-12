@@ -64,6 +64,7 @@ author_identity: alice@co.com
 
 - 自由格式 Markdown，作為收件匣 `draft_body` 與日後 `glab mr note` 發佈內容來源。
 - 建議含總覽、優點、問題與建議、測試與風險等段落，但無固定 heading 契約（與週報 `summary.md` 不同）。
+- **人眼／API／GitLab note 只看到 body**：後端 list／publish 會剝除 YAML frontmatter；磁碟檔案仍保留 frontmatter 供 ingest。
 
 ---
 

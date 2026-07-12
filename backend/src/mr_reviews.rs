@@ -274,6 +274,56 @@ pub fn parse_draft_frontmatter(content: &str) -> Option<DraftFrontmatter> {
     })
 }
 
+/// Markdown body for humans / GitLab notes — YAML frontmatter stripped when present.
+pub fn strip_draft_frontmatter(content: &str) -> &str {
+    let trimmed = content.trim_start();
+    if !trimmed.starts_with("---") {
+        return content;
+    }
+    let rest = &trimmed[3..];
+    let Some(end) = rest.find("\n---") else {
+        return content;
+    };
+    let after = &rest[end + 4..];
+    after.trim_start_matches(['\r', '\n'])
+}
+
+fn yaml_scalar(value: &str) -> String {
+    if value.is_empty()
+        || value.bytes().any(|b| {
+            matches!(
+                b,
+                b':' | b'#' | b'"' | b'\'' | b'\n' | b'{' | b'}' | b'[' | b']' | b','
+            ) || b.is_ascii_whitespace()
+        })
+    {
+        format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+    } else {
+        value.to_string()
+    }
+}
+
+/// Rebuild on-disk draft markdown: machine frontmatter + human body.
+pub fn compose_draft_markdown(frontmatter: &DraftFrontmatter, body: &str) -> String {
+    let mut lines = Vec::with_capacity(8);
+    lines.push("---".to_string());
+    lines.push(format!("mr_iid: {}", frontmatter.mr_iid));
+    if let Some(title) = frontmatter.mr_title.as_deref() {
+        lines.push(format!("mr_title: {}", yaml_scalar(title)));
+    }
+    lines.push(format!("review_round: {}", frontmatter.review_round));
+    if let Some(identity) = frontmatter.author_identity.as_deref() {
+        lines.push(format!("author_identity: {}", yaml_scalar(identity)));
+    }
+    lines.push("---".to_string());
+    let body = strip_draft_frontmatter(body).trim_start_matches('\n');
+    if body.is_empty() {
+        lines.join("\n") + "\n"
+    } else {
+        format!("{}\n\n{}\n", lines.join("\n"), body.trim_end())
+    }
+}
+
 pub async fn upsert_from_draft_dir(
     pool: &SqlitePool,
     project_id: i64,
@@ -441,7 +491,7 @@ pub async fn list_mr_reviews(
 
     let mut items = Vec::with_capacity(rows.len());
     for row in rows {
-        let draft_body = std::fs::read_to_string(&row.draft_md_path).unwrap_or_default();
+        let raw = std::fs::read_to_string(&row.draft_md_path).unwrap_or_default();
         items.push(MrReviewListItem {
             id: row.id,
             project_id: row.project_id,
@@ -452,7 +502,7 @@ pub async fn list_mr_reviews(
             mr_title: row.mr_title,
             review_round: row.review_round,
             status: row.status,
-            draft_body,
+            draft_body: strip_draft_frontmatter(&raw).to_string(),
             agent_session_id: row.agent_session_id,
             reviewer_agent: row.reviewer_agent,
             created_at: row.created_at,
@@ -483,6 +533,8 @@ struct MrReviewDetailRow {
     project_id: i64,
     project_name: String,
     mr_iid: i64,
+    mr_title: Option<String>,
+    review_round: i64,
     status: String,
     draft_md_path: String,
     agent_session_id: Option<String>,
@@ -492,7 +544,7 @@ struct MrReviewDetailRow {
 async fn load_mr_review(pool: &SqlitePool, id: i64) -> Result<MrReviewDetailRow, Error> {
     sqlx::query_as::<_, MrReviewDetailRow>(
         r#"
-        SELECT mr.project_id, p.name AS project_name, mr.mr_iid,
+        SELECT mr.project_id, p.name AS project_name, mr.mr_iid, mr.mr_title, mr.review_round,
                mr.status, mr.draft_md_path, mr.agent_session_id, mr.reviewer_agent
         FROM mr_reviews mr
         INNER JOIN projects p ON p.id = mr.project_id
@@ -511,7 +563,17 @@ pub async fn update_draft(pool: &SqlitePool, id: i64, body: &str) -> Result<(), 
     if row.status != "draft" {
         return Err(Error::MrReviewConflict);
     }
-    std::fs::write(&row.draft_md_path, body)?;
+
+    let existing = std::fs::read_to_string(&row.draft_md_path).unwrap_or_default();
+    let frontmatter = parse_draft_frontmatter(&existing).unwrap_or(DraftFrontmatter {
+        mr_iid: row.mr_iid,
+        mr_title: row.mr_title.clone(),
+        review_round: row.review_round,
+        author_identity: None,
+    });
+    let file_body = compose_draft_markdown(&frontmatter, body);
+    std::fs::write(&row.draft_md_path, file_body)?;
+
     sqlx::query("UPDATE mr_reviews SET updated_at = datetime('now') WHERE id = ?")
         .bind(id)
         .execute(pool)
@@ -530,8 +592,9 @@ pub async fn publish(
         return Err(Error::MrReviewConflict);
     }
 
-    let draft_body = std::fs::read_to_string(&row.draft_md_path)?;
-    let posted_body = append_ai_agent_marker(&draft_body);
+    let draft_raw = std::fs::read_to_string(&row.draft_md_path)?;
+    let draft_body = strip_draft_frontmatter(&draft_raw);
+    let posted_body = append_ai_agent_marker(draft_body);
     let working_dir = resolve_project_resident_worktree(pool, &row.project_name, &row.project_id)
         .await?;
 
@@ -745,6 +808,53 @@ Body here
     fn parse_draft_frontmatter_returns_none_without_mr_iid() {
         let content = "---\nreview_round: 1\n---\n";
         assert!(parse_draft_frontmatter(content).is_none());
+    }
+
+    #[test]
+    fn strip_draft_frontmatter_returns_human_body() {
+        let content = r#"---
+mr_iid: 68
+mr_title: "feat wallet"
+review_round: 1
+author_identity: garytsai
+---
+
+# MR !68
+
+Body text
+"#;
+        assert_eq!(
+            strip_draft_frontmatter(content),
+            "# MR !68\n\nBody text\n"
+        );
+        assert_eq!(strip_draft_frontmatter("no yaml here"), "no yaml here");
+    }
+
+    #[test]
+    fn compose_draft_markdown_round_trips_body_without_yaml_in_strip() {
+        let fm = DraftFrontmatter {
+            mr_iid: 68,
+            mr_title: Some(":sparkles: feat".into()),
+            review_round: 1,
+            author_identity: Some("garytsai".into()),
+        };
+        let file = compose_draft_markdown(&fm, "# Hello\n\nWorld");
+        assert!(file.starts_with("---\n"));
+        assert!(file.contains("mr_iid: 68\n"));
+        assert_eq!(strip_draft_frontmatter(&file).trim(), "# Hello\n\nWorld");
+        // Saving a body that already includes frontmatter must not nest it.
+        let again = compose_draft_markdown(&fm, &file);
+        assert_eq!(strip_draft_frontmatter(&again).trim(), "# Hello\n\nWorld");
+        assert_eq!(again.matches("mr_iid:").count(), 1);
+    }
+
+    #[test]
+    fn append_ai_agent_marker_on_stripped_body_omits_yaml() {
+        let content = "---\nmr_iid: 1\nreview_round: 1\n---\n\nReview body\n";
+        let posted = append_ai_agent_marker(strip_draft_frontmatter(content));
+        assert!(!posted.contains("mr_iid:"));
+        assert!(posted.starts_with("Review body"));
+        assert!(posted.trim_end().ends_with(AI_AGENT_MARKER));
     }
 
     #[test]

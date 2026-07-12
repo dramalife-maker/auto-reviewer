@@ -266,6 +266,95 @@ async fn worker_marks_skipped_timeout() {
     std::env::remove_var("REVIEWER_EXECUTOR");
 }
 
+#[tokio::test]
+async fn mr_scan_timeout_still_ingests_draft_on_disk() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_app_state_env(&temp).await;
+
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let triage = fixtures.join("fake_triage_eligible.py");
+    let executor = if cfg!(windows) {
+        fixtures.join("write_draft_then_hang.cmd")
+    } else {
+        fixtures.join("write_draft_then_hang.sh")
+    };
+    std::env::set_var("REVIEWER_TRIAGE_SCRIPT", &triage);
+    std::env::set_var("REVIEWER_EXECUTOR", &executor);
+    std::env::set_var("REVIEWER_TEST_MR_IID", "68");
+
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    std::fs::create_dir_all(temp.path().join("repos/alpha")).expect("repo dir");
+
+    sqlx::query(
+        "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('alpha', ?, 1)",
+    )
+    .bind(temp.path().join("repos/alpha").display().to_string())
+    .execute(&pool)
+    .await
+    .expect("insert project");
+
+    let project_id: i64 = sqlx::query_scalar("SELECT id FROM projects WHERE name = 'alpha'")
+        .fetch_one(&pool)
+        .await
+        .expect("project id");
+
+    let run_id = runs::create_manual_mr_scan_run(&pool, project_id, false)
+        .await
+        .expect("create mr scan run");
+
+    let draft_path = runs::mr_poll_draft_dir(temp.path(), run_id, project_id).join("mr-68-round-1.md");
+    std::env::set_var("REVIEWER_TEST_DRAFT_FILE", &draft_path);
+
+    let run_project_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM run_projects WHERE run_id = ? AND project_id = ?",
+    )
+    .bind(run_id)
+    .bind(project_id)
+    .fetch_one(&pool)
+    .await
+    .expect("run project id");
+
+    // Rebuild config after env vars are set (executor + triage).
+    let config = reviewer_server::config::AppConfig::from_env().expect("config");
+    let job = runs::RunProjectRow {
+        id: run_project_id,
+        run_id,
+        project_id,
+        name: "alpha".into(),
+        repo_path: temp.path().join("repos/alpha").display().to_string(),
+        trigger: "manual_mr_poll".into(),
+        mr_scan_force: 0,
+    };
+
+    process_run_project(&pool, &config, job, 1)
+        .await
+        .expect("process mr scan");
+
+    let state: String = sqlx::query_scalar("SELECT state FROM run_projects WHERE id = ?")
+        .bind(run_project_id)
+        .fetch_one(&pool)
+        .await
+        .expect("state");
+    assert_eq!(state, "skipped_timeout");
+
+    assert!(draft_path.is_file(), "executor should have written draft before hang");
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM mr_reviews WHERE project_id = ? AND mr_iid = 68 AND status = 'draft'",
+    )
+    .bind(project_id)
+    .fetch_one(&pool)
+    .await
+    .expect("count drafts");
+    assert_eq!(count, 1, "timeout path must still ingest on-disk drafts");
+
+    std::env::remove_var("REVIEWER_EXECUTOR");
+    std::env::remove_var("REVIEWER_TRIAGE_SCRIPT");
+    std::env::remove_var("REVIEWER_TEST_DRAFT_FILE");
+    std::env::remove_var("REVIEWER_TEST_MR_IID");
+}
+
 fn init_source_repo(path: &std::path::Path) {
     use std::process::Command;
     std::fs::create_dir_all(path).expect("source dir");

@@ -56,3 +56,100 @@ body {
   color: var(--color-ink);
   background: var(--color-page);
 }
+
+.md-preview :where(h1, h2, h3, h4) {
+  margin: 1.1em 0 0.45em;
+  font-weight: 700;
+  color: var(--color-ink);
+  line-height: 1.35;
+}
+
+.md-preview h1 {
+  font-size: 1.35rem;
+}
+
+.md-preview h2 {
+  font-size: 1.2rem;
+}
+
+.md-preview h3 {
+  font-size: 1.05rem;
+}
+
+.md-preview p {
+  margin: 0.55em 0;
+}
+
+.md-preview :where(ul, ol) {
+  margin: 0.55em 0;
+  padding-left: 1.35rem;
+}
+
+.md-preview li {
+  margin: 0.2em 0;
+}
+
+.md-preview :where(ul) {
+  list-style: disc;
+}
+
+.md-preview :where(ol) {
+  list-style: decimal;
+}
+
+.md-preview blockquote {
+  margin: 0.75em 0;
+  padding-left: 0.85rem;
+  border-left: 3px solid var(--color-mr-soft);
+  color: var(--color-ink-muted);
+}
+
+.md-preview :where(code) {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: var(--color-border-subtle);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+
+.md-preview pre {
+  margin: 0.75em 0;
+  overflow-x: auto;
+  border-radius: 8px;
+  background: var(--color-border-subtle);
+  padding: 0.85rem 1rem;
+}
+
+.md-preview pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.md-preview a {
+  color: var(--color-mr);
+  text-decoration: underline;
+}
+
+.md-preview :where(hr) {
+  margin: 1.1em 0;
+  border: 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.md-preview table {
+  width: 100%;
+  margin: 0.75em 0;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+
+.md-preview :where(th, td) {
+  border: 1px solid var(--color-border);
+  padding: 0.4rem 0.55rem;
+  text-align: left;
+}
+
+.md-preview th {
+  background: var(--color-border-subtle);
+  font-weight: 600;
+}

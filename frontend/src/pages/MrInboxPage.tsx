@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
 import { useSearchParams } from 'react-router-dom'
+import remarkGfm from 'remark-gfm'
 
 import {
   agentTurnMrReview,
@@ -21,6 +23,8 @@ type ChatMessage = {
   role: 'user' | 'assistant'
   text: string
 }
+
+type EditorMode = 'edit' | 'preview'
 
 const FILTERS: Array<{ id: MrReviewStatus; label: string }> = [
   { id: 'draft', label: '草稿' },
@@ -284,6 +288,12 @@ function MrReviewDetail({
   onAgentTurn: () => void
 }) {
   const isDraft = review.status === 'draft'
+  const [editorMode, setEditorMode] = useState<EditorMode>(isDraft ? 'edit' : 'preview')
+
+  useEffect(() => {
+    setEditorMode(isDraft ? 'edit' : 'preview')
+  }, [review.id, isDraft])
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex flex-wrap items-start justify-between gap-3">
@@ -299,16 +309,55 @@ function MrReviewDetail({
         <StatusPill tone="mr">{review.reviewer_agent}</StatusPill>
       </header>
 
-      <label className="mt-5 text-sm font-semibold" htmlFor="mr-editor">
-        {isDraft ? 'Review 草稿' : 'Review 內容（唯讀）'}
-      </label>
-      <textarea
-        id="mr-editor"
-        className="mt-2 min-h-[220px] w-full resize-y rounded-lg border border-border bg-page p-3 font-mono text-[13px] leading-6 text-ink-secondary outline-none focus:border-mr"
-        onChange={(event) => onEditorChange(event.target.value)}
-        readOnly={!isDraft}
-        value={editorBody}
-      />
+      <div className="mt-5 flex items-center justify-between gap-3">
+        <label className="text-sm font-semibold" htmlFor={editorMode === 'edit' ? 'mr-editor' : undefined}>
+          {isDraft ? 'Review 草稿' : 'Review 內容（唯讀）'}
+        </label>
+        <div className="flex rounded-md border border-border p-0.5" role="group" aria-label="編輯模式">
+          <button
+            type="button"
+            aria-pressed={editorMode === 'edit'}
+            className={[
+              'rounded px-2.5 py-1 text-xs font-semibold',
+              editorMode === 'edit' ? 'bg-mr-soft text-mr-dark' : 'text-ink-muted hover:bg-page',
+            ].join(' ')}
+            onClick={() => setEditorMode('edit')}
+          >
+            編輯
+          </button>
+          <button
+            type="button"
+            aria-pressed={editorMode === 'preview'}
+            className={[
+              'rounded px-2.5 py-1 text-xs font-semibold',
+              editorMode === 'preview' ? 'bg-mr-soft text-mr-dark' : 'text-ink-muted hover:bg-page',
+            ].join(' ')}
+            onClick={() => setEditorMode('preview')}
+          >
+            Preview
+          </button>
+        </div>
+      </div>
+      {editorMode === 'edit' ? (
+        <textarea
+          id="mr-editor"
+          className="mt-2 min-h-[220px] w-full resize-y rounded-lg border border-border bg-page p-3 font-mono text-[13px] leading-6 text-ink-secondary outline-none focus:border-mr"
+          onChange={(event) => onEditorChange(event.target.value)}
+          readOnly={!isDraft}
+          value={editorBody}
+        />
+      ) : (
+        <div
+          aria-label="Markdown 預覽"
+          className="md-preview mt-2 min-h-[220px] overflow-y-auto rounded-lg border border-border bg-page p-4 text-[13.5px] leading-6 text-ink-secondary"
+        >
+          {editorBody.trim() ? (
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{editorBody}</ReactMarkdown>
+          ) : (
+            <p className="text-ink-muted">尚無內容</p>
+          )}
+        </div>
+      )}
 
       {isDraft ? (
         <div className="mt-3 flex justify-end gap-2">

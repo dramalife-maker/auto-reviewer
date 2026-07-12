@@ -313,23 +313,28 @@ async fn process_mr_run_project(
     let mut had_timeout = false;
 
     for eligible in &eligible_to_run {
-        let mr_worktree = match provision_mr_worktree(
-            std::path::Path::new(&job.repo_path),
-            &eligible.source_branch,
-        )
-        .await
-        {
-            Ok(dir) => dir,
-            Err(err) => {
-                warn!(
-                    run_id = job.run_id,
-                    project = %job.name,
-                    mr_iid = eligible.mr_iid,
-                    branch = %eligible.source_branch,
-                    "mr worktree provision failed: {err}"
-                );
-                had_failure = true;
-                continue;
+        // Test/custom executor mode mirrors weekly: skip real MR worktree supply.
+        let mr_worktree = if config.reviewer_executor().is_some() {
+            resident_dir.clone()
+        } else {
+            match provision_mr_worktree(
+                std::path::Path::new(&job.repo_path),
+                &eligible.source_branch,
+            )
+            .await
+            {
+                Ok(dir) => dir,
+                Err(err) => {
+                    warn!(
+                        run_id = job.run_id,
+                        project = %job.name,
+                        mr_iid = eligible.mr_iid,
+                        branch = %eligible.source_branch,
+                        "mr worktree provision failed: {err}"
+                    );
+                    had_failure = true;
+                    continue;
+                }
             }
         };
 
@@ -365,9 +370,29 @@ async fn process_mr_run_project(
         )
         .await;
 
+        // Agent may write drafts before exit/timeout; always attempt ingest.
+        let session_id = parse_agent_session_id(&result.stdout, agent);
+        if let Err(err) = mr_reviews::upsert_from_draft_dir(
+            pool,
+            job.project_id,
+            &draft_dir,
+            session_id.as_deref(),
+            agent,
+            force,
+        )
+        .await
+        {
+            warn!(
+                run_id = job.run_id,
+                project = %job.name,
+                mr_iid = eligible.mr_iid,
+                "mr draft ingest failed: {err}"
+            );
+            had_failure = true;
+        }
+
         match result.outcome {
             ExecuteOutcome::Success => {
-                let session_id = parse_agent_session_id(&result.stdout, agent);
                 if session_id.is_none() {
                     warn!(
                         run_id = job.run_id,
@@ -376,27 +401,15 @@ async fn process_mr_run_project(
                         "mr scan succeeded but no agent session id in stdout"
                     );
                 }
-                if let Err(err) = mr_reviews::upsert_from_draft_dir(
-                    pool,
-                    job.project_id,
-                    &draft_dir,
-                    session_id.as_deref(),
-                    agent,
-                    force,
-                )
-                .await
-                {
-                    warn!(
-                        run_id = job.run_id,
-                        project = %job.name,
-                        mr_iid = eligible.mr_iid,
-                        "mr draft ingest failed: {err}"
-                    );
-                    had_failure = true;
-                }
             }
             ExecuteOutcome::SkippedTimeout => {
                 had_timeout = true;
+                info!(
+                    run_id = job.run_id,
+                    project = %job.name,
+                    mr_iid = eligible.mr_iid,
+                    "mr review timed out; ingested any drafts already on disk"
+                );
             }
             ExecuteOutcome::Failed => {
                 had_failure = true;

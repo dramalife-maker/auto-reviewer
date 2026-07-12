@@ -46,6 +46,10 @@ pub async fn execute_weekly_batch(
     let wait_result = time::timeout(Duration::from_secs(timeout_sec), child.wait()).await;
 
     let duration_sec = started.elapsed().as_secs() as i64;
+    // Kill before draining stderr so timeout is not blocked on a still-running child.
+    if wait_result.is_err() {
+        kill_process_tree(&mut child).await;
+    }
     let stderr_text = read_child_stderr(&mut stderr).await;
 
     match wait_result {
@@ -64,10 +68,7 @@ pub async fn execute_weekly_batch(
                 format_executor_failure(&stderr_text, None)
             }),
         )),
-        Err(_) => {
-            kill_process_tree(&mut child).await;
-            Ok((ExecuteOutcome::SkippedTimeout, duration_sec, None))
-        }
+        Err(_) => Ok((ExecuteOutcome::SkippedTimeout, duration_sec, None)),
     }
 }
 
@@ -109,6 +110,11 @@ pub async fn execute_mr_review(
     let wait_result = time::timeout(Duration::from_secs(timeout_sec), child.wait()).await;
 
     let duration_sec = started.elapsed().as_secs() as i64;
+    // On timeout, kill before draining pipes — otherwise read_to_end blocks until the
+    // child exits and the configured timeout is effectively ignored.
+    if wait_result.is_err() {
+        kill_process_tree(&mut child).await;
+    }
     let stdout_text = read_child_stdout(&mut stdout).await;
     let stderr_text = read_child_stderr(&mut stderr).await;
 
@@ -135,15 +141,12 @@ pub async fn execute_mr_review(
             }),
             stdout: stdout_text,
         },
-        Err(_) => {
-            kill_process_tree(&mut child).await;
-            MrReviewExecuteResult {
-                outcome: ExecuteOutcome::SkippedTimeout,
-                duration_sec,
-                error: None,
-                stdout: stdout_text,
-            }
-        }
+        Err(_) => MrReviewExecuteResult {
+            outcome: ExecuteOutcome::SkippedTimeout,
+            duration_sec,
+            error: None,
+            stdout: stdout_text,
+        },
     }
 }
 

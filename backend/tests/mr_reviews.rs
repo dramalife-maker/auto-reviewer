@@ -121,6 +121,66 @@ async fn ingest_mr_draft_upserts_same_round() {
 }
 
 #[tokio::test]
+async fn update_draft_preserves_frontmatter_on_disk() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pool = init_pool(temp.path()).await.expect("init pool");
+
+    sqlx::query(
+        "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('alpha', ?, 1)",
+    )
+    .bind(temp.path().join("repos/alpha").display().to_string())
+    .execute(&pool)
+    .await
+    .expect("insert project");
+
+    let project_id: i64 = sqlx::query_scalar("SELECT id FROM projects WHERE name = 'alpha'")
+        .fetch_one(&pool)
+        .await
+        .expect("project id");
+
+    let draft_path = temp.path().join("drafts/mr-42.md");
+    std::fs::create_dir_all(draft_path.parent().expect("parent")).expect("dir");
+    std::fs::write(
+        &draft_path,
+        "---\nmr_iid: 42\nmr_title: feat cache\nreview_round: 1\nauthor_identity: alice@co.com\n---\nOld body\n",
+    )
+    .expect("write draft");
+
+    ingest_mr_draft(
+        &pool,
+        project_id,
+        &draft_path,
+        Some("sess-1"),
+        ReviewerAgent::Cursor,
+        false,
+    )
+    .await
+    .expect("ingest");
+
+    let review_id: i64 = sqlx::query_scalar("SELECT id FROM mr_reviews WHERE mr_iid = 42")
+        .fetch_one(&pool)
+        .await
+        .expect("id");
+
+    mr_reviews::update_draft(&pool, review_id, "# Edited\n\nNo yaml here")
+        .await
+        .expect("update");
+
+    let on_disk = std::fs::read_to_string(&draft_path).expect("read");
+    assert!(on_disk.contains("mr_iid: 42"));
+    assert!(on_disk.contains("author_identity: alice@co.com"));
+    assert!(on_disk.contains("# Edited"));
+    assert!(!on_disk.contains("Old body"));
+
+    let items = mr_reviews::list_mr_reviews(&pool, Some("draft"))
+        .await
+        .expect("list");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].draft_body.trim(), "# Edited\n\nNo yaml here");
+    assert!(!items[0].draft_body.contains("mr_iid:"));
+}
+
+#[tokio::test]
 async fn list_mr_reviews_api_defaults_to_draft() {
     let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
     let temp = tempfile::tempdir().expect("tempdir");
@@ -177,6 +237,9 @@ async fn list_mr_reviews_api_defaults_to_draft() {
     assert_eq!(items.len(), 2);
     assert!(items.iter().all(|item| item.status == "draft"));
     assert!(items.iter().all(|item| item.agent_session_id.is_some()));
+    assert!(items.iter().all(|item| !item.draft_body.contains("mr_iid:")));
+    assert!(items.iter().all(|item| !item.draft_body.trim_start().starts_with("---")));
+    assert!(items.iter().any(|item| item.draft_body.contains("body 10")));
 }
 
 #[tokio::test]
