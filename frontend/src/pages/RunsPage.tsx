@@ -94,8 +94,8 @@ export function RunsPage() {
         <p className="mt-1 text-[13.5px] text-ink-muted">{subtitle}</p>
       </header>
 
-      <div className="grid min-h-[620px] grid-cols-[300px_1fr] overflow-hidden rounded-xl border border-border bg-surface">
-        <aside className="border-r border-border bg-page/60">
+      <div className="grid h-[620px] grid-cols-[300px_1fr] overflow-hidden rounded-xl border border-border bg-surface">
+        <aside className="min-h-0 overflow-y-auto border-r border-border bg-page/60">
           {runs.length > 0 ? (
             runs.map((run) => (
               <ListRow
@@ -127,7 +127,7 @@ export function RunsPage() {
           )}
         </aside>
 
-        <main className="bg-surface p-5">
+        <main className="min-h-0 overflow-y-auto bg-surface p-5">
           {selectedRun ? <RunDetail run={selectedRun} /> : <EmptyDetail />}
         </main>
       </div>
