@@ -275,15 +275,15 @@ export function ProjectsPage({
         </Button>
       </div>
 
-      <div className="flex min-h-[620px] gap-4">
-        <Card className="flex w-[260px] shrink-0 flex-col overflow-hidden">
+      <div className="flex h-[calc(100vh-9rem)] gap-4 overflow-hidden">
+        <Card className="flex h-full w-[260px] shrink-0 flex-col overflow-hidden">
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
             <span className="font-semibold">專案</span>
             <Button className="px-3 py-1.5" onClick={startNewProject} disabled={actionDisabled}>
               +
             </Button>
           </div>
-          <div className="flex-1 overflow-y-auto py-2">
+          <div className="min-h-0 flex-1 overflow-y-auto py-2">
             {projects.length === 0 ? (
               <p className="px-4 py-3 text-sm text-ink-muted">尚無專案</p>
             ) : (
@@ -344,8 +344,8 @@ export function ProjectsPage({
           </div>
         </Card>
 
-        <Card className="min-w-0 flex-1 p-5">
-          <div className="mb-5 flex items-start justify-between gap-3">
+        <Card className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <div className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-5 py-4">
             <div className="flex min-w-0 items-center gap-2">
               <span
                 className="shrink-0 bg-center bg-no-repeat"
@@ -374,117 +374,126 @@ export function ProjectsPage({
             )}
           </div>
 
-          {selectedProject?.health === 'unhealthy' && selectedProject.health_reason ? (
-            <p className="mb-4 rounded-md border border-warning-border bg-warning-tint px-3 py-2 text-sm text-warning-ink">
-              狀態異常：{selectedProject.health_reason}
-            </p>
-          ) : null}
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+            {selectedProject?.health === 'unhealthy' && selectedProject.health_reason ? (
+              <p className="mb-4 rounded-md border border-warning-border bg-warning-tint px-3 py-2 text-sm text-warning-ink">
+                狀態異常：{selectedProject.health_reason}
+              </p>
+            ) : null}
 
-          <div className="grid gap-4">
-            {draft.isNew && (
-              <Field label="專案名稱" required>
+            <div className="grid gap-4">
+              {draft.isNew && (
+                <Field label="專案名稱" required>
+                  <Input
+                    value={draft.name}
+                    placeholder="game-backend"
+                    onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+                  />
+                </Field>
+              )}
+
+              <Field label="來源類型">
+                <div className="flex flex-wrap gap-2">
+                  {(['gitlab', 'local'] as const).map((sourceType) => (
+                    <button
+                      key={sourceType}
+                      type="button"
+                      className={[
+                        'rounded-full border px-3 py-1.5 text-[13px] font-semibold',
+                        draft.source_type === sourceType
+                          ? 'border-primary bg-primary-tint text-primary'
+                          : 'border-border bg-surface text-ink-secondary',
+                      ].join(' ')}
+                      onClick={() => setDraft({ ...draft, source_type: sourceType })}
+                    >
+                      {sourceType === 'gitlab' ? 'GitLab' : '本地'}
+                    </button>
+                  ))}
+                </div>
+              </Field>
+
+              {draft.source_type === 'gitlab' && (
+                <>
+                  <Field label="Git Remote URL" required>
+                    <Input
+                      className="font-mono"
+                      value={draft.git_remote_url}
+                      placeholder="git@gitlab.example.com:team/repo.git"
+                      onChange={(event) => setDraft({ ...draft, git_remote_url: event.target.value })}
+                    />
+                  </Field>
+                  <Field label="常駐分支" required hint="啟動時會為這些分支建立 worktree，週報預設看第一個分支。">
+                    <Input
+                      className="font-mono"
+                      value={draft.default_branches}
+                      placeholder="main, develop"
+                      onChange={(event) => setDraft({ ...draft, default_branches: event.target.value })}
+                    />
+                  </Field>
+                  <div>
+                    <span className="mb-1.5 block text-[13px] font-semibold text-ink-secondary">
+                      MR 標籤
+                    </span>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <Field label="排除" hint="逗號分隔。帶有任一標籤的 MR 不會進入 AI review。">
+                        <Input
+                          className="font-mono"
+                          value={draft.mr_review_skip_labels}
+                          placeholder="wip, do-not-review, no-ai-review"
+                          onChange={(event) =>
+                            setDraft({ ...draft, mr_review_skip_labels: event.target.value })
+                          }
+                        />
+                      </Field>
+                      <Field label="必備（可選）" hint="設定後，只有帶此標籤的 MR 才會被掃描。">
+                        <Input
+                          className="font-mono"
+                          value={draft.mr_review_require_label}
+                          placeholder="ready-for-review"
+                          onChange={(event) =>
+                            setDraft({ ...draft, mr_review_require_label: event.target.value })
+                          }
+                        />
+                      </Field>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              <Field label="儲存路徑" required>
                 <Input
-                  value={draft.name}
+                  className="font-mono"
+                  value={draft.repo_path}
                   placeholder="game-backend"
-                  onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+                  onChange={(event) => setDraft({ ...draft, repo_path: event.target.value })}
                 />
               </Field>
-            )}
 
-            <Field label="來源類型">
-              <div className="flex flex-wrap gap-2">
-                {(['gitlab', 'local'] as const).map((sourceType) => (
-                  <button
-                    key={sourceType}
-                    type="button"
-                    className={[
-                      'rounded-full border px-3 py-1.5 text-[13px] font-semibold',
-                      draft.source_type === sourceType
-                        ? 'border-primary bg-primary-tint text-primary'
-                        : 'border-border bg-surface text-ink-secondary',
-                    ].join(' ')}
-                    onClick={() => setDraft({ ...draft, source_type: sourceType })}
-                  >
-                    {sourceType === 'gitlab' ? 'GitLab' : '本地'}
-                  </button>
-                ))}
-              </div>
-            </Field>
-
-            {draft.source_type === 'gitlab' && (
-              <>
-                <Field label="Git Remote URL" required hint="用於 clone 遠端 repo，請從 GitLab 專案複製 SSH 或 HTTPS 網址。">
-                  <Input
-                    className="font-mono"
-                    value={draft.git_remote_url}
-                    placeholder="git@gitlab.example.com:team/repo.git"
-                    onChange={(event) => setDraft({ ...draft, git_remote_url: event.target.value })}
-                  />
-                </Field>
-                <Field label="常駐分支" required hint="啟動時會為這些分支建立 worktree，週報預設看第一個分支。">
-                  <Input
-                    className="font-mono"
-                    value={draft.default_branches}
-                    placeholder="main, develop"
-                    onChange={(event) => setDraft({ ...draft, default_branches: event.target.value })}
-                  />
-                </Field>
-                <Field label="MR 排除標籤" hint="逗號分隔。帶有任一標籤的 MR 不會進入 AI review。">
-                  <Input
-                    className="font-mono"
-                    value={draft.mr_review_skip_labels}
-                    placeholder="wip, do-not-review, no-ai-review"
-                    onChange={(event) =>
-                      setDraft({ ...draft, mr_review_skip_labels: event.target.value })
-                    }
-                  />
-                </Field>
-                <Field label="MR 必備標籤（可選）" hint="設定後，只有帶此標籤的 MR 才會被掃描。">
-                  <Input
-                    className="font-mono"
-                    value={draft.mr_review_require_label}
-                    placeholder="ready-for-review"
-                    onChange={(event) =>
-                      setDraft({ ...draft, mr_review_require_label: event.target.value })
-                    }
-                  />
-                </Field>
-              </>
-            )}
-
-            <Field label="儲存路徑" required hint="簡短名稱會對應到伺服器的 repos/ 目錄；也可填絕對路徑。">
-              <Input
-                className="font-mono"
-                value={draft.repo_path}
-                placeholder="game-backend"
-                onChange={(event) => setDraft({ ...draft, repo_path: event.target.value })}
-              />
-            </Field>
-
-            <Field label="工程師對應" hint="GitLab username -> 顯示名，唯讀。">
-              <div className="space-y-2">
-                {selectedProject && selectedProject.engineers.length > 0 ? (
-                  selectedProject.engineers.map((engineer) => (
-                    <div
-                      key={`${engineer.gitlab_username ?? ''}-${engineer.display_name}`}
-                      className="flex flex-wrap items-center gap-2 rounded-md border border-border px-3 py-2 text-[13px]"
-                    >
-                      <Avatar name={engineer.display_name} size={28} />
-                      <span className="font-mono text-ink-muted">{engineer.gitlab_username ?? '—'}</span>
-                      <span className="text-ink-meta" aria-hidden>
-                        →
-                      </span>
-                      <span className="font-medium">{engineer.display_name}</span>
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-sm text-ink-muted">尚無工程師對應（執行 review 後會依 commit 歸戶）</p>
-                )}
-              </div>
-            </Field>
+              <Field label="工程師對應">
+                <div className="space-y-2">
+                  {selectedProject && selectedProject.engineers.length > 0 ? (
+                    selectedProject.engineers.map((engineer) => (
+                      <div
+                        key={`${engineer.gitlab_username ?? ''}-${engineer.display_name}`}
+                        className="flex flex-wrap items-center gap-2 rounded-md border border-border px-3 py-2 text-[13px]"
+                      >
+                        <Avatar name={engineer.display_name} size={28} />
+                        <span className="font-mono text-ink-muted">{engineer.gitlab_username ?? '—'}</span>
+                        <span className="text-ink-meta" aria-hidden>
+                          →
+                        </span>
+                        <span className="font-medium">{engineer.display_name}</span>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-sm text-ink-muted">尚無工程師對應（執行 review 後會依 commit 歸戶）</p>
+                  )}
+                </div>
+              </Field>
+            </div>
           </div>
 
-          <div className="mt-6 flex justify-end gap-2">
+          <div className="flex shrink-0 justify-end gap-2 border-t border-border px-5 py-4">
             <Button onClick={cancelEdit}>取消</Button>
             <Button variant="primary" onClick={() => void handleSave()} disabled={saving}>
               {saving ? '儲存中...' : '儲存'}
