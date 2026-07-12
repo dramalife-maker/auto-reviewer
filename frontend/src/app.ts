@@ -2536,7 +2536,10 @@ function formatRunElapsed(startedAt: string | null, _tick: number): string {
   if (!startedAt) {
     return '00:00'
   }
-  const started = Date.parse(startedAt.replace(' ', 'T'))
+  // SQLite datetime('now') is UTC without a zone suffix; bare ISO is treated as local by Date.parse.
+  const normalized = startedAt.includes('T') ? startedAt : startedAt.replace(' ', 'T')
+  const utcIso = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized) ? normalized : `${normalized}Z`
+  const started = Date.parse(utcIso)
   if (Number.isNaN(started)) {
     return '00:00'
   }
