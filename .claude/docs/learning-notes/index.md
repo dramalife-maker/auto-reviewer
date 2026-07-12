@@ -12,6 +12,7 @@
 
 | 日期 | 檔案 | 摘要 |
 |------|------|------|
+| 2026-07-12 | 2026-07-12/sqlite-utc-date-parse.md | SQLite `datetime('now')` 無 zone；前端 Date.parse 當本地 → UTC+8 下 elapsed 從 480 分起跳 |
 | 2026-07-07 | 2026-07-07/knowledge-gap.md | 整合 Cursor Agent CLI：subprocess、Windows 換行、本機 login token 繼承 |
 | 2026-07-07 | 2026-07-07/reviewer-spawn-hang.md | Windows `.cmd` shim 內部 `powershell -File %*` 二次解析打散大 prompt，需改直呼 `.ps1`；含診斷法 |
 

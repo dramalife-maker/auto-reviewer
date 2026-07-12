@@ -2532,14 +2532,18 @@ function formatReportDateShort(value: string): string {
   return value.length >= 5 ? value.slice(5) : value
 }
 
+/** Parse SQLite/API timestamps that are UTC but often lack a zone suffix. */
+function parseUtcTimestamp(value: string): number {
+  const normalized = value.includes('T') ? value : value.replace(' ', 'T')
+  const utcIso = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized) ? normalized : `${normalized}Z`
+  return Date.parse(utcIso)
+}
+
 function formatRunElapsed(startedAt: string | null, _tick: number): string {
   if (!startedAt) {
     return '00:00'
   }
-  // SQLite datetime('now') is UTC without a zone suffix; bare ISO is treated as local by Date.parse.
-  const normalized = startedAt.includes('T') ? startedAt : startedAt.replace(' ', 'T')
-  const utcIso = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized) ? normalized : `${normalized}Z`
-  const started = Date.parse(utcIso)
+  const started = parseUtcTimestamp(startedAt)
   if (Number.isNaN(started)) {
     return '00:00'
   }
@@ -2550,7 +2554,17 @@ function formatRunElapsed(startedAt: string | null, _tick: number): string {
 }
 
 function formatTimestamp(value: string): string {
-  return value.length >= 16 ? value.slice(0, 16) : value
+  const ms = parseUtcTimestamp(value)
+  if (Number.isNaN(ms)) {
+    return value.length >= 16 ? value.slice(0, 16) : value
+  }
+  const d = new Date(ms)
+  const yyyy = d.getFullYear()
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mi = String(d.getMinutes()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}`
 }
 
 function formatDurationSuffix(durationSec: number | null | undefined): string {
