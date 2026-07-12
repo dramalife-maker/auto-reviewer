@@ -9,7 +9,7 @@ import {
   renamePerson,
   unbindIdentity,
 } from '../api'
-import { useBanner } from '../context/BannerContext'
+import { useToast } from '../context/ToastContext'
 import { Avatar, Button, Card, Input } from '../components/ui'
 import type { IdentityKind, Person, PersonDetail, UnmatchedAuthor } from '../types'
 
@@ -29,7 +29,7 @@ export function PeoplePage({
   initialPeople?: Person[]
   initialUnmatchedAuthors?: UnmatchedAuthor[]
 }) {
-  const { show } = useBanner()
+  const { show } = useToast()
   const [people, setPeople] = useState<Person[]>(initialPeople ?? [])
   const [unmatchedAuthors, setUnmatchedAuthors] = useState<UnmatchedAuthor[]>(
     initialUnmatchedAuthors ?? [],

@@ -13,7 +13,7 @@ import { Card } from '../components/ui/Card.tsx'
 import { ListRow } from '../components/ui/ListRow.tsx'
 import { StatusPill } from '../components/ui/StatusPill.tsx'
 import { Tabs } from '../components/ui/Tabs.tsx'
-import { useBanner } from '../context/BannerContext.tsx'
+import { useToast } from '../context/ToastContext.tsx'
 import { formatTimestamp } from '../lib/format'
 import type { MrReviewItem, MrReviewStatus } from '../types'
 
@@ -31,7 +31,7 @@ const FILTERS: Array<{ id: MrReviewStatus; label: string }> = [
 export function MrInboxPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const status = parseStatus(searchParams.get('status'))
-  const { show } = useBanner()
+  const { show } = useToast()
   const [reviews, setReviews] = useState<MrReviewItem[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [editorBody, setEditorBody] = useState('')

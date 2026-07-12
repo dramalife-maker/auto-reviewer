@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 
 import { fetchRun, fetchRuns } from '../api'
 import { Card, ListRow, StatusPill } from '../components/ui'
-import { useBanner } from '../context/BannerContext.tsx'
+import { useToast } from '../context/ToastContext.tsx'
 import {
   formatDurationLabel,
   formatDurationSuffix,
@@ -17,7 +17,7 @@ import type { RunListItem, RunStatus, SkipSummary } from '../types'
 export function RunsPage() {
   const navigate = useNavigate()
   const params = useParams()
-  const banner = useBanner()
+  const toast = useToast()
   const routeRunId = params.runId ? Number(params.runId) : null
   const [runs, setRuns] = useState<RunListItem[]>([])
   const [total, setTotal] = useState(0)
@@ -35,11 +35,11 @@ export function RunsPage() {
     } catch (error) {
       setRuns([])
       setTotal(0)
-      banner.show(error instanceof Error ? error.message : '無法載入執行紀錄', true)
+      toast.show(error instanceof Error ? error.message : '無法載入執行紀錄', true)
     } finally {
       setLoading(false)
     }
-  }, [banner, routeRunId])
+  }, [toast, routeRunId])
 
   useEffect(() => {
     void loadRuns()
@@ -67,7 +67,7 @@ export function RunsPage() {
       } catch (error) {
         if (!cancelled) {
           setSelectedRun(null)
-          banner.show(error instanceof Error ? error.message : `無法載入 Run #${selectedRunId}`, true)
+          toast.show(error instanceof Error ? error.message : `無法載入 Run #${selectedRunId}`, true)
         }
       }
     }
@@ -75,7 +75,7 @@ export function RunsPage() {
     return () => {
       cancelled = true
     }
-  }, [banner, selectedRunId])
+  }, [toast, selectedRunId])
 
   const subtitle = useMemo(
     () => `顯示最近 ${runs.length}／共 ${total} 筆 · 依開始時間新到舊`,

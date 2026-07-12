@@ -1,24 +1,24 @@
-import { useBanner } from '../../context/BannerContext.tsx'
+import { useToast } from '../../context/ToastContext.tsx'
 
-export function Banner() {
-  const { message, isError, dismiss } = useBanner()
+export function Toast() {
+  const { message, isError, dismiss } = useToast()
   if (!message) return null
 
   return (
     <div
       role="status"
       className={[
-        'flex items-start justify-between gap-3 border-b px-10 py-3 text-[13.5px]',
+        'fixed right-6 top-6 z-50 flex max-w-md items-start gap-3 rounded-lg border px-4 py-3 text-[13.5px] shadow-lg',
         isError
           ? 'border-danger-border bg-danger-tint text-danger'
           : 'border-border bg-primary-tint text-primary-dark',
       ].join(' ')}
     >
-      <span>{message}</span>
+      <span className="min-w-0 flex-1 leading-snug">{message}</span>
       <button
         type="button"
         aria-label="關閉提示"
-        className="text-lg leading-none text-ink-meta hover:text-ink"
+        className="shrink-0 text-lg leading-none text-ink-meta hover:text-ink"
         onClick={dismiss}
       >
         ×

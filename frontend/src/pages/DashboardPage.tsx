@@ -8,7 +8,7 @@ import {
   updateSchedule,
 } from '../api'
 import { Button, Card, Input, ListRow, StatCard, StatusPill } from '../components/ui'
-import { useBanner } from '../context/BannerContext.tsx'
+import { useToast } from '../context/ToastContext.tsx'
 import { useRunPolling } from '../hooks/useRunPolling'
 import { clearCatchUpDismiss, dismissCatchUp, isCatchUpDismissed } from '../lib/catchup'
 import {
@@ -39,7 +39,7 @@ const emptyStats = {
   mr_draft_count: 0,
 }
 
-function formatRunCompleteBanner(run: RunStatus): { message: string; isError: boolean } {
+function formatRunCompleteToast(run: RunStatus): { message: string; isError: boolean } {
   const skipped = run.project_skipped > 0 ? `（略過 ${run.project_skipped} 個專案）` : ''
   const failed = run.projects.filter((project) => project.state === 'failed' && project.error)
 
@@ -62,7 +62,7 @@ function formatRunCompleteBanner(run: RunStatus): { message: string; isError: bo
 
 export function DashboardPage() {
   const navigate = useNavigate()
-  const banner = useBanner()
+  const toast = useToast()
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [scheduleSaving, setScheduleSaving] = useState(false)
@@ -83,16 +83,16 @@ export function DashboardPage() {
     try {
       setDashboard(await fetchDashboard())
     } catch (error) {
-      banner.show(error instanceof Error ? error.message : '無法載入控制台', true)
+      toast.show(error instanceof Error ? error.message : '無法載入控制台', true)
     } finally {
       setLoading(false)
     }
-  }, [banner])
+  }, [toast])
 
   const { startPolling, activeRunId } = useRunPolling({
     onComplete: async (run) => {
-      const result = formatRunCompleteBanner(run)
-      banner.show(result.message, result.isError)
+      const result = formatRunCompleteToast(run)
+      toast.show(result.message, result.isError)
       await loadDashboard()
     },
   })
@@ -130,10 +130,10 @@ export function DashboardPage() {
   async function handleRunAll() {
     try {
       const response = await startManualRun()
-      banner.dismiss()
+      toast.dismiss()
       startPolling(response.run_id)
     } catch (error) {
-      banner.show(error instanceof Error ? error.message : '無法啟動執行', true)
+      toast.show(error instanceof Error ? error.message : '無法啟動執行', true)
     }
   }
 
@@ -143,11 +143,11 @@ export function DashboardPage() {
     try {
       const response = await catchUpSchedule()
       clearCatchUpDismiss()
-      banner.show(`已啟動補跑 · run #${response.run_id}`)
+      toast.show(`已啟動補跑 · run #${response.run_id}`)
       await loadDashboard()
       startPolling(response.run_id)
     } catch (error) {
-      banner.show(error instanceof Error ? error.message : '補跑失敗', true)
+      toast.show(error instanceof Error ? error.message : '補跑失敗', true)
     } finally {
       setCatchUpLoading(false)
     }
@@ -168,27 +168,27 @@ export function DashboardPage() {
     const mrPoll = Number(scheduleForm.mr_poll_interval_min)
 
     if (!/^\d{1,2}:\d{2}$/.test(runTime)) {
-      banner.show('執行時間格式須為 HH:MM', true)
+      toast.show('執行時間格式須為 HH:MM', true)
       return
     }
     if (!Number.isFinite(weekday) || weekday < 0 || weekday > 6) {
-      banner.show('星期必須為 0-6', true)
+      toast.show('星期必須為 0-6', true)
       return
     }
     if (!Number.isFinite(tzOffset)) {
-      banner.show('時區偏移必須為整數（分鐘）', true)
+      toast.show('時區偏移必須為整數（分鐘）', true)
       return
     }
     if (!Number.isFinite(timeout) || timeout < 1) {
-      banner.show('專案逾時必須 >= 1 秒', true)
+      toast.show('專案逾時必須 >= 1 秒', true)
       return
     }
     if (!Number.isFinite(concurrency) || concurrency < 1) {
-      banner.show('最大並發必須 >= 1', true)
+      toast.show('最大並發必須 >= 1', true)
       return
     }
     if (!Number.isFinite(mrPoll)) {
-      banner.show('MR 輪詢間隔必須為整數（分鐘；<=0 停用）', true)
+      toast.show('MR 輪詢間隔必須為整數（分鐘；<=0 停用）', true)
       return
     }
 
@@ -204,9 +204,9 @@ export function DashboardPage() {
         mr_poll_interval_min: Math.trunc(mrPoll),
       })
       await loadDashboard()
-      banner.show('排程已儲存。影響 cron 的欄位需重啟 reviewer-server；逾時／並發於下一場 run 生效。')
+      toast.show('排程已儲存。影響 cron 的欄位需重啟 reviewer-server；逾時／並發於下一場 run 生效。')
     } catch (error) {
-      banner.show(error instanceof Error ? error.message : '儲存排程失敗', true)
+      toast.show(error instanceof Error ? error.message : '儲存排程失敗', true)
     } finally {
       setScheduleSaving(false)
     }

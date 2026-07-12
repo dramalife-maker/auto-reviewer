@@ -9,7 +9,7 @@ import {
   fetchPersonDetail,
   fetchUnmatchedAuthors,
 } from '../api'
-import { BannerProvider } from '../context/BannerContext'
+import { ToastProvider } from '../context/ToastContext'
 import { PeoplePage } from './PeoplePage.tsx'
 
 vi.mock('../api', () => ({
@@ -48,9 +48,9 @@ const unmatched = [
 
 function renderPage() {
   return render(
-    <BannerProvider>
+    <ToastProvider>
       <PeoplePage />
-    </BannerProvider>,
+    </ToastProvider>,
   )
 }
 

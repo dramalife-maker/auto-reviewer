@@ -13,7 +13,7 @@ import { Button } from '../components/ui/Button.tsx'
 import { Card } from '../components/ui/Card.tsx'
 import { StatusPill } from '../components/ui/StatusPill.tsx'
 import { Tabs } from '../components/ui/Tabs.tsx'
-import { useBanner } from '../context/BannerContext.tsx'
+import { useToast } from '../context/ToastContext.tsx'
 import type {
   LatestReportItem,
   LatestReportsResponse,
@@ -27,7 +27,7 @@ type ReportTab = 'overview' | 'trends' | `project:${string}`
 export function ReportsPage() {
   const { personId } = useParams<{ personId?: string }>()
   const numericPersonId = parsePersonId(personId)
-  const { show } = useBanner()
+  const { show } = useToast()
   const [people, setPeople] = useState<Person[]>([])
   const [reports, setReports] = useState<LatestReportsResponse | null>(null)
   const [trends, setTrends] = useState<PersonTrendsResponse | null>(null)

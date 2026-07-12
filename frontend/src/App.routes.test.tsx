@@ -2,7 +2,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
-import { BannerProvider } from './context/BannerContext.tsx'
+import { ToastProvider } from './context/ToastContext.tsx'
 import { Sidebar } from './components/layout/Sidebar.tsx'
 import type { Person } from './types'
 
@@ -68,13 +68,13 @@ describe('Sidebar navigation', () => {
 describe('reports route param', () => {
   it('keeps person id in path', () => {
     render(
-      <BannerProvider>
+      <ToastProvider>
         <MemoryRouter initialEntries={['/reports/3']}>
           <Routes>
             <Route path="/reports/:personId" element={<div>person-3</div>} />
           </Routes>
         </MemoryRouter>
-      </BannerProvider>,
+      </ToastProvider>,
     )
     expect(screen.getByText('person-3')).toBeInTheDocument()
   })

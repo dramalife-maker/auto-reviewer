@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react'
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom'
 
 import { fetchDashboard, fetchHealth, fetchPeople, fetchUnmatchedAuthors } from './api'
-import { Banner } from './components/layout/Banner.tsx'
 import { Sidebar } from './components/layout/Sidebar.tsx'
-import { BannerProvider } from './context/BannerContext.tsx'
+import { Toast } from './components/layout/Toast.tsx'
+import { ToastProvider } from './context/ToastContext.tsx'
 import { DashboardPage } from './pages/DashboardPage.tsx'
 import { MrInboxPage } from './pages/MrInboxPage.tsx'
 import { PeoplePage } from './pages/PeoplePage.tsx'
@@ -16,9 +16,9 @@ import type { Person } from './types'
 export function App() {
   return (
     <HashRouter>
-      <BannerProvider>
+      <ToastProvider>
         <AppShell />
-      </BannerProvider>
+      </ToastProvider>
     </HashRouter>
   )
 }
@@ -67,7 +67,7 @@ function AppShell() {
         people={people}
       />
       <div className="flex min-w-0 flex-1 flex-col">
-        <Banner />
+        <Toast />
         <main className="min-w-0 flex-1 px-10 py-8">
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />

@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { BannerProvider } from '../context/BannerContext.tsx'
+import { ToastProvider } from '../context/ToastContext.tsx'
 import type { MrReviewItem, MrReviewStatus } from '../types'
 import { MrInboxPage } from './MrInboxPage.tsx'
 
@@ -38,9 +38,9 @@ function mrReview(status: MrReviewStatus, id: number): MrReviewItem {
 function renderPage(initialEntry = '/mr-inbox?status=published') {
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
-      <BannerProvider>
+      <ToastProvider>
         <MrInboxPage />
-      </BannerProvider>
+      </ToastProvider>
     </MemoryRouter>,
   )
 }

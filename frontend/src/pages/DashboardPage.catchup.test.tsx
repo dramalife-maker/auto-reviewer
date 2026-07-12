@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { HashRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { BannerProvider } from '../context/BannerContext.tsx'
+import { ToastProvider } from '../context/ToastContext.tsx'
 import type { DashboardResponse } from '../types'
 import { DashboardPage } from './DashboardPage.tsx'
 
@@ -51,9 +51,9 @@ function dashboardWithMissed(dueAt: string): DashboardResponse {
 function renderDashboard() {
   return render(
     <HashRouter>
-      <BannerProvider>
+      <ToastProvider>
         <DashboardPage />
-      </BannerProvider>
+      </ToastProvider>
     </HashRouter>,
   )
 }

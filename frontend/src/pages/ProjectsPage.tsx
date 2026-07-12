@@ -9,7 +9,7 @@ import {
   startProjectRun,
   updateProject,
 } from '../api'
-import { useBanner } from '../context/BannerContext'
+import { useToast } from '../context/ToastContext'
 import { formatReportDateShort, formatRunElapsed } from '../lib/format'
 import { sourceIconStyle } from '../lib/icons'
 import { Avatar, Button, Card, Input, StatusPill } from '../components/ui'
@@ -91,7 +91,7 @@ export function ProjectsPage({
   activeRun?: RunStatus | null
   onRunStarted?: (runId: number) => void
 }) {
-  const { show } = useBanner()
+  const { show } = useToast()
   const [projects, setProjects] = useState<ProjectListItem[]>(initialProjects ?? [])
   const [selectedName, setSelectedName] = useState<string | null>(initialProjects?.[0]?.name ?? null)
   const [draft, setDraft] = useState<ProjectDraft>(() =>
