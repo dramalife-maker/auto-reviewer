@@ -218,6 +218,7 @@ async fn process_mr_run_project(
         &resident_str,
         None,
         None,
+        Vec::new(),
     )
     .await
     {
@@ -338,6 +339,25 @@ async fn process_mr_run_project(
             }
         };
 
+        let prior_published_reviews = if eligible.review_round > 1 {
+            match mr_reviews::load_prior_published_reviews(pool, job.project_id, eligible.mr_iid)
+                .await
+            {
+                Ok(prior) => prior,
+                Err(err) => {
+                    warn!(
+                        run_id = job.run_id,
+                        project = %job.name,
+                        mr_iid = eligible.mr_iid,
+                        "failed to load prior published reviews: {err}"
+                    );
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+
         let manifest_path = match write_mr_poll_manifest(
             config.data_dir(),
             job.run_id,
@@ -345,6 +365,7 @@ async fn process_mr_run_project(
             &mr_worktree.display().to_string(),
             None,
             Some(eligible.mr_iid),
+            prior_published_reviews,
         )
         .await
         {

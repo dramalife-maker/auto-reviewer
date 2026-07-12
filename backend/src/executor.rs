@@ -347,13 +347,18 @@ fn build_weekly_command(
             config,
             working_dir,
             manifest_path,
-            &workflow,
-            &contract,
+            &[&workflow, &contract],
             true,
         ),
-        ReviewerAgent::Cursor => {
-            build_cursor_command(config, working_dir, manifest_path, &workflow, &contract)
-        }
+        ReviewerAgent::Cursor => build_cursor_command(
+            config,
+            working_dir,
+            manifest_path,
+            &[
+                ("WORKFLOW", workflow.as_path()),
+                ("OUTPUT CONTRACT", contract.as_path()),
+            ],
+        ),
     }
 }
 
@@ -371,19 +376,28 @@ fn build_mr_scan_command(
         return Ok(Command::new(program));
     }
 
-    let (workflow, contract) = mr_scan_skill_paths(config);
+    let (workflow, contract, observation) = mr_scan_skill_paths(config);
     match config.reviewer_agent() {
         ReviewerAgent::Claude => build_claude_command(
             config,
             working_dir,
             manifest_path,
-            &workflow,
-            &contract,
+            &[&workflow, &contract, &observation],
             false,
         ),
-        ReviewerAgent::Cursor => {
-            build_cursor_command(config, working_dir, manifest_path, &workflow, &contract)
-        }
+        ReviewerAgent::Cursor => build_cursor_command(
+            config,
+            working_dir,
+            manifest_path,
+            &[
+                ("WORKFLOW", workflow.as_path()),
+                ("OUTPUT CONTRACT (draft / inbox)", contract.as_path()),
+                (
+                    "OBSERVATION GUIDELINES (pending / manager)",
+                    observation.as_path(),
+                ),
+            ],
+        ),
     }
 }
 
@@ -496,7 +510,7 @@ fn weekly_skill_paths(config: &AppConfig) -> (PathBuf, PathBuf) {
     )
 }
 
-fn mr_scan_skill_paths(config: &AppConfig) -> (PathBuf, PathBuf) {
+fn mr_scan_skill_paths(config: &AppConfig) -> (PathBuf, PathBuf, PathBuf) {
     let workflow_dir = config
         .app_root()
         .join("skills")
@@ -504,6 +518,7 @@ fn mr_scan_skill_paths(config: &AppConfig) -> (PathBuf, PathBuf) {
     (
         workflow_dir.join("WORKFLOW.md"),
         workflow_dir.join("output-contract.md"),
+        workflow_dir.join("observation-guidelines.md"),
     )
 }
 
@@ -518,8 +533,7 @@ fn build_claude_command(
     config: &AppConfig,
     working_dir: &Path,
     manifest_path: &Path,
-    workflow: &Path,
-    contract: &Path,
+    prompt_files: &[&Path],
     disable_session_persistence: bool,
 ) -> Result<Command, Error> {
     let prompt = base_reviewer_prompt(manifest_path);
@@ -535,11 +549,10 @@ fn build_claude_command(
         .arg("--add-dir")
         .arg(config.data_dir())
         .arg("--add-dir")
-        .arg(working_dir)
-        .arg("--append-system-prompt-file")
-        .arg(workflow)
-        .arg("--append-system-prompt-file")
-        .arg(contract);
+        .arg(working_dir);
+    for path in prompt_files {
+        command.arg("--append-system-prompt-file").arg(path);
+    }
     append_model_arg(&mut command, config);
     command
         .arg("-p")
@@ -557,15 +570,16 @@ fn build_cursor_command(
     config: &AppConfig,
     working_dir: &Path,
     manifest_path: &Path,
-    workflow: &Path,
-    contract: &Path,
+    prompt_sections: &[(&str, &Path)],
 ) -> Result<Command, Error> {
-    let workflow_text = std::fs::read_to_string(workflow).map_err(Error::Io)?;
-    let contract_text = std::fs::read_to_string(contract).map_err(Error::Io)?;
-    let prompt = format!(
-        "{}\n\n--- WORKFLOW ---\n{workflow_text}\n\n--- OUTPUT CONTRACT ---\n{contract_text}",
-        base_reviewer_prompt(manifest_path)
-    );
+    let mut prompt = base_reviewer_prompt(manifest_path);
+    for (label, path) in prompt_sections {
+        let text = std::fs::read_to_string(path).map_err(Error::Io)?;
+        prompt.push_str("\n\n--- ");
+        prompt.push_str(label);
+        prompt.push_str(" ---\n");
+        prompt.push_str(&text);
+    }
     let prompt = prepare_prompt_for_cli(&prompt);
 
     let mut command = reviewer_command("cursor-agent");
@@ -669,6 +683,23 @@ mod tests {
         let command = build_mr_scan_command(&config, config.app_root(), &manifest).expect("cmd");
         let args = command_args(&command);
         assert!(!args.iter().any(|arg| arg == "--no-session-persistence"));
+    }
+
+    #[test]
+    fn mr_scan_claude_command_appends_observation_guidelines() {
+        let config = test_config();
+        let manifest = config.app_root.join("manifest.json");
+        let command = build_mr_scan_command(&config, config.app_root(), &manifest).expect("cmd");
+        let args = command_args(&command);
+        let joined = args.join(" ");
+        assert!(
+            joined.contains("observation-guidelines.md"),
+            "expected observation guidelines in append files, got: {joined}"
+        );
+        assert!(
+            joined.contains("output-contract.md"),
+            "expected draft contract in append files, got: {joined}"
+        );
     }
 
     fn test_config() -> AppConfig {

@@ -81,6 +81,53 @@ pub struct PublishResponse {
     pub published_body: String,
 }
 
+/// Published AI reviews for an MR, oldest round first (for follow-up review context).
+pub async fn load_prior_published_reviews(
+    pool: &SqlitePool,
+    project_id: i64,
+    mr_iid: i64,
+) -> Result<Vec<crate::runs::PriorPublishedReview>, Error> {
+    #[derive(Debug, sqlx::FromRow)]
+    struct Row {
+        review_round: i64,
+        published_at: Option<String>,
+        published_body: Option<String>,
+    }
+
+    let rows = sqlx::query_as::<_, Row>(
+        r#"
+        SELECT review_round, published_at, published_body
+        FROM mr_reviews
+        WHERE project_id = ?
+          AND mr_iid = ?
+          AND status = 'published'
+          AND published_body IS NOT NULL
+          AND trim(published_body) != ''
+        ORDER BY review_round ASC
+        "#,
+    )
+    .bind(project_id)
+    .bind(mr_iid)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            let body = row.published_body?.trim().to_string();
+            if body.is_empty() {
+                return None;
+            }
+            Some(crate::runs::PriorPublishedReview {
+                review_round: row.review_round,
+                published_at: row.published_at,
+                body,
+            })
+        })
+        .collect())
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentTurnResponse {
     pub reply: String,

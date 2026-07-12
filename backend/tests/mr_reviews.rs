@@ -181,6 +181,110 @@ async fn update_draft_preserves_frontmatter_on_disk() {
 }
 
 #[tokio::test]
+async fn load_prior_published_reviews_returns_oldest_first() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pool = init_pool(temp.path()).await.expect("init pool");
+
+    sqlx::query(
+        "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('alpha', ?, 1)",
+    )
+    .bind(temp.path().join("repos/alpha").display().to_string())
+    .execute(&pool)
+    .await
+    .expect("insert project");
+
+    let project_id: i64 = sqlx::query_scalar("SELECT id FROM projects WHERE name = 'alpha'")
+        .fetch_one(&pool)
+        .await
+        .expect("project id");
+
+    let draft_dir = temp.path().join("drafts");
+    std::fs::create_dir_all(&draft_dir).expect("draft dir");
+
+    for (round, body, status) in [
+        (1_i64, "round-1 published body", "published"),
+        (2, "round-2 draft only", "draft"),
+        (1, "should not appear — wrong mr", "published"),
+    ] {
+        let mr_iid = if body.contains("wrong") { 99 } else { 42 };
+        let path = draft_dir.join(format!("mr-{mr_iid}-r{round}-{status}.md"));
+        std::fs::write(
+            &path,
+            format!(
+                "---\nmr_iid: {mr_iid}\nmr_title: t\nreview_round: {round}\nauthor_identity: a@b.com\n---\n{body}\n"
+            ),
+        )
+        .expect("write");
+        ingest_mr_draft(
+            &pool,
+            project_id,
+            &path,
+            None,
+            ReviewerAgent::Cursor,
+            false,
+        )
+        .await
+        .expect("ingest");
+        if status == "published" {
+            sqlx::query(
+                "UPDATE mr_reviews SET status = 'published', published_body = ?, published_at = datetime('now') WHERE draft_md_path = ?",
+            )
+            .bind(body)
+            .bind(path.display().to_string())
+            .execute(&pool)
+            .await
+            .expect("publish row");
+        }
+    }
+
+    // Second published round for same MR.
+    let path_r2 = draft_dir.join("mr-42-r2-published.md");
+    std::fs::write(
+        &path_r2,
+        "---\nmr_iid: 42\nmr_title: t\nreview_round: 2\nauthor_identity: a@b.com\n---\nround-2 published body\n",
+    )
+    .expect("write r2");
+    // Clear draft-only round 2 row conflict by updating that row instead of inserting — delete draft-only first.
+    sqlx::query("DELETE FROM mr_reviews WHERE project_id = ? AND mr_iid = 42 AND review_round = 2")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("delete draft r2");
+    ingest_mr_draft(
+        &pool,
+        project_id,
+        &path_r2,
+        None,
+        ReviewerAgent::Cursor,
+        false,
+    )
+    .await
+    .expect("ingest r2");
+    sqlx::query(
+        "UPDATE mr_reviews SET status = 'published', published_body = ?, published_at = datetime('now') WHERE draft_md_path = ?",
+    )
+    .bind("round-2 published body")
+    .bind(path_r2.display().to_string())
+    .execute(&pool)
+    .await
+    .expect("publish r2");
+
+    let prior = mr_reviews::load_prior_published_reviews(&pool, project_id, 42)
+        .await
+        .expect("load prior");
+    assert_eq!(prior.len(), 2);
+    assert_eq!(prior[0].review_round, 1);
+    assert_eq!(prior[0].body, "round-1 published body");
+    assert_eq!(prior[1].review_round, 2);
+    assert_eq!(prior[1].body, "round-2 published body");
+
+    let empty = mr_reviews::load_prior_published_reviews(&pool, project_id, 7)
+        .await
+        .expect("empty");
+    assert!(empty.is_empty());
+}
+
+#[tokio::test]
 async fn list_mr_reviews_api_defaults_to_draft() {
     let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
     let temp = tempfile::tempdir().expect("tempdir");

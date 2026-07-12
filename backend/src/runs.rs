@@ -806,6 +806,17 @@ pub struct MrPollManifest<'a> {
     pub mr_review_require_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mr_iid: Option<i64>,
+    /// Previously published AI reviews for this MR (oldest first). Used by round 2+.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub prior_published_reviews: Vec<PriorPublishedReview>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PriorPublishedReview {
+    pub review_round: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_at: Option<String>,
+    pub body: String,
 }
 
 pub async fn write_mr_poll_manifest(
@@ -815,6 +826,7 @@ pub async fn write_mr_poll_manifest(
     repo_path: &str,
     reviewer_username: Option<&str>,
     mr_iid: Option<i64>,
+    prior_published_reviews: Vec<PriorPublishedReview>,
 ) -> crate::Result<PathBuf> {
     let path = manifest_path(data_root, run_id, project.id);
     if let Some(parent) = path.parent() {
@@ -851,6 +863,7 @@ pub async fn write_mr_poll_manifest(
         mr_review_skip_labels: parse_mr_review_skip_labels(&project.mr_review_skip_labels),
         mr_review_require_label: project.mr_review_require_label.clone(),
         mr_iid,
+        prior_published_reviews,
     };
 
     let json = serde_json::to_string_pretty(&manifest).map_err(|err| {
@@ -902,6 +915,45 @@ mod tests {
         assert_eq!(
             path,
             Path::new("/data/reviewer/runs/9/projects/3/eligible_mrs.json")
+        );
+    }
+
+    #[test]
+    fn write_mr_poll_manifest_includes_prior_published_reviews() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project = MrPollProjectRow {
+            id: 3,
+            name: "alpha".into(),
+            repo_path: "/repos/alpha".into(),
+            mr_review_skip_labels: "[]".into(),
+            mr_review_require_label: None,
+        };
+        let prior = vec![PriorPublishedReview {
+            review_round: 1,
+            published_at: Some("2026-07-12 10:00:00".into()),
+            body: "Prior AI review body".into(),
+        }];
+
+        let path = tokio::runtime::Runtime::new()
+            .expect("rt")
+            .block_on(write_mr_poll_manifest(
+                temp.path(),
+                9,
+                &project,
+                "/repos/alpha/feat",
+                None,
+                Some(68),
+                prior,
+            ))
+            .expect("write manifest");
+
+        let raw = std::fs::read_to_string(&path).expect("read");
+        let json: serde_json::Value = serde_json::from_str(&raw).expect("json");
+        assert_eq!(json["mr_iid"], 68);
+        assert_eq!(json["prior_published_reviews"][0]["review_round"], 1);
+        assert_eq!(
+            json["prior_published_reviews"][0]["body"],
+            "Prior AI review body"
         );
     }
 }

@@ -165,3 +165,21 @@ fn reviewer_batch_skill_files_exist() {
         "missing skills/reviewer-batch/output-contract.md"
     );
 }
+
+#[test]
+fn scan_mrs_headless_skill_files_exist() {
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let skill_dir = repo_root.join("skills/scan-mrs-headless");
+    assert!(
+        skill_dir.join("WORKFLOW.md").is_file(),
+        "missing skills/scan-mrs-headless/WORKFLOW.md"
+    );
+    assert!(
+        skill_dir.join("output-contract.md").is_file(),
+        "missing skills/scan-mrs-headless/output-contract.md"
+    );
+    assert!(
+        skill_dir.join("observation-guidelines.md").is_file(),
+        "missing skills/scan-mrs-headless/observation-guidelines.md"
+    );
+}

@@ -57,15 +57,24 @@
 
 - `git log` / `git show` / `git diff` 理解本週變更主題、技術深度、review 互動（若 log 可見）。
 - 聚焦 **行為與成長**，非產量排名；避免「commit 多＝表現好」這類結論。
+- 若 repo 有 `CLAUDE.md`／`AGENTS.md`／`.claude/docs`，優先對照專案標準；否則可以通用框架當補充鏡片（scalability、SPOF／retry、idempotency、index／N+1、transaction 邊界、observability、決策理由是否充分）——**用來判斷交付品質，不是用來開長 checklist 塞進 summary**。
 
 ### 2.2 MR 觀察片段（可選）
 
-軌道 2 會將觀察片段寫入 `{report_root}/{person}/_pending/`。**僅** manifest 的 `published_pending_snippets` 所列路徑可折入週報（對應 `mr_reviews.status='published'`）；`draft` / `ignored` 的片段必須留在 `_pending/` 不動。
+軌道 2 會將**場次紀錄**寫入 `{report_root}/{person}/_pending/`（格式見 `skills/scan-mrs-headless/observation-guidelines.md`）。**僅** manifest 的 `published_pending_snippets` 所列路徑可折入週報（對應 `mr_reviews.status='published'`）；`draft` / `ignored` 的片段必須留在 `_pending/` 不動。
 
 對每位 `{person}`：
 
 1. 從 `published_pending_snippets` 篩出以 `{person}/_pending/` 開頭的 `.md` 路徑（相對於 `report_root`）。
-2. Read 這些片段，合併進本週分析（可併入 `report.md` 與 `summary.md` 的「本週重點」或「協作與 review」）。
+2. Read 這些片段。依區塊消費（**改寫濃縮，禁止整段貼上**）：
+
+| 觀察片段區塊 | 週報去向 |
+|--------------|----------|
+| 背景／提案重點／審查意見摘要 | `report.md`「技術與交付」或「協作與 review」；必要時 1 句進 summary「本週重點」 |
+| **觀察到的思維模式** | summary「成長面向」與／或「本週重點」的行為訊號；`report.md` 可稍詳 |
+| 後續追蹤中仍開放、適合 1on1 的問句 | 可成為新的 `## 待確認`（遵守延續規則；勿把已能在 repo 定論的事實題寫進去） |
+| 上一輪已解／修法細節 | 最多一句帶過；不要把 ❌ 表複製進 summary |
+
 3. 寫完本次報告後，將**已消費**的片段搬移至 `{report_root}/{person}/_pending/_archived/`（若目錄不存在則建立），不要刪除。
 4. **不要** Read 或搬移未列於 `published_pending_snippets` 的 `_pending/` 檔案。
 
@@ -73,11 +82,12 @@
 
 Read 若已存在：
 
-- `{person_report_root}/{display_name}/index.md` — **跨專案**長期觀察（趨勢 Tab 主資料源）
+- `{person_report_root}/{display_name}/index.md` — **跨專案**長期觀察／思維模式（趨勢 Tab 主資料源；**稀疏**，見 §4.2）
 - `{person_report_root}/{display_name}/YYYY-MM.md`（`run_date` 所在月份）— 跨專案月度成長
-- `{person_report_root}/{display_name}/_notes.md` — 歷史待確認
+- `{person_report_root}/{display_name}/_notes.md` — **僅**歷史待確認（待確認清單用；**不是**長期思維模式檔）
 - `{report_root}/{person}/index.md` —（可選）本專案技術脈絡補充
 - `{report_root}/{person}/YYYY-MM.md`（`run_date` 所在月份）— **本專案**月度成長素材
+- 同人 `_pending/_archived/` 近期片段 — 判斷「是否構成重複模式」時參考
 
 用於延續敘事、避免與過去待確認矛盾；**不要**複製整段舊文到 summary。
 
@@ -104,16 +114,17 @@ Read 若已存在：
 （段落敘述）
 
 ## 技術與交付
-（依 commit / MR 整理，可含具體模組、決策、trade-off）
+（依 commit / 已發佈觀察的背景與審查摘要整理；可含模組、決策、trade-off）
 
 ## 協作與 review
-（若可觀察）
+（觀察片段的回應風格、清單內外品質分化等；可寫稍詳）
 
 ## 風險與待確認
 （詳細版；summary 會精簡）
 
 ## 參考
 - commit: <hash> — <subject>
+- MR 觀察：已消費片段的相對路徑（若有）
 ```
 
 ### 3.2 `summary.md`（精簡版 — 硬性契約）
@@ -123,6 +134,7 @@ Read 若已存在：
 - YAML frontmatter 含 `person`, `project`, `date`, `one_line`, `mr_count`, `commit_count`
 - 四個固定 heading（順序）：`## 本週重點`、`## 成長面向`、`## 待確認`、`## 已釐清`
 - 各 section 使用 `- ` bullet；`待確認` 每條將由後端寫入 `pending_items`；`已釐清` 每條（須為既有 open 原文）由後端 ingest 自動 resolve
+- 有已發佈觀察時：「成長面向」優先吸收其**思維模式**（改寫濃縮）；勿貼場次全文或 ❌ 表
 
 `project` 必須等於 `manifest.project_name`。`date` 必須等於 `manifest.run_date`。
 
@@ -132,14 +144,17 @@ Read 若已存在：
 
 每位工程師產完 `{report_root}/{person}/{run_date}/summary.md` 後，**依序**更新專案層與人物層長期檔。兩層 `YYYY-MM.md` 語意不同，**皆須維護**。
 
+**長期檔分工**：**流水帳進月檔；跨時間行為模式才進人物層 `index.md`。**  
+`_notes.md` **只服務待確認歷史**（與 `index.md` 的思維模式**分檔**，勿把行為觀察寫進 `_notes.md`）。
+
 ### 4.1 專案層（本 repo 月度成長）
 
 路徑：`{report_root}/{person}/`
 
 | 檔案 | 動作 |
 |------|------|
-| `YYYY-MM.md` | **必做**。以 `run_date` 的 `YYYY-MM` 為檔名；追加本週在**本專案**的成長段落（技術深度、交付、review 互動等；可引用 summary 的 `## 成長面向`，但須改寫為月度累積敘事，非整段複製） |
-| `index.md` | （可選）追加本專案技術脈絡段落 |
+| `YYYY-MM.md` | **必做**。以 `run_date` 的 `YYYY-MM` 為檔名；追加本週在**本專案**的成長段落（技術深度、交付、review 互動；可引用 summary「成長面向」，改寫為月度累積敘事，非整段複製）。同月多段以 `---` 分隔 |
+| `index.md` | （可選）僅在本專案出現**重複技術／協作模式**時追加；不要每週貼 summary |
 
 專案層月檔記錄「這個人在這個 repo 當月長大了什麼」，供單專案深讀與人物層綜合的素材來源。
 
@@ -149,13 +164,28 @@ Read 若已存在：
 
 | 檔案 | 動作 |
 |------|------|
-| `index.md` | 追加或修訂「長期觀察」段落（跨專案綜合敘事；引文式、累積；非每週重複貼 summary） |
-| `YYYY-MM.md` | **必做**。以 `run_date` 的 `YYYY-MM` 為檔名；追加本週**跨專案**成長綜合段落（引用各專案本週重點，非複製專案層月檔全文） |
-| `_notes.md` | 將本次 `## 待確認` 條目追加為 `- [YYYY-MM] 問題文字`（供趨勢「歷史待確認」） |
+| `YYYY-MM.md` | **必做**。追加本週**跨專案**成長綜合段落（引用各專案本週重點，非複製專案層月檔全文）；同月多段以 `---` 分隔 |
+| `index.md` | **稀疏**。僅當本週觀察／已消費 MR 場次與過去（`index.md`、`_archived`、月檔）構成**重複模式**或明確**成長跡象**時，才追加或修訂「長期觀察／思維模式」條目（標日期與 MR／專案作證據錨）。**單次現象不要每週改 index** |
+| `_notes.md` | **僅**將本次 summary `## 待確認` 條目追加為 `- [YYYY-MM] 問題文字`（供趨勢「歷史待確認」）。**不要**把思維模式寫進 `_notes.md` |
+
+建議 `index.md` 長期區塊形狀（可同義；初次建立時可寫標題）：
+
+```markdown
+# {display_name} 長期觀察
+
+## 思維模式
+- <跨場次重複的決策習慣或盲點>（初次／再確認：YYYY-MM；證據：專案／MR）
+
+## 成長跡象
+- <可驗證的改善>（YYYY-MM）
+
+## 長期追蹤項目
+- [ ] <跨週仍要跟的事項>
+```
 
 人物層月檔記錄「這個人整體當月的成長軌跡」，由趨勢 API `growth_timeline` 讀取。
 
-若檔案不存在，建立並寫入標題與首段。若已存在，**追加**新段落，保留舊內容。
+若 `YYYY-MM.md` 不存在，建立並寫入標題與首段。若已存在，**追加**新段落，保留舊內容。`index.md` 不存在且本週無重複模式 → **可先不建立**，或只建標題、不寫假模式。
 
 ---
 
@@ -163,10 +193,11 @@ Read 若已存在：
 
 - **語言**：繁體中文（技術名詞、程式識別符可保留英文）。
 - **one_line**：一兩句話，管理者掃描用；含本週主軸 + 是否有待確認。
-- **本週重點**：2–5 條，具體、可帶入 1on1 討論。
-- **成長面向**：1–3 條，建設性、非評判式。
+- **本週重點**：2–5 條，具體、可帶入 1on1；優先來自 git 主軸 + 已發佈觀察的濃縮，非產量列表。
+- **成長面向**：1–3 條，建設性；優先吸收觀察片段的「思維模式」（改寫，不貼原文）。
 - **待確認**：0–5 條，**問句形式**，供管理者當面釐清；避免已能在 repo 內定論的事實題。遵守下方「待確認延續規則」。
-- **禁止**：要求使用者輸入、輸出「請確認是否寫入」、執行 `glab mr note` / merge、修改 SQLite。
+- **長期檔**：月檔每週可寫；人物層 `index.md` 僅重複模式／成長跡象才動；`_notes.md` 只追加待確認。
+- **禁止**：要求使用者輸入、輸出「請確認是否寫入」、執行 `glab mr note` / merge、修改 SQLite；禁止把觀察場次全文或 MR 草稿 ❌ 表貼進 summary。
 
 ### 待確認延續規則（硬性）
 
@@ -193,8 +224,10 @@ Read 若已存在：
 - [ ] 已 Read manifest.json
 - [ ] 已依 manifest `authors` 處理每位工程師（非自行 git 歸戶）
 - [ ] 已讀 `open_pending`；延續／已釐清沿用原文；未把已釐清項同時寫進待確認
+- [ ] 已消費之 `published_pending_snippets`：濃縮折入 report／summary（思維模式→成長面向）；未整段貼上；已搬 `_archived/`
 - [ ] 每份 `summary.md` frontmatter 與四個 heading 正確（含可空的 `## 已釐清`）
 - [ ] 路徑均在 `{report_root}/{person}/{run_date}/`
-- [ ] 已更新 `{report_root}/{person}/` 下 `YYYY-MM.md`（若有產 report）
-- [ ] 已更新 `{person_report_root}/{display_name}/` 下 `index.md` / `YYYY-MM.md` / `_notes.md`（若有產 report）
+- [ ] 已更新專案層與人物層 `YYYY-MM.md`（若有產 report）
+- [ ] 人物層 `index.md`：僅重複模式／成長跡象才追加；未每週複貼 summary
+- [ ] `_notes.md` 僅追加待確認文字（無思維模式）
 - [ ] 未 Write repo 原始碼、未互動詢問

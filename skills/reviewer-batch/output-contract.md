@@ -19,28 +19,29 @@
 
 ---
 
-## 完整範本
+## 完整範本（填滿；含觀察折入）
 
 ```markdown
 ---
-person: Alice
+person: Gary Tsai
 project: game-backend
 date: 2026-07-05
-one_line: 本週主軸在資料庫效能與 CI 改善，整體穩定，有 1 項架構決策待確認。
-mr_count: 6
-commit_count: 42
+one_line: 本週主導 TS wallet 與 kot endpoints；可靠性設計強，邊界收尾與清單外自審仍需盯，有 1 項待確認。
+mr_count: 2
+commit_count: 18
 ---
 
 ## 本週重點
-- 主導 `transaction_rounds` 分區索引重構，查詢成本顯著下降
-- MR review 回應速度快，程式碼可讀性佳
+- 主導 FunTa TS wallet（!68）：`packet_id` 冪等與掉包恢復設計完整，測試覆蓋到位
+- 完成 kot DataTally Check/Export 與線上人數統計；敏感資料邊界（排除 token）意識清楚
+- Review 被點名的項目執行力強；同批夾帶的 `GetPortal` 曾缺 pool 設定（第二輪已列修法）
 
 ## 成長面向
-- 大型 PR 拆分顆粒度可再細，利於 review
+- 「清單內照做、清單外自審偏弱」模式再次出現（!68 夾帶功能、!73 float64 金額需 reviewer 點出）— 宜在 1on1 談合併前自檢清單
+- 主導設計的 greenfield 模組完成度高（可靠性建模），與順手支線的品質落差明顯
 
 ## 待確認
-- MR #234 架構選擇是主動決策還是時間壓力妥協？
-- 分區索引上線後是否觀察過實際查詢分佈？
+- 合併前自檢（金額型別、錯誤碼一致性、清單外變更測試）要如何內化成習慣而非靠 reviewer 攔？
 
 ## 已釐清
 ```
@@ -84,6 +85,12 @@ Bullet 規則：
 - **延續既有 open**：寫入 `## 待確認` 時文字必須等於 `manifest.open_pending[].question`。
 - **已釐清**：寫入 `## 已釐清` 時文字必須等於對應 open `question`，且不得同時出現在 `## 待確認`。僅省略兩區 ≠ resolve。詳見 `WORKFLOW.md`「待確認延續規則」。
 
+### 寫作規範（觀察折入）
+
+- 有 `published_pending_snippets` 時：**成長面向**優先吸收場次紀錄的「觀察到的思維模式」（改寫 1–3 條，附 MR 錨點即可）。
+- **本週重點**寫交付與協作結果；不要貼觀察的審查意見表或草稿 ❌ 全文。
+- 建設性、非評判式；避免純產量排名。
+
 ---
 
 ## 後端解析對照
@@ -106,6 +113,8 @@ Bullet 規則：
 - ❌ `project` 與 manifest `project_name` 不一致
 - ❌ 將 summary 寫到錯誤目錄層級（缺少 `{run_date}/`）
 - ❌ 在 summary 內寫 HTML
+- ❌ 整段貼上 `_pending` 場次紀錄或 MR 草稿表格
+- ❌ 每週無重複模式仍改寫人物層 `index.md` 長文
 
 ---
 
