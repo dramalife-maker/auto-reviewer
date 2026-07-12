@@ -315,7 +315,12 @@ export function DashboardPage() {
       </section>
 
       <Card className="p-5">
-        <h2 className="text-[16px] font-semibold text-ink">排程</h2>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-[16px] font-semibold text-ink">排程</h2>
+          <Button variant="primary" onClick={handleScheduleSave} disabled={scheduleSaving}>
+            {scheduleSaving ? '儲存中...' : '儲存排程'}
+          </Button>
+        </div>
         <div className="mt-4 grid grid-cols-2 gap-6">
           <section>
             <h3 className="text-[13.5px] font-semibold text-ink-secondary">週報（軌道 1）</h3>
@@ -400,14 +405,9 @@ export function DashboardPage() {
             <p className="mt-2 text-xs text-ink-muted">{'>=60'} 時須為 60 的倍數（如 60、120）。</p>
           </section>
         </div>
-        <div className="mt-5 flex items-center justify-between border-t border-border-subtle pt-4">
-          <p className="text-xs text-ink-muted">
-            影響 cron 的欄位需重啟 reviewer-server；逾時與並發於下一場 run 即生效。
-          </p>
-          <Button variant="primary" onClick={handleScheduleSave} disabled={scheduleSaving}>
-            {scheduleSaving ? '儲存中...' : '儲存排程'}
-          </Button>
-        </div>
+        <p className="mt-5 border-t border-border-subtle pt-4 text-xs text-ink-muted">
+          影響 cron 的欄位需重啟 reviewer-server；逾時與並發於下一場 run 即生效。
+        </p>
       </Card>
     </div>
   )
