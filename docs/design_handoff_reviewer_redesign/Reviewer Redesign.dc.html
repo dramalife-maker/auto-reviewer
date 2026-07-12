@@ -1,0 +1,1049 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
+    a { color: #4f46e5; }
+    a:hover { color: #4338ca; }
+  </style>
+</helmet>
+
+<div style="display:flex; min-height:100vh; background:#f8fafc; color:#0f172a; font-family:'Inter', system-ui, sans-serif; font-size:14px;">
+
+  <!-- SIDEBAR -->
+  <aside style="width:232px; flex-shrink:0; background:#ffffff; border-right:1px solid #e2e8f0; display:flex; flex-direction:column; padding:20px 14px;">
+    <div style="padding:6px 8px 18px; border-bottom:1px solid #f1f5f9; margin-bottom:14px;">
+      <div style="font-size:17px; font-weight:700; letter-spacing:-0.01em;">Reviewer</div>
+      <div style="font-size:12px; color:#94a3b8; margin-top:3px; display:flex; align-items:center; gap:5px;">
+        <span style="width:6px; height:6px; border-radius:50%; background:#22c55e; display:inline-block; flex-shrink:0;"></span>
+        已連線 · G:/reviewer
+      </div>
+    </div>
+
+    <nav style="display:flex; flex-direction:column; gap:2px;" data-screen-label="Sidebar Nav">
+      <div style="font-size:10.5px; font-weight:700; color:#cbd5e1; text-transform:uppercase; letter-spacing:0.05em; padding:6px 10px 4px;">工作台</div>
+      <button type="button" onClick="{{ goTo_dashboard }}" style="{{ navStyle.dashboard }}">控制台</button>
+      <button type="button" onClick="{{ goTo_mrinbox }}" style="{{ navStyle.mrinbox }}">
+        <span>MR 收件匣</span>
+        <span style="display:inline-flex; align-items:center; justify-content:center; min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:#7c3aed; color:#fff; font-size:10.5px; font-weight:700; margin-left:6px;">2</span>
+      </button>
+      <button type="button" onClick="{{ goTo_reports }}" style="{{ navStyle.reports }}">報告閱讀器</button>
+      <sc-if value="{{ isReports }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex; flex-direction:column; gap:1px; padding:2px 0 4px 10px; margin-left:10px; border-left:1px solid #f1f5f9;">
+          <sc-for list="{{ reportPeopleRows }}" as="p" hint-placeholder-count="2">
+            <button type="button" onClick="{{ p.onClick }}" style="{{ p.navRowStyle }}">
+              <span>{{ p.display_name }}</span>
+              <span style="{{ p.badgeStyle }}">{{ p.badgeText }}</span>
+            </button>
+          </sc-for>
+        </div>
+      </sc-if>
+      <button type="button" onClick="{{ goTo_runs }}" style="{{ navStyle.runs }}">執行紀錄</button>
+
+      <div style="font-size:10.5px; font-weight:700; color:#cbd5e1; text-transform:uppercase; letter-spacing:0.05em; padding:14px 10px 4px; margin-top:6px; border-top:1px solid #f1f5f9;">設定</div>
+      <button type="button" onClick="{{ goTo_projects }}" style="{{ navStyle.projects }}">專案設定</button>
+      <button type="button" onClick="{{ goTo_people }}" style="{{ navStyle.people }}">人員設定</button>
+    </nav>
+
+    <div style="margin-top:auto; padding:12px 8px 4px; border-top:1px solid #f1f5f9; font-size:11.5px; color:#cbd5e1;">
+      Reviewer v0.4 · 內部工具
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main style="flex:1; min-width:0; padding:32px 40px; overflow:auto;">
+
+    <!-- ============ DASHBOARD ============ -->
+    <sc-if value="{{ isDashboard }}" hint-placeholder-val="{{ true }}">
+      <div data-screen-label="Dashboard">
+        <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:24px;">
+          <div>
+            <h1 style="margin:0 0 4px; font-size:22px; font-weight:700; letter-spacing:-0.01em;">控制台</h1>
+            <p style="margin:0; font-size:13px; color:#64748b;">上次執行 2026-07-12 13:59 · 耗時 24m 29s</p>
+          </div>
+          <button type="button" style="border:0; border-radius:8px; padding:10px 18px; background:#4f46e5; color:#fff; font-size:13.5px; font-weight:600; cursor:pointer; white-space:nowrap;">▶ 立即執行</button>
+        </div>
+
+        <div style="display:grid; grid-template-columns:repeat(5,1fr); gap:12px; margin-bottom:20px;">
+          <article style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:16px;">
+            <div style="font-size:12px; color:#64748b; margin-bottom:8px;">專案</div>
+            <div style="font-size:26px; font-weight:600;">2</div>
+          </article>
+          <article style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:16px;">
+            <div style="font-size:12px; color:#64748b; margin-bottom:8px;">工程師</div>
+            <div style="font-size:26px; font-weight:600;">2</div>
+          </article>
+          <article style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:16px;">
+            <div style="font-size:12px; color:#64748b; margin-bottom:8px;">未讀報告</div>
+            <div style="font-size:26px; font-weight:600; color:#4f46e5;">1</div>
+          </article>
+          <article style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:16px;">
+            <div style="font-size:12px; color:#64748b; margin-bottom:8px;">待確認</div>
+            <div style="font-size:26px; font-weight:600; color:#d97706;">3</div>
+          </article>
+          <button type="button" onClick="{{ goTo_mrinbox }}" style="text-align:left; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:16px; cursor:pointer; font:inherit; color:inherit;">
+            <div style="font-size:12px; color:#64748b; margin-bottom:8px;">MR 草稿</div>
+            <div style="font-size:26px; font-weight:600; color:#7c3aed;">2</div>
+          </button>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1.2fr 1fr; gap:14px; align-items:start; margin-bottom:14px;">
+          <section style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:16px 18px;">
+            <h3 style="margin:0 0 12px; font-size:12.5px; font-weight:600; color:#64748b; text-transform:uppercase; letter-spacing:0.03em;">最近報告</h3>
+            <sc-for list="{{ recentReports }}" as="r" hint-placeholder-count="2">
+              <button type="button" style="display:flex; align-items:center; justify-content:space-between; width:100%; padding:9px 0; border:0; border-bottom:1px solid #f1f5f9; background:transparent; cursor:pointer; text-align:left; font-size:13px; color:inherit;">
+                <span style="display:inline-flex; align-items:center; gap:9px;">
+                  <span style="{{ r.dotStyle }}"></span>
+                  {{ r.person_name }}
+                  <span style="color:#94a3b8;">{{ r.project_name }}</span>
+                </span>
+                <span style="font-size:11.5px; color:{{ r.statusColor }};">{{ r.statusLabel }}</span>
+              </button>
+            </sc-for>
+          </section>
+
+          <section style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:16px 18px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+              <h3 style="margin:0; font-size:12.5px; font-weight:600; color:#64748b; text-transform:uppercase; letter-spacing:0.03em;">最近執行</h3>
+              <button type="button" onClick="{{ goTo_runs }}" style="border:0; background:transparent; color:#4f46e5; font-size:12px; cursor:pointer; padding:0;">查看全部</button>
+            </div>
+            <sc-for list="{{ recentRuns }}" as="run" hint-placeholder-count="3">
+              <div style="display:flex; flex-direction:column; gap:2px; padding:8px 0; border-bottom:1px solid #f1f5f9;">
+                <span style="display:flex; align-items:center; gap:8px;">
+                  <span style="{{ run.pillStyle }}">{{ run.status }}</span>
+                  <span style="font-size:12.5px; color:#334155;">{{ run.triggerLabel }}</span>
+                </span>
+                <span style="font-size:11.5px; color:#94a3b8;">{{ run.meta }}</span>
+              </div>
+            </sc-for>
+          </section>
+
+        </div>
+
+        <section style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:18px 22px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:18px;">
+            <h3 style="margin:0; font-size:14px; font-weight:600;">排程設定</h3>
+            <button type="button" style="border:0; border-radius:8px; background:#4f46e5; color:#fff; font-size:12.5px; font-weight:600; padding:8px 16px; cursor:pointer; white-space:nowrap;">儲存排程</button>
+          </div>
+
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:32px;">
+            <div>
+              <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px;">
+                <span style="font-size:12px; font-weight:700; color:#334155; text-transform:uppercase; letter-spacing:0.04em;">週報（軌道 1）</span>
+                <span style="font-size:11px; color:#94a3b8;">頻率：每週（唯讀）</span>
+              </div>
+
+              <div style="display:grid; grid-template-columns:auto 1fr; gap:12px 14px; align-items:center; margin-bottom:14px;">
+                <label style="font-size:12.5px; color:#64748b;">啟用</label>
+                <input type="checkbox" checked="{{ true }}" style="width:17px; height:17px; justify-self:start;" />
+
+                <label style="font-size:12.5px; color:#64748b;">星期</label>
+                <select style="padding:7px 10px; border:1px solid #e2e8f0; border-radius:8px; font-size:13px; font:inherit; max-width:140px;">
+                  <option>週一</option><option>週二</option><option>週三</option><option>週四</option><option>週五</option><option>週六</option><option>週日</option>
+                </select>
+
+                <label style="font-size:12.5px; color:#64748b;">時間（HH:MM）</label>
+                <input type="text" defaultValue="09:00" style="padding:7px 10px; border:1px solid #e2e8f0; border-radius:8px; font-size:13px; font:inherit; max-width:140px;" />
+
+                <label style="font-size:12.5px; color:#64748b;">時區偏移（分）</label>
+                <input type="number" defaultValue="480" style="padding:7px 10px; border:1px solid #e2e8f0; border-radius:8px; font-size:13px; font:inherit; max-width:140px;" />
+
+                <label style="font-size:12.5px; color:#64748b;">專案逾時（秒）</label>
+                <input type="number" defaultValue="600" style="padding:7px 10px; border:1px solid #e2e8f0; border-radius:8px; font-size:13px; font:inherit; max-width:140px;" />
+
+                <label style="font-size:12.5px; color:#64748b;">最大並發</label>
+                <input type="number" defaultValue="2" style="padding:7px 10px; border:1px solid #e2e8f0; border-radius:8px; font-size:13px; font:inherit; max-width:140px;" />
+              </div>
+
+              <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                <span style="font-size:12px; color:#94a3b8;">🕒 下次 07-13 09:00 · 每週一 09:00</span>
+                <span style="display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#15803d; background:#f0fdf4; padding:4px 10px; border-radius:8px;">✓ 排程器運行中</span>
+              </div>
+            </div>
+
+            <div style="border-left:1px solid #f1f5f9; padding-left:32px;">
+              <div style="font-size:12px; font-weight:700; color:#334155; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:14px;">MR 輪詢（軌道 2）</div>
+              <label style="display:block; font-size:12.5px; color:#64748b; margin-bottom:6px;">間隔（分鐘，≤0 停用）</label>
+              <input type="number" defaultValue="120" style="width:140px; padding:7px 10px; border:1px solid #e2e8f0; border-radius:8px; font-size:13px; font:inherit; margin-bottom:8px;" />
+              <p style="margin:0 0 16px; font-size:12px; color:#94a3b8; line-height:1.5;">≥60 時須為 60 的倍數（如 60、120）。目前：每 2 小時。</p>
+            </div>
+          </div>
+
+          <p style="margin:18px 0 0; padding-top:14px; border-top:1px solid #f1f5f9; font-size:12px; color:#94a3b8; line-height:1.6;">影響 cron 的欄位（啟用／星期／時間／時區／MR 間隔）需重啟 reviewer-server 才生效；逾時與並發於下一場 run 即生效。</p>
+        </section>
+      </div>
+    </sc-if>
+
+    <!-- ============ PROJECTS ============ -->
+    <sc-if value="{{ isProjects }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Project Settings">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:20px;">
+          <h1 style="margin:0; font-size:22px; font-weight:700; letter-spacing:-0.01em;">專案設定</h1>
+          <button type="button" style="border:1px solid #cbd5e1; border-radius:8px; padding:8px 14px; background:#fff; color:#334155; font-size:13px; cursor:pointer; white-space:nowrap;">重新載入</button>
+        </div>
+        <div style="display:flex; border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; min-height:560px;">
+          <aside style="width:260px; flex-shrink:0; background:#fff; border-right:1px solid #e2e8f0; padding:14px 12px; display:flex; flex-direction:column; gap:10px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; font-size:12.5px; font-weight:600; color:#64748b; padding:0 4px;">
+              <span>專案</span>
+              <button type="button" style="width:26px; height:26px; border:1px solid #c7d2fe; border-radius:6px; background:#eef2ff; color:#4f46e5; cursor:pointer; font-size:14px;">＋</button>
+            </div>
+            <sc-for list="{{ projectRows }}" as="p" hint-placeholder-count="3">
+              <button type="button" onClick="{{ p.onClick }}" onMouseEnter="{{ p.onMouseEnter }}" onMouseLeave="{{ p.onMouseLeave }}" style="{{ p.rowStyle }}">
+                <span style="{{ p.iconStyle }}" style-before="{{ p.iconBeforeStyle }}"></span>
+                <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ p.name }}</span>
+                <sc-if value="{{ p.showRun }}" hint-placeholder-val="{{ false }}">
+                  <span style="display:inline-flex; align-items:center; gap:3px; height:22px; padding:0 9px; border:1px solid #c7d2fe; border-radius:6px; background:#fff; color:#4f46e5; font-size:11px; white-space:nowrap;">▶ 執行</span>
+                </sc-if>
+                <sc-if value="{{ p.hideRun }}" hint-placeholder-val="{{ true }}">
+                  <span style="display:inline-flex; align-items:center; height:22px; font-size:10.5px; color:#cbd5e1; white-space:nowrap;">{{ p.dateLabel }}</span>
+                </sc-if>
+              </button>
+            </sc-for>
+          </aside>
+          <div style="flex:1; min-width:0; background:#fff; padding:22px 26px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:18px;">
+              <div style="display:flex; align-items:center; gap:10px;">
+                <span style="{{ selectedProject.iconStyle }}" style-before="{{ selectedProject.iconBeforeStyle }}"></span>
+                <h2 style="margin:0; font-size:17px; font-weight:600;">{{ selectedProject.name }}</h2>
+              </div>
+              <div style="display:flex; gap:8px;">
+                <button type="button" style="border:1px solid #ddd6fe; border-radius:8px; padding:7px 13px; background:#f5f3ff; color:#6d28d9; font-size:12.5px; font-weight:600; cursor:pointer; white-space:nowrap;">掃描 MR</button>
+                <button type="button" style="border:1px solid #e2e8f0; border-radius:8px; padding:7px 13px; background:#fff; color:#dc2626; font-size:12.5px; cursor:pointer; white-space:nowrap;">移除</button>
+              </div>
+            </div>
+
+            <div style="margin-bottom:16px;">
+              <label style="display:block; font-size:12px; color:#64748b; margin-bottom:6px;">來源類型</label>
+              <div style="display:flex; gap:8px;">
+                <span style="{{ selectedProject.gitlabPillStyle }}">GitLab</span>
+                <span style="{{ selectedProject.localPillStyle }}">本地</span>
+              </div>
+            </div>
+
+            <sc-if value="{{ selectedProject.isGitlab }}" hint-placeholder-val="{{ true }}">
+              <div style="margin-bottom:16px;">
+                <label style="display:block; font-size:12px; color:#64748b; margin-bottom:6px;">Git Remote URL <span style="color:#dc2626;">*</span></label>
+                <div style="padding:9px 12px; border:1px solid #e2e8f0; border-radius:8px; background:#f8fafc; color:#475569; font-family:'JetBrains Mono', monospace; font-size:12.5px;">{{ selectedProject.git_remote_url }}</div>
+                <p style="margin:6px 0 0; font-size:12px; color:#94a3b8; line-height:1.5;">用於 clone 遠端 repo，請從 GitLab 專案的「Clone」複製 SSH 或 HTTPS 網址。</p>
+              </div>
+              <div style="margin-bottom:16px;">
+                <label style="display:block; font-size:12px; color:#64748b; margin-bottom:6px;">常駐分支 <span style="color:#dc2626;">*</span></label>
+                <div style="padding:9px 12px; border:1px solid #e2e8f0; border-radius:8px; background:#f8fafc; color:#475569; font-family:'JetBrains Mono', monospace; font-size:12.5px;">{{ selectedProject.default_branches_label }}</div>
+                <p style="margin:6px 0 0; font-size:12px; color:#94a3b8; line-height:1.5;">啟動時會為這些分支建立 worktree，週報預設看第一個分支。</p>
+              </div>
+              <div style="margin-bottom:16px; padding-top:14px; border-top:1px dashed #e2e8f0;">
+                <label style="display:block; font-size:12px; color:#64748b; margin-bottom:6px;">MR 排除標籤</label>
+                <div style="padding:9px 12px; border:1px solid #e2e8f0; border-radius:8px; background:#f8fafc; color:#475569; font-family:'JetBrains Mono', monospace; font-size:12.5px;">{{ selectedProject.mr_review_skip_labels_label }}</div>
+                <p style="margin:6px 0 0; font-size:12px; color:#94a3b8; line-height:1.5;">逗號分隔。帶有任一標籤的 MR 不會進入 AI review；留空表示不排除任何標籤。</p>
+              </div>
+              <div style="margin-bottom:16px;">
+                <label style="display:block; font-size:12px; color:#64748b; margin-bottom:6px;">MR 必備標籤 <span style="color:#cbd5e1;">（可選）</span></label>
+                <div style="padding:9px 12px; border:1px solid #e2e8f0; border-radius:8px; background:#f8fafc; color:#475569; font-family:'JetBrains Mono', monospace; font-size:12.5px;">{{ selectedProject.mr_review_require_label_label }}</div>
+                <p style="margin:6px 0 0; font-size:12px; color:#94a3b8; line-height:1.5;">設定後，只有帶此標籤的 MR 才會被掃描（opt-in 模式）。留空則不啟用。</p>
+              </div>
+            </sc-if>
+
+            <div style="margin-bottom:16px;">
+              <label style="display:block; font-size:12px; color:#64748b; margin-bottom:6px;">儲存路徑</label>
+              <div style="padding:9px 12px; border:1px solid #e2e8f0; border-radius:8px; background:#f8fafc; color:#475569; font-family:'JetBrains Mono', monospace; font-size:12.5px;">{{ selectedProject.repo_path }}</div>
+            </div>
+
+            <div style="margin-bottom:8px;">
+              <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                <label style="font-size:12px; color:#64748b;">工程師對應 <span style="color:#cbd5e1;">（GitLab username → 顯示名，唯讀）</span></label>
+              </div>
+              <sc-for list="{{ selectedProject.engineers }}" as="e" hint-placeholder-count="1">
+                <div style="display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:8px; background:#f8fafc; font-size:13px; margin-bottom:5px;">
+                  <span style="width:22px; height:22px; border-radius:50%; background:#eef2ff; color:#4f46e5; display:inline-flex; align-items:center; justify-content:center; font-size:11px; font-weight:700;">{{ e.initial }}</span>
+                  <span style="font-family:'JetBrains Mono', monospace; color:#94a3b8; font-size:12px;">{{ e.gitlab_username }}</span>
+                  <span style="color:#cbd5e1;">→</span>
+                  <span>{{ e.display_name }}</span>
+                </div>
+              </sc-for>
+            </div>
+
+            <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:20px; padding-top:16px; border-top:1px solid #f1f5f9;">
+              <button type="button" style="border:0; background:transparent; color:#94a3b8; font-size:13px; padding:8px 14px; cursor:pointer; white-space:nowrap;">取消</button>
+              <button type="button" style="border:0; border-radius:8px; background:#4f46e5; color:#fff; font-size:13px; padding:8px 16px; cursor:pointer; font-weight:600; white-space:nowrap;">儲存</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ============ PEOPLE ============ -->
+    <sc-if value="{{ isPeople }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="People Settings">
+        <h1 style="margin:0 0 20px; font-size:22px; font-weight:700; letter-spacing:-0.01em;">人員設定</h1>
+        <div style="display:flex; border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; min-height:560px;">
+          <aside style="width:260px; flex-shrink:0; background:#fff; border-right:1px solid #e2e8f0; padding:14px 12px; display:flex; flex-direction:column; gap:10px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; font-size:12.5px; font-weight:600; color:#64748b; padding:0 4px;">
+              <span>人員</span>
+              <button type="button" style="width:26px; height:26px; border:1px solid #c7d2fe; border-radius:6px; background:#eef2ff; color:#4f46e5; cursor:pointer; font-size:14px;">＋</button>
+            </div>
+            <sc-for list="{{ peopleRows }}" as="p" hint-placeholder-count="2">
+              <button type="button" onClick="{{ p.onClick }}" style="{{ p.rowStyle }}">
+                <span style="font-size:13.5px;">{{ p.display_name }}</span>
+                <span style="font-size:11.5px; color:#94a3b8;">{{ p.identity_count }} identities</span>
+              </button>
+            </sc-for>
+          </aside>
+          <div style="flex:1; min-width:0; background:#fff; padding:22px 26px; display:flex; flex-direction:column; gap:18px;">
+            <div>
+              <label style="font-size:12px; color:#64748b; display:block; margin-bottom:6px;">顯示名稱</label>
+              <input type="text" defaultValue="{{ selectedPersonDetail.display_name }}" style="width:100%; max-width:320px; padding:9px 12px; border:1px solid #e2e8f0; border-radius:8px; font-size:15px; font-weight:600; color:#0f172a; font:inherit;" />
+            </div>
+
+            <div>
+              <label style="font-size:12.5px; font-weight:600; color:#334155; display:block; margin-bottom:8px;">Identities</label>
+              <div style="display:flex; flex-direction:column; gap:6px; margin-bottom:10px;">
+                <sc-for list="{{ selectedPersonDetail.identities }}" as="idt" hint-placeholder-count="2">
+                  <div style="display:flex; align-items:center; gap:10px; padding:9px 12px; border:1px solid #e2e8f0; border-radius:8px; font-size:13px;">
+                    <span style="font-weight:600; color:#475569;">{{ idt.kind }}</span>
+                    <span style="flex:1; font-family:'JetBrains Mono', monospace; color:#334155; font-size:12.5px;">{{ idt.value }}</span>
+                    <button type="button" style="border:1px solid #fecaca; border-radius:6px; background:#fef2f2; color:#b91c1c; padding:4px 9px; font-size:11.5px; cursor:pointer; white-space:nowrap;">移除</button>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                <select style="min-width:0; padding:8px 10px; border:1px solid #e2e8f0; border-radius:8px; font-size:12.5px; color:#334155; font:inherit;">
+                  <option value="git_email">git_email</option>
+                  <option value="gitlab_user">gitlab_user</option>
+                  <option value="glab_user">glab_user</option>
+                </select>
+                <input type="text" placeholder="輸入 identity 值…" style="flex:1; min-width:120px; padding:8px 12px; border:1px solid #e2e8f0; border-radius:8px; font-size:12.5px; font:inherit;" />
+                <button type="button" style="border:1px solid #c7d2fe; border-radius:8px; padding:8px 14px; background:#eef2ff; color:#4f46e5; font-size:12.5px; font-weight:600; cursor:pointer; white-space:nowrap; flex-shrink:0;">＋ 新增</button>
+              </div>
+            </div>
+
+            <div>
+              <label style="font-size:12.5px; font-weight:600; color:#334155; display:block; margin-bottom:8px;">參與專案</label>
+              <ul style="margin:0; padding-left:20px; display:flex; flex-direction:column; gap:4px;">
+                <sc-for list="{{ selectedPersonDetail.projects }}" as="proj" hint-placeholder-count="2">
+                  <li style="font-size:13.5px; color:#334155;">{{ proj.name }}</li>
+                </sc-for>
+              </ul>
+            </div>
+
+            <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:auto; padding-top:16px; border-top:1px solid #f1f5f9;">
+              <button type="button" style="border:1px solid #e2e8f0; border-radius:8px; padding:8px 14px; background:#fff; color:#334155; font-size:13px; cursor:pointer; white-space:nowrap;">取消</button>
+              <button type="button" style="border:0; border-radius:8px; background:#4f46e5; color:#fff; font-size:13px; padding:8px 16px; cursor:pointer; font-weight:600; white-space:nowrap;">儲存</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ============ REPORTS ============ -->
+    <sc-if value="{{ isReports }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Report Reader">
+        <h1 style="margin:0 0 20px; font-size:22px; font-weight:700; letter-spacing:-0.01em;">報告閱讀器</h1>
+        <div style="max-width:800px;">
+          <div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px 24px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:18px;">
+              <div style="display:flex; align-items:center; gap:12px;">
+                <span style="width:34px; height:34px; border-radius:50%; background:#eef2ff; color:#4f46e5; display:inline-flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; flex-shrink:0;">{{ personReport.initial }}</span>
+                <div>
+                  <h2 style="margin:0; font-size:17px; font-weight:600;">{{ personReport.display_name }}</h2>
+                  <p style="margin:2px 0 0; font-size:12px; color:#94a3b8;">報告日期 {{ personReport.report_date }}</p>
+                </div>
+              </div>
+              <div style="display:flex; gap:8px;">
+                <button type="button" style="border:1px solid #e2e8f0; border-radius:8px; padding:7px 13px; background:#fff; color:#334155; font-size:12.5px; cursor:pointer; white-space:nowrap;">📄 完整 md</button>
+                <button type="button" style="{{ readButtonStyle }}">{{ readButtonLabel }}</button>
+              </div>
+            </div>
+
+            <div style="display:flex; gap:4px; margin-bottom:18px; border-bottom:1px solid #e2e8f0;">
+              <sc-for list="{{ reportTabs }}" as="tab" hint-placeholder-count="2">
+                <button type="button" onClick="{{ tab.onClick }}" style="{{ tab.tabStyle }}">{{ tab.label }}</button>
+              </sc-for>
+            </div>
+
+            <sc-if value="{{ isOverviewTab }}" hint-placeholder-val="{{ true }}">
+              <div>
+                <p style="font-size:13.5px; color:#334155; line-height:1.7; margin:0 0 16px; padding:12px 14px; background:#f8fafc; border-radius:8px;">{{ personReport.summary }}</p>
+
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:10px; margin-bottom:18px;">
+                  <sc-for list="{{ overviewCards }}" as="card" hint-placeholder-count="2">
+                    <div style="border:1px solid #e2e8f0; border-radius:10px; padding:11px 13px;">
+                      <div style="font-size:13px; font-weight:600; color:#0f172a; margin-bottom:4px;">{{ card.label }}</div>
+                      <div style="font-size:12px; color:{{ card.pendingColor }};">{{ card.statusLine }}</div>
+                    </div>
+                  </sc-for>
+                </div>
+
+                <div style="margin-bottom:16px;">
+                  <h4 style="margin:0 0 8px; font-size:12.5px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.03em;">本週重點</h4>
+                  <ul style="margin:0; padding-left:18px; font-size:13.5px; color:#334155; line-height:1.8;">
+                    <sc-for list="{{ overviewHighlights }}" as="h" hint-placeholder-count="2">
+                      <li><strong>{{ h.prefix }}</strong> {{ h.text }}</li>
+                    </sc-for>
+                  </ul>
+                </div>
+
+                <div style="margin-bottom:18px;">
+                  <h4 style="margin:0 0 8px; font-size:12.5px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.03em;">成長面向</h4>
+                  <ul style="margin:0; padding-left:18px; font-size:13.5px; color:#334155; line-height:1.8;">
+                    <sc-for list="{{ overviewGrowth }}" as="g" hint-placeholder-count="1">
+                      <li><strong>{{ g.prefix }}</strong> {{ g.text }}</li>
+                    </sc-for>
+                  </ul>
+                </div>
+
+                <sc-if value="{{ hasOverviewPending }}" hint-placeholder-val="{{ false }}">
+                  <div style="border:1px solid #fde68a; background:#fffbeb; border-radius:10px; padding:14px 16px;">
+                    <div style="font-size:13px; font-weight:700; color:#92400e; margin-bottom:10px;">⚠ 待確認彙整（1on1 時詢問）</div>
+                    <sc-for list="{{ overviewPendingGroups }}" as="grp" hint-placeholder-count="1">
+                      <div style="margin-bottom:8px;">
+                        <div style="font-size:12px; font-weight:600; color:#92400e; margin-bottom:4px;">{{ grp.project }}</div>
+                        <sc-for list="{{ grp.items }}" as="item" hint-placeholder-count="1">
+                          <label style="display:flex; align-items:flex-start; gap:8px; font-size:13px; color:#78350f; cursor:pointer; margin-bottom:3px;">
+                            <input type="checkbox" style="margin-top:3px;" />
+                            {{ item.question }}
+                          </label>
+                        </sc-for>
+                      </div>
+                    </sc-for>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ isProjectDetailTab }}" hint-placeholder-val="{{ false }}">
+              <div>
+                <div style="margin-bottom:14px;">
+                  <h4 style="margin:0 0 6px; font-size:12.5px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.03em;">亮點</h4>
+                  <ul style="margin:0; padding-left:18px; font-size:13.5px; color:#334155; line-height:1.7;">
+                    <sc-for list="{{ activeProjectData.highlights }}" as="h" hint-placeholder-count="2">
+                      <li>{{ h }}</li>
+                    </sc-for>
+                  </ul>
+                </div>
+                <div style="margin-bottom:14px;">
+                  <h4 style="margin:0 0 6px; font-size:12.5px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.03em;">成長觀察</h4>
+                  <ul style="margin:0; padding-left:18px; font-size:13.5px; color:#334155; line-height:1.7;">
+                    <sc-for list="{{ activeProjectData.growth }}" as="g" hint-placeholder-count="1">
+                      <li>{{ g }}</li>
+                    </sc-for>
+                  </ul>
+                </div>
+                <div>
+                  <h4 style="margin:0 0 8px; font-size:12.5px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.03em;">待確認事項</h4>
+                  <div style="display:flex; flex-direction:column; gap:8px;">
+                    <sc-for list="{{ activeProjectData.pending }}" as="item" hint-placeholder-count="2">
+                      <label style="display:flex; align-items:flex-start; gap:9px; font-size:13.5px; color:#334155; cursor:pointer;">
+                        <input type="checkbox" checked="{{ item.resolved }}" style="margin-top:3px;" />
+                        {{ item.question }}
+                      </label>
+                    </sc-for>
+                  </div>
+                </div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ isTrendsTab }}" hint-placeholder-val="{{ false }}">
+              <div>
+                <p style="font-size:13.5px; color:#334155; line-height:1.7; margin:0 0 16px;">長期觀察：對系統邊界的判斷力持續進步，近兩個月主動提出的重構建議增加。</p>
+                <h4 style="margin:0 0 10px; font-size:12.5px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.03em;">成長時間軸</h4>
+                <sc-for list="{{ growthTimeline }}" as="g" hint-placeholder-count="2">
+                  <div style="padding:10px 0; border-bottom:1px solid #f1f5f9;">
+                    <div style="font-size:12px; color:#94a3b8; margin-bottom:3px;">{{ g.month }}</div>
+                    <div style="font-size:13.5px; color:#334155;">{{ g.content }}</div>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ============ MR INBOX ============ -->
+    <sc-if value="{{ isMrInbox }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="MR Inbox">
+        <h1 style="margin:0 0 4px; font-size:22px; font-weight:700; letter-spacing:-0.01em;">MR 收件匣</h1>
+        <p style="margin:0 0 20px; font-size:13px; color:#64748b;">審閱 AI 產生的 MR review 草稿，發布前可再編輯或與 agent 對話調整。</p>
+
+        <div style="display:grid; grid-template-columns:320px 1fr; gap:16px; min-height:560px;">
+          <div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; display:flex; flex-direction:column;">
+            <div style="display:flex; border-bottom:1px solid #e2e8f0;">
+              <button type="button" onClick="{{ setMrFilter_draft }}" style="{{ mrTabStyle.draft }}">草稿</button>
+              <button type="button" onClick="{{ setMrFilter_published }}" style="{{ mrTabStyle.published }}">已發布</button>
+              <button type="button" onClick="{{ setMrFilter_ignored }}" style="{{ mrTabStyle.ignored }}">已忽略</button>
+            </div>
+            <div style="overflow-y:auto; flex:1;">
+              <sc-for list="{{ mrRows }}" as="mr" hint-placeholder-count="2">
+                <button type="button" onClick="{{ mr.onClick }}" style="{{ mr.rowStyle }}">
+                  <span style="font-weight:600; color:#0f172a; font-size:13.5px;">{{ mr.mr_title }}</span>
+                  <span style="font-size:12px; color:#94a3b8;">{{ mr.project_name }} · !{{ mr.mr_iid }} · {{ mr.author_name }}</span>
+                </button>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:18px 22px; display:flex; flex-direction:column; gap:14px;">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
+              <div>
+                <h2 style="margin:0; font-size:16px; font-weight:600;">{{ selectedMr.mr_title }}</h2>
+                <p style="margin:4px 0 0; font-size:12.5px; color:#94a3b8;">{{ selectedMr.project_name }} · !{{ selectedMr.mr_iid }} · Round {{ selectedMr.review_round }}</p>
+              </div>
+              <span style="display:inline-flex; align-items:center; padding:4px 11px; border-radius:999px; background:#ede9fe; color:#5b21b6; font-size:12px; font-weight:600; white-space:nowrap;">{{ selectedMr.reviewer_agent }}</span>
+            </div>
+
+            <div>
+              <label style="font-size:12.5px; font-weight:600; color:#334155; display:block; margin-bottom:6px;">草稿內容</label>
+              <textarea defaultValue="{{ selectedMr.draft_body }}" style="width:100%; min-height:200px; border:1px solid #e2e8f0; border-radius:8px; padding:12px; font-family:'JetBrains Mono', monospace; font-size:12.5px; line-height:1.6; resize:vertical;"></textarea>
+            </div>
+
+            <div style="display:flex; justify-content:flex-end; gap:8px;">
+              <button type="button" style="border:1px solid #e2e8f0; border-radius:8px; background:#fff; color:#64748b; font-size:12.5px; padding:8px 14px; cursor:pointer; white-space:nowrap;">忽略</button>
+              <button type="button" style="border:1px solid #e2e8f0; border-radius:8px; background:#fff; color:#334155; font-size:12.5px; padding:8px 14px; cursor:pointer; white-space:nowrap;">儲存草稿</button>
+              <button type="button" style="border:0; border-radius:8px; background:#7c3aed; color:#fff; font-size:12.5px; padding:8px 16px; cursor:pointer; font-weight:600; white-space:nowrap;">發布</button>
+            </div>
+
+            <div style="border-top:1px solid #f1f5f9; padding-top:14px;">
+              <h4 style="margin:0 0 10px; font-size:13.5px; font-weight:600;">與 Agent 對話調整</h4>
+              <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:10px; max-height:140px; overflow-y:auto;">
+                <div style="align-self:flex-end; max-width:85%; background:#ede9fe; border-radius:10px; padding:8px 11px; font-size:13px;">請把語氣放軟一點，並補一句稱讚測試覆蓋率</div>
+                <div style="align-self:flex-start; max-width:85%; background:#f1f5f9; border-radius:10px; padding:8px 11px; font-size:13px;">已調整草稿語氣，並新增一句關於測試覆蓋率的稱讚。</div>
+              </div>
+              <div style="display:grid; grid-template-columns:1fr auto; gap:8px;">
+                <textarea placeholder="輸入指示…" style="border:1px solid #e2e8f0; border-radius:8px; padding:9px 11px; font:inherit; font-size:13px; resize:vertical; min-height:40px;"></textarea>
+                <button type="button" style="border:0; border-radius:8px; background:#4f46e5; color:#fff; font-size:13px; padding:0 16px; cursor:pointer; font-weight:600; white-space:nowrap;">送出</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ============ RUNS ============ -->
+    <sc-if value="{{ isRuns }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Runs History">
+        <h1 style="margin:0 0 20px; font-size:22px; font-weight:700; letter-spacing:-0.01em;">執行紀錄</h1>
+        <div style="display:grid; grid-template-columns:300px 1fr; gap:16px; min-height:560px;">
+          <div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; overflow-y:auto; max-height:720px;">
+            <sc-for list="{{ runRows }}" as="run" hint-placeholder-count="6">
+              <button type="button" onClick="{{ run.onClick }}" style="{{ run.rowStyle }}">
+                <span style="display:flex; align-items:center; gap:8px;">
+                  <span style="{{ run.pillStyle }}">{{ run.status }}</span>
+                  <span style="font-size:13px; font-weight:600; color:#0f172a;">#{{ run.id }} {{ run.triggerLabel }}</span>
+                </span>
+                <span style="font-size:11.5px; color:#94a3b8;">{{ run.started_at }} · 耗時 {{ run.durationLabel }}</span>
+                <span style="font-size:11.5px; color:#94a3b8;">專案 {{ run.project_total }} · 略過 {{ run.project_skipped }}</span>
+              </button>
+            </sc-for>
+          </div>
+
+          <div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px 24px;">
+            <div style="display:flex; align-items:center; gap:10px; margin-bottom:18px;">
+              <h2 style="margin:0; font-size:18px; font-weight:700;">Run #{{ selectedRun.id }}</h2>
+              <span style="{{ selectedRun.pillStyle }}">{{ selectedRun.status }}</span>
+            </div>
+
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(110px, 1fr)); gap:16px; margin-bottom:20px;">
+              <div>
+                <div style="font-size:11px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.03em; margin-bottom:4px;">觸發</div>
+                <div style="font-size:13.5px; color:#0f172a; font-weight:500;">{{ selectedRun.triggerLabel }}</div>
+              </div>
+              <div>
+                <div style="font-size:11px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.03em; margin-bottom:4px;">開始</div>
+                <div style="font-size:13.5px; color:#0f172a; font-weight:500;">{{ selectedRun.started_at }}</div>
+              </div>
+              <div>
+                <div style="font-size:11px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.03em; margin-bottom:4px;">結束</div>
+                <div style="font-size:13.5px; color:#0f172a; font-weight:500;">{{ selectedRun.finishedLabel }}</div>
+              </div>
+              <div>
+                <div style="font-size:11px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.03em; margin-bottom:4px;">耗時</div>
+                <div style="font-size:13.5px; color:#0f172a; font-weight:500;">{{ selectedRun.durationLabel }}</div>
+              </div>
+              <div>
+                <div style="font-size:11px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.03em; margin-bottom:4px;">專案</div>
+                <div style="font-size:13.5px; color:#0f172a; font-weight:500;">{{ selectedRun.projectSummaryLabel }}</div>
+              </div>
+            </div>
+
+            <h3 style="margin:0 0 10px; font-size:12.5px; font-weight:600; color:#64748b; text-transform:uppercase; letter-spacing:0.03em;">專案結果</h3>
+            <div style="display:flex; flex-direction:column; gap:10px;">
+              <sc-for list="{{ selectedRun.projects }}" as="proj" hint-placeholder-count="2">
+                <div style="{{ proj.cardStyle }}">
+                  <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:2px;">
+                    <span style="display:flex; align-items:center; gap:9px;">
+                      <span style="font-size:14px; font-weight:600; color:#0f172a;">{{ proj.name }}</span>
+                      <span style="{{ proj.pillStyle }}">{{ proj.state }}</span>
+                    </span>
+                    <span style="font-size:12px; color:#94a3b8;">{{ proj.durationLabel }}</span>
+                  </div>
+                  <sc-if value="{{ proj.hasSkip }}" hint-placeholder-val="{{ false }}">
+                    <div style="margin-top:8px; padding-top:10px; border-top:1px dashed #e2e8f0;">
+                      <div style="font-size:11.5px; color:#94a3b8; margin-bottom:6px;">MR Skip 摘要</div>
+                      <sc-for list="{{ proj.skipReasons }}" as="reason" hint-placeholder-count="1">
+                        <div style="font-size:13px; margin-bottom:2px;">
+                          <span style="font-weight:600; color:#0f172a;">{{ reason.label }}</span>
+                          <span style="color:#94a3b8;"> ×{{ reason.count }}</span>
+                        </div>
+                      </sc-for>
+                      <div style="font-size:12.5px; color:#94a3b8; margin-top:4px;">{{ proj.skipMrLabel }}</div>
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+  </main>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+
+const NEUTRAL = { color: '#334155', background: 'transparent', fontWeight: 500 };
+const ACTIVE = { color: '#4f46e5', background: '#eef2ff', fontWeight: 600 };
+const NAV_BASE = {
+  width: '100%', border: '0', borderRadius: '8px', padding: '9px 12px',
+  cursor: 'pointer', textAlign: 'left', fontSize: '13.5px', font: 'inherit',
+  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+};
+
+class Component extends DCLogic {
+  state = {
+    view: 'dashboard',
+    selectedProjectName: 'tx-server',
+    hoveredProjectName: null,
+    selectedPersonId: 1,
+    reportPersonId: 1,
+    reportProjectTab: 'overview',
+    reportTab: 'weekly',
+    mrFilter: 'draft',
+    selectedMrId: 1,
+    selectedRunId: 4,
+  };
+
+  gitlabIconDataUri(hex) {
+    const encoded = hex.replace('#', '%23');
+    return `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' fill='${encoded}'%3E%3Cpath d='M231.92773,169.78029l-94.82031,65.64454a16.07612,16.07612,0,0,1-18.21484,0L24.07227,169.78029a16.03981,16.03981,0,0,1-6.35254-17.27783L45.04883,50.0176a12.00012,12.00012,0,0,1,22.831-1.12109L88.544,104h78.9121l20.66407-55.10449a12.00021,12.00021,0,0,1,22.83056,1.12109l27.32959,102.48584A16.03981,16.03981,0,0,1,231.92773,169.78029Z'/%3E%3C/svg%3E")`;
+  }
+
+  folderIconDataUri(hex) {
+    const encoded = hex.replace('#', '%23');
+    return `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='${encoded}'%3E%3Cpath d='M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2Z'/%3E%3C/svg%3E")`;
+  }
+
+  sourceIconStyle(sourceType, active) {
+    const color = active ? '#4f46e5' : '#94a3b8';
+    const bg = active ? '#e0e7ff' : '#f1f5f9';
+    if (sourceType === 'gitlab') {
+      return {
+        outer: {
+          width: '15px', height: '15px', flexShrink: 0, display: 'inline-block',
+          backgroundImage: this.gitlabIconDataUri(color), backgroundSize: 'contain', backgroundRepeat: 'no-repeat', backgroundPosition: 'center',
+        },
+        before: 'none',
+      };
+    }
+    return {
+      outer: {
+        width: '15px', height: '15px', flexShrink: 0, display: 'inline-block',
+        backgroundImage: this.folderIconDataUri(color), backgroundSize: 'contain', backgroundRepeat: 'no-repeat', backgroundPosition: 'center',
+      },
+      before: 'none',
+    };
+  }
+
+  projects = [
+    { name: 'tx-server', source_type: 'gitlab', repo_path: 'tx-server', git_remote_url: 'git@gitlab.example.com:team/tx-server.git', default_branches: ['main', 'develop'], mr_review_skip_labels: ['wip', 'do-not-review', 'no-ai-review'], mr_review_require_label: null, last_report_date: '2026-07-12', engineers: [{ display_name: 'Gary Chen', gitlab_username: 'gary.chen' }] },
+    { name: 'game-backend', source_type: 'local', repo_path: '/srv/repos/game-backend', git_remote_url: null, default_branches: ['main'], mr_review_skip_labels: [], mr_review_require_label: 'ready-for-review', last_report_date: '2026-07-11', engineers: [{ display_name: 'Alice Wu', gitlab_username: null }] },
+  ];
+
+  people = [
+    { id: 1, display_name: 'Gary Chen', identity_count: 2 },
+    { id: 2, display_name: 'Alice Wu', identity_count: 1 },
+  ];
+
+  personDetails = {
+    1: { display_name: 'Gary Chen', identities: [{ kind: 'git_email', value: 'gary.chen@corp.com' }, { kind: 'gitlab_user', value: 'gary.chen' }], projects: [{ name: 'tx-server' }] },
+    2: { display_name: 'Alice Wu', identities: [{ kind: 'git_email', value: 'alice.wu@corp.com' }], projects: [{ name: 'game-backend' }] },
+  };
+
+  reportPeople = [
+    { id: 1, display_name: 'Gary', unread_count: 0, open_pending_count: 3 },
+    { id: 2, display_name: 'Alice', unread_count: 1, open_pending_count: 0 },
+  ];
+
+  reportsData = {
+    1: {
+      initial: 'G', display_name: 'Gary Chen', report_date: '2026-07-12', is_read: true,
+      summary: '本週聚焦 tx-server 的支付重試邏輯與排程模組重構，整體進度符合預期。',
+      projects: [
+        {
+          key: 'tx-server', label: 'tx-server',
+          highlights: ['重構排程模組，降低重複程式碼約 30%', '補齊支付重試流程的單元測試'],
+          growth: ['開始主動在 MR 描述中補充風險評估'],
+          pending: [
+            { question: '這段快取失效邏輯是否有考慮並發寫入？', resolved: false },
+            { question: '排程逾時的重試策略要不要記錄到 runbook？', resolved: false },
+            { question: '上週提到的資料庫索引優化進度如何？', resolved: true },
+          ],
+        },
+      ],
+    },
+    2: {
+      initial: 'A', display_name: 'Alice Wu', report_date: '2026-07-12', is_read: false,
+      summary: '本週橫跨 game-backend 與 infra-tools 兩個專案，主軸仍在資料庫效能與 CI 改善。整體穩定，有 1 項架構決策待當面確認。',
+      projects: [
+        {
+          key: 'game-backend', label: 'game-backend',
+          highlights: ['主導 transaction_rounds 分區索引重構'],
+          growth: ['大型 PR 拆分顆粒度可再細，利於 review'],
+          pending: [{ question: 'MR #234 架構選擇是主動決策還是時間壓力妥協？', resolved: false }],
+        },
+        {
+          key: 'infra-tools', label: 'infra-tools',
+          highlights: ['改善 CI 快取，build 時間降 40%'],
+          growth: [],
+          pending: [],
+        },
+      ],
+    },
+  };
+
+  pendingItems = [
+    { question: '這段快取失效邏輯是否有考慮並發寫入？', resolved: false },
+    { question: '排程逾時的重試策略要不要記錄到 runbook？', resolved: false },
+    { question: '上週提到的資料庫索引優化進度如何？', resolved: true },
+  ];
+
+  growthTimeline = [
+    { month: '2026-06', content: '開始主動撰寫 MR 描述中的風險評估段落。' },
+    { month: '2026-05', content: '對排程模組的邊界條件掌握度提升，重工次數下降。' },
+  ];
+
+  mrReviews = [
+    { id: 1, project_name: 'tx-server', mr_iid: 214, mr_title: '修正支付重試的競態條件', author_name: 'Gary Chen', review_round: 1, status: 'draft', reviewer_agent: 'claude-mr-reviewer', draft_body: '整體邏輯正確，重試佇列的鎖範圍可以再縮小，避免長時間持鎖影響吞吐量。建議補上併發測試案例。' },
+    { id: 2, project_name: 'game-backend', mr_iid: 88, mr_title: '重構排程模組', author_name: 'Alice Wu', review_round: 2, status: 'draft', reviewer_agent: 'claude-mr-reviewer', draft_body: '拆分後的模組職責清楚，測試覆蓋率提升明顯，辛苦了。有一處命名可以再更貼近業務語意。' },
+    { id: 3, project_name: 'tx-server', mr_iid: 201, mr_title: '新增交易日誌欄位', author_name: 'Gary Chen', review_round: 1, status: 'published', reviewer_agent: 'claude-mr-reviewer', draft_body: '已發布：欄位設計合理，索引建議已於 comment 中補充。' },
+    { id: 4, project_name: 'game-backend', mr_iid: 75, mr_title: 'WIP: 排行榜快取', author_name: 'Alice Wu', review_round: 1, status: 'ignored', reviewer_agent: 'claude-mr-reviewer', draft_body: '（帶有 wip 標籤，已略過）' },
+  ];
+
+  runs = [
+    {
+      id: 5, trigger: 'manual', status: 'running', started_at: '2026-07-12 14:00', finished_at: null, duration_sec: null, project_total: 2, project_skipped: 0,
+      projects: [
+        { name: 'tx-server', state: 'running', duration_sec: null, skip_summary: null },
+        { name: 'game-backend', state: 'queued', duration_sec: null, skip_summary: null },
+      ],
+    },
+    {
+      id: 4, trigger: 'manual_mr_scan', status: 'partial', started_at: '2026-07-12 13:59', finished_at: '2026-07-12 14:24', duration_sec: 1469, project_total: 2, project_skipped: 1,
+      projects: [
+        { name: 'tx-server', state: 'skipped_timeout', duration_sec: 724, skip_summary: { by_reason: { gitlab_draft: 2 }, items: [{ mr_iid: 47 }, { mr_iid: 58 }] } },
+        { name: 'game-backend', state: 'success', duration_sec: 512, skip_summary: null },
+      ],
+    },
+    {
+      id: 3, trigger: 'mr_poll', status: 'partial', started_at: '2026-07-11 09:00', finished_at: '2026-07-11 09:23', duration_sec: 1422, project_total: 2, project_skipped: 1,
+      projects: [
+        { name: 'tx-server', state: 'success', duration_sec: 690, skip_summary: null },
+        { name: 'game-backend', state: 'skipped_label', duration_sec: null, skip_summary: { by_reason: { wip: 1 }, items: [{ mr_iid: 75 }] } },
+      ],
+    },
+    {
+      id: 2, trigger: 'mr_poll', status: 'partial', started_at: '2026-07-11 08:00', finished_at: '2026-07-11 08:23', duration_sec: 1416, project_total: 2, project_skipped: 1,
+      projects: [
+        { name: 'tx-server', state: 'success', duration_sec: 680, skip_summary: null },
+        { name: 'game-backend', state: 'skipped_label', duration_sec: null, skip_summary: { by_reason: { wip: 1 }, items: [{ mr_iid: 75 }] } },
+      ],
+    },
+    {
+      id: 1, trigger: 'mr_poll', status: 'partial', started_at: '2026-07-11 07:00', finished_at: '2026-07-11 07:23', duration_sec: 1412, project_total: 2, project_skipped: 1,
+      projects: [
+        { name: 'tx-server', state: 'success', duration_sec: 670, skip_summary: null },
+        { name: 'game-backend', state: 'skipped_label', duration_sec: null, skip_summary: { by_reason: { wip: 1 }, items: [{ mr_iid: 75 }] } },
+      ],
+    },
+  ];
+
+  triggerLabel(t) {
+    if (t === 'manual') return '手動執行';
+    if (t === 'manual_mr_scan') return '手動 MR 掃描';
+    if (t === 'mr_poll') return 'MR 輪詢';
+    if (t === 'weekly') return '週報排程';
+    return t;
+  }
+
+  statusColor(s) {
+    if (s === 'success') return '#15803d';
+    if (s === 'partial') return '#d97706';
+    if (s === 'failed') return '#dc2626';
+    if (s === 'running' || s === 'queued') return '#4f46e5';
+    if (s === 'skipped_timeout' || s === 'skipped_label') return '#dc2626';
+    return '#64748b';
+  }
+
+  statusBg(s) {
+    if (s === 'success') return '#f0fdf4';
+    if (s === 'partial') return '#fffbeb';
+    if (s === 'failed') return '#fef2f2';
+    if (s === 'running' || s === 'queued') return '#eef2ff';
+    if (s === 'skipped_timeout' || s === 'skipped_label') return '#fef2f2';
+    return '#f8fafc';
+  }
+
+  pillStyleFor(status) {
+    return {
+      display: 'inline-flex', alignSelf: 'flex-start', fontSize: '11px', fontWeight: 700,
+      padding: '2px 8px', borderRadius: '999px', color: this.statusColor(status), background: this.statusBg(status),
+    };
+  }
+
+  formatDuration(sec) {
+    if (sec == null) return '執行中…';
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}m ${s}s`;
+  }
+
+  renderVals() {
+    const view = this.state.view;
+    const navKeys = ['dashboard', 'projects', 'people', 'reports', 'mrinbox', 'runs'];
+    const navStyle = {};
+    navKeys.forEach((k) => {
+      navStyle[k] = { ...NAV_BASE, ...(view === k ? ACTIVE : NEUTRAL) };
+    });
+
+    const selectedProject = this.projects.find((p) => p.name === this.state.selectedProjectName) || this.projects[0];
+    const projectRows = this.projects.map((p) => {
+      const isActive = p.name === selectedProject.name;
+      const isHovered = p.name === this.state.hoveredProjectName;
+      const icon = this.sourceIconStyle(p.source_type, isActive);
+      return {
+        name: p.name,
+        dateLabel: p.last_report_date,
+        showRun: isHovered,
+        hideRun: !isHovered,
+        iconStyle: icon.outer,
+        iconBeforeStyle: icon.before,
+        onClick: () => this.setState({ selectedProjectName: p.name }),
+        onMouseEnter: () => this.setState({ hoveredProjectName: p.name }),
+        onMouseLeave: () => this.setState({ hoveredProjectName: null }),
+        rowStyle: {
+          display: 'flex', alignItems: 'center', gap: '9px', width: '100%', border: '0', borderRadius: '8px',
+          padding: '9px 10px', cursor: 'pointer', textAlign: 'left', fontSize: '13px', font: 'inherit',
+          background: isActive ? '#eef2ff' : 'transparent',
+          color: isActive ? '#4f46e5' : '#334155',
+          fontWeight: isActive ? 600 : 500,
+        },
+      };
+    });
+
+    const selProjIcon = this.sourceIconStyle(selectedProject.source_type, true);
+    const selProjView = {
+      ...selectedProject,
+      isGitlab: selectedProject.source_type === 'gitlab',
+      iconStyle: { ...selProjIcon.outer, width: '18px', height: selectedProject.source_type === 'gitlab' ? '18px' : '15px' },
+      iconBeforeStyle: selProjIcon.before,
+      gitlabPillStyle: { display: 'inline-flex', padding: '6px 14px', borderRadius: '8px', fontSize: '12.5px', background: selectedProject.source_type === 'gitlab' ? '#eef2ff' : '#f1f5f9', color: selectedProject.source_type === 'gitlab' ? '#4f46e5' : '#94a3b8', fontWeight: selectedProject.source_type === 'gitlab' ? 600 : 400 },
+      localPillStyle: { display: 'inline-flex', padding: '6px 14px', borderRadius: '8px', fontSize: '12.5px', background: selectedProject.source_type === 'local' ? '#eef2ff' : '#f1f5f9', color: selectedProject.source_type === 'local' ? '#4f46e5' : '#94a3b8', fontWeight: selectedProject.source_type === 'local' ? 600 : 400 },
+      engineers: selectedProject.engineers.map((e) => ({ ...e, initial: (e.display_name || '?').charAt(0).toUpperCase() })),
+      default_branches_label: (selectedProject.default_branches || []).join(', ') || '—',
+      mr_review_skip_labels_label: (selectedProject.mr_review_skip_labels || []).join(', ') || '（未設定）',
+      mr_review_require_label_label: selectedProject.mr_review_require_label || '（未設定）',
+    };
+
+    const selectedPersonDetail = this.personDetails[this.state.selectedPersonId] || this.personDetails[1];
+    const peopleRows = this.people.map((p) => ({
+      display_name: p.display_name,
+      identity_count: p.identity_count,
+      onClick: () => this.setState({ selectedPersonId: p.id }),
+      rowStyle: {
+        display: 'flex', flexDirection: 'column', gap: '2px', width: '100%', border: '0', borderRadius: '8px',
+        padding: '8px 10px', cursor: 'pointer', textAlign: 'left', font: 'inherit',
+        background: p.id === this.state.selectedPersonId ? '#eef2ff' : 'transparent',
+        color: p.id === this.state.selectedPersonId ? '#4f46e5' : '#334155',
+        fontWeight: p.id === this.state.selectedPersonId ? 600 : 500,
+      },
+    }));
+
+    const reportPeopleRows = this.reportPeople.map((p) => {
+      const isActive = p.id === this.state.reportPersonId;
+      return {
+        display_name: p.display_name,
+        onClick: () => this.setState({ reportPersonId: p.id, view: 'reports', reportProjectTab: 'overview' }),
+        badgeText: p.open_pending_count > 0 ? String(p.open_pending_count) : '',
+        badgeStyle: { fontSize: '11px', color: '#d97706', fontWeight: 700 },
+        navRowStyle: {
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', border: '0',
+          borderRadius: '6px', padding: '7px 8px', cursor: 'pointer', textAlign: 'left', fontSize: '12.5px', font: 'inherit',
+          background: isActive ? '#eef2ff' : 'transparent',
+          color: isActive ? '#4f46e5' : '#64748b',
+          fontWeight: isActive ? 600 : 500,
+        },
+      };
+    });
+    const selectedReportPersonName = (this.reportPeople.find((p) => p.id === this.state.reportPersonId) || this.reportPeople[0]).display_name;
+
+    const personReport = this.reportsData[this.state.reportPersonId] || this.reportsData[1];
+    const readButtonLabel = personReport.is_read ? '✓ 已讀' : '標記已讀';
+    const readButtonStyle = personReport.is_read
+      ? { border: '1px solid #bbf7d0', borderRadius: '8px', padding: '7px 13px', background: '#f0fdf4', color: '#15803d', fontSize: '12.5px', cursor: 'pointer', whiteSpace: 'nowrap' }
+      : { border: '1px solid #e2e8f0', borderRadius: '8px', padding: '7px 13px', background: '#fff', color: '#334155', fontSize: '12.5px', cursor: 'pointer', whiteSpace: 'nowrap' };
+
+    const activeTabKey = this.state.reportProjectTab;
+    const isOverviewTab = activeTabKey === 'overview';
+    const isTrendsTab = activeTabKey === 'trends';
+    const isProjectDetailTab = !isOverviewTab && !isTrendsTab;
+
+    const tabDefs = [{ key: 'overview', label: '總覽' }, ...personReport.projects.map((p) => ({ key: p.key, label: p.label })), { key: 'trends', label: '成長趨勢' }];
+    const reportTabs = tabDefs.map((t) => {
+      const isActive = t.key === activeTabKey;
+      return {
+        label: t.label,
+        onClick: () => this.setState({ reportProjectTab: t.key }),
+        tabStyle: {
+          border: '0', background: 'transparent', padding: '9px 14px', fontSize: '13px', cursor: 'pointer', font: 'inherit',
+          color: isActive ? '#4f46e5' : '#64748b', fontWeight: isActive ? 600 : 500,
+          boxShadow: isActive ? 'inset 0 -2px 0 #4f46e5' : 'none',
+        },
+      };
+    });
+
+    const overviewCards = personReport.projects.map((p) => {
+      const openCount = p.pending.filter((i) => !i.resolved).length;
+      return {
+        label: p.label,
+        statusLine: openCount > 0 ? `活躍 · ${openCount} 待確認` : '活躍 · 無待確認',
+        pendingColor: openCount > 0 ? '#d97706' : '#94a3b8',
+      };
+    });
+    const overviewHighlights = personReport.projects.flatMap((p) => p.highlights.map((h) => ({ prefix: p.label, text: h })));
+    const overviewGrowth = personReport.projects.flatMap((p) => p.growth.map((g) => ({ prefix: p.label, text: g })));
+    const overviewPendingGroups = personReport.projects
+      .map((p) => ({ project: p.label, items: p.pending.filter((i) => !i.resolved) }))
+      .filter((g) => g.items.length > 0);
+    const hasOverviewPending = overviewPendingGroups.length > 0;
+
+    const activeProjectData = isProjectDetailTab ? (personReport.projects.find((p) => p.key === activeTabKey) || personReport.projects[0]) : null;
+
+    const reportTabBase = { border: '0', borderRadius: '8px', padding: '7px 14px', cursor: 'pointer', fontSize: '13px', font: 'inherit' };
+    const reportTabStyle = {
+      weekly: { ...reportTabBase, background: this.state.reportTab === 'weekly' ? '#eef2ff' : '#f8fafc', color: this.state.reportTab === 'weekly' ? '#4f46e5' : '#64748b', fontWeight: this.state.reportTab === 'weekly' ? 600 : 500 },
+      trends: { ...reportTabBase, background: this.state.reportTab === 'trends' ? '#eef2ff' : '#f8fafc', color: this.state.reportTab === 'trends' ? '#4f46e5' : '#64748b', fontWeight: this.state.reportTab === 'trends' ? 600 : 500 },
+    };
+
+    const mrFiltered = this.mrReviews.filter((m) => m.status === this.state.mrFilter);
+    const selectedMr = this.mrReviews.find((m) => m.id === this.state.selectedMrId) || mrFiltered[0] || this.mrReviews[0];
+    const mrRows = mrFiltered.map((m) => ({
+      mr_title: m.mr_title, project_name: m.project_name, mr_iid: m.mr_iid, author_name: m.author_name,
+      onClick: () => this.setState({ selectedMrId: m.id }),
+      rowStyle: {
+        display: 'flex', flexDirection: 'column', gap: '3px', width: '100%', border: '0', borderBottom: '1px solid #f1f5f9',
+        padding: '12px 16px', cursor: 'pointer', textAlign: 'left', font: 'inherit',
+        background: m.id === selectedMr.id ? '#f5f3ff' : '#fff',
+        boxShadow: m.id === selectedMr.id ? 'inset 3px 0 0 #7c3aed' : 'none',
+      },
+    }));
+    const mrTabBase = { flex: 1, border: '0', background: 'transparent', padding: '11px 8px', fontSize: '13px', fontWeight: 600, cursor: 'pointer', font: 'inherit' };
+    const mrTabStyle = {
+      draft: { ...mrTabBase, color: this.state.mrFilter === 'draft' ? '#6d28d9' : '#94a3b8', boxShadow: this.state.mrFilter === 'draft' ? 'inset 0 -2px 0 #7c3aed' : 'none' },
+      published: { ...mrTabBase, color: this.state.mrFilter === 'published' ? '#6d28d9' : '#94a3b8', boxShadow: this.state.mrFilter === 'published' ? 'inset 0 -2px 0 #7c3aed' : 'none' },
+      ignored: { ...mrTabBase, color: this.state.mrFilter === 'ignored' ? '#6d28d9' : '#94a3b8', boxShadow: this.state.mrFilter === 'ignored' ? 'inset 0 -2px 0 #7c3aed' : 'none' },
+    };
+
+    const recentReports = [
+      { person_name: 'Gary', project_name: 'tx-server', statusLabel: '已讀', statusColor: '#94a3b8', dotStyle: { width: '7px', height: '7px', borderRadius: '50%', background: '#cbd5e1', display: 'inline-block' } },
+      { person_name: 'Alice', project_name: 'game-backend', statusLabel: '⚠ 1', statusColor: '#d97706', dotStyle: { width: '7px', height: '7px', borderRadius: '50%', background: '#4f46e5', display: 'inline-block' } },
+    ];
+
+    const recentRuns = this.runs.slice(0, 4).map((r) => ({
+      status: r.status, triggerLabel: this.triggerLabel(r.trigger),
+      meta: `${r.started_at} · ${this.formatDuration(r.duration_sec)}`,
+      pillStyle: this.pillStyleFor(r.status),
+    }));
+
+    const runRows = this.runs.map((r) => {
+      const isActive = r.id === this.state.selectedRunId;
+      return {
+        id: r.id, status: r.status, triggerLabel: this.triggerLabel(r.trigger), started_at: r.started_at,
+        durationLabel: this.formatDuration(r.duration_sec), project_total: r.project_total, project_skipped: r.project_skipped,
+        pillStyle: this.pillStyleFor(r.status),
+        onClick: () => this.setState({ selectedRunId: r.id }),
+        rowStyle: {
+          display: 'flex', flexDirection: 'column', gap: '4px', width: '100%', border: '0',
+          borderBottom: '1px solid #f1f5f9', padding: '12px 16px', cursor: 'pointer', textAlign: 'left', font: 'inherit',
+          background: isActive ? '#eef2ff' : '#fff',
+          boxShadow: isActive ? 'inset 3px 0 0 #4f46e5' : 'none',
+        },
+      };
+    });
+
+    const rawSelectedRun = this.runs.find((r) => r.id === this.state.selectedRunId) || this.runs[0];
+    const selectedRun = {
+      id: rawSelectedRun.id, status: rawSelectedRun.status,
+      triggerLabel: this.triggerLabel(rawSelectedRun.trigger),
+      started_at: rawSelectedRun.started_at,
+      finishedLabel: rawSelectedRun.finished_at || '執行中…',
+      durationLabel: this.formatDuration(rawSelectedRun.duration_sec),
+      projectSummaryLabel: rawSelectedRun.project_skipped > 0 ? `${rawSelectedRun.project_total}（略過 ${rawSelectedRun.project_skipped}）` : `${rawSelectedRun.project_total}`,
+      pillStyle: this.pillStyleFor(rawSelectedRun.status),
+      projects: rawSelectedRun.projects.map((p) => {
+        const hasSkip = !!p.skip_summary;
+        return {
+          name: p.name, state: p.state,
+          durationLabel: this.formatDuration(p.duration_sec),
+          pillStyle: this.pillStyleFor(p.state),
+          hasSkip,
+          cardStyle: {
+            border: `1px solid ${hasSkip ? '#fecaca' : '#e2e8f0'}`, borderRadius: '10px', padding: '12px 14px',
+            background: hasSkip ? '#fef2f2' : '#f8fafc',
+          },
+          skipReasons: hasSkip ? Object.entries(p.skip_summary.by_reason).map(([label, count]) => ({ label, count })) : [],
+          skipMrLabel: hasSkip ? '!' + p.skip_summary.items.map((i) => i.mr_iid).join(', !') : '',
+        };
+      }),
+    };
+
+    return {
+      isDashboard: view === 'dashboard', isProjects: view === 'projects', isPeople: view === 'people',
+      isReports: view === 'reports', isMrInbox: view === 'mrinbox', isRuns: view === 'runs',
+      isReportTabWeekly: this.state.reportTab === 'weekly', isReportTabTrends: this.state.reportTab === 'trends',
+      goTo_dashboard: () => this.setState({ view: 'dashboard' }),
+      goTo_projects: () => this.setState({ view: 'projects' }),
+      goTo_people: () => this.setState({ view: 'people' }),
+      goTo_reports: () => this.setState({ view: 'reports' }),
+      goTo_mrinbox: () => this.setState({ view: 'mrinbox' }),
+      goTo_runs: () => this.setState({ view: 'runs' }),
+      setReportTab_weekly: () => this.setState({ reportTab: 'weekly' }),
+      setReportTab_trends: () => this.setState({ reportTab: 'trends' }),
+      setMrFilter_draft: () => this.setState({ mrFilter: 'draft', selectedMrId: null }),
+      setMrFilter_published: () => this.setState({ mrFilter: 'published', selectedMrId: null }),
+      setMrFilter_ignored: () => this.setState({ mrFilter: 'ignored', selectedMrId: null }),
+      navStyle, projectRows, selectedProject: selProjView, peopleRows, selectedPersonDetail,
+      reportPeopleRows, selectedReportPersonName, reportTabStyle, pendingItems: this.pendingItems, growthTimeline: this.growthTimeline,
+      personReport, readButtonLabel, readButtonStyle, isOverviewTab, isTrendsTab, isProjectDetailTab, reportTabs,
+      overviewCards, overviewHighlights, overviewGrowth, overviewPendingGroups, hasOverviewPending, activeProjectData,
+      mrRows, selectedMr, mrTabStyle, recentReports, recentRuns, runRows, selectedRun,
+    };
+  }
+}
+
+</script>
+</body>
+</html>

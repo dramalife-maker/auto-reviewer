@@ -443,62 +443,84 @@ tests:
 ---
 ### Requirement: Frontend exposes unmatched author management
 
-The frontend SHALL display the count of unmatched authors and provide a panel to bind each unmatched author to an existing person or create a new person and bind in one action.
+The frontend SHALL display the count of unmatched authors on the People Settings navigation item when the count is greater than zero, and SHALL provide an unmatched-authors section inside the People Settings view to bind each unmatched author to an existing person or create a new person and bind in one action.
+
+The frontend MUST NOT require a separate global header unmatched-authors panel as the primary entry point.
 
 #### Scenario: Bind unmatched author from UI
 
-- **WHEN** the user selects an unmatched author and chooses an existing person to bind
+- **WHEN** the user selects an unmatched author in People Settings and chooses an existing person to bind
 - **THEN** the unmatched count decreases and the binding succeeds without a full page reload
 
-##### Example: bind from unmatched panel
+##### Example: bind from people-settings unmatched section
 
 - **GIVEN** unmatched author `alice@gmail.com` on project `game-backend` and existing person id 1 "Alice Chen"
-- **WHEN** the user binds that unmatched email to person id 1
+- **WHEN** the user binds that unmatched email to person id 1 from People Settings
 - **THEN** `GET /api/unmatched-authors` no longer lists `alice@gmail.com` and person id 1 has `identity_count` increased by 1
 
+#### Scenario: Nav badge reflects unmatched count
+
+- **WHEN** at least one unmatched author exists
+- **THEN** the People Settings sidebar item shows a count badge
+- **AND** when the unmatched list becomes empty after binding, the badge is hidden
+
+
 <!-- @trace
-source: person-identity-resolution
-updated: 2026-07-09
+source: frontend-react-redesign
+updated: 2026-07-12
 code:
+  - docs/design_handoff_reviewer_redesign/support.js
+  - frontend/vite.config.ts
+  - frontend/tsconfig.json
+  - frontend/src/components/ui/Tabs.tsx
+  - frontend/src/lib/catchup.ts
+  - frontend/src/components/ui/Card.tsx
+  - frontend/src/components/layout/Banner.tsx
+  - frontend/src/pages/MrInboxPage.tsx
+  - frontend/src/lib/format.ts
+  - frontend/src/App.tsx
+  - frontend/src/components/layout/Sidebar.tsx
+  - frontend/src/components/ui/Input.tsx
   - frontend/src/app.ts
-  - backend/src/reports.rs
-  - docs/idea/migration-person-observations.md
-  - backend/src/config.rs
-  - backend/src/person_trends.rs
-  - frontend/src/types.ts
-  - frontend/src/api.ts
-  - docs/idea/reviewer_project_list_with_run.html
-  - backend/src/runs.rs
-  - skills/reviewer-batch/output-contract.md
-  - backend/migrations/005_drop_gitlab_project_id.sql
-  - docs/idea/schema.md
-  - backend/migrations/004_project_settings.sql
-  - backend/src/executor.rs
-  - docs/idea/reviewer_project_settings.html
-  - backend/src/worker.rs
+  - frontend/src/components/ui/index.ts
+  - frontend/src/lib/icons.ts
+  - frontend/src/main.tsx
+  - docs/design_handoff_reviewer_redesign/README.md
+  - frontend/package.json
+  - docs/design_handoff_reviewer_redesign/Reviewer Redesign.dc.html
   - frontend/index.html
-  - README.md
-  - backend/src/schedule.rs
-  - backend/src/server.rs
-  - backend/src/summary.rs
-  - backend/src/identity.rs
-  - backend/Cargo.toml
-  - .env.example
-  - backend/src/error.rs
-  - backend/src/lib.rs
+  - frontend/src/components/ui/Button.tsx
+  - frontend/src/pages/ReportsPage.tsx
+  - frontend/src/components/ui/NavItem.tsx
+  - frontend/src/components/ui/ListRow.tsx
+  - frontend/src/components/ui/Badge.tsx
   - frontend/src/style.css
-  - backend/src/dashboard.rs
-  - docs/idea/spec.md
-  - skills/reviewer-batch/WORKFLOW.md
-  - docs/idea/reviewer_app_dashboard_home.html
-  - backend/src/projects.rs
+  - frontend/src/components/ui/StatusPill.tsx
+  - frontend/src/index.css
+  - frontend/src/pages/RunsPage.tsx
+  - frontend/src/hooks/useRunPolling.ts
+  - frontend/src/components/ui/Avatar.tsx
+  - frontend/src/components/ui/StatCard.tsx
+  - frontend/src/lib/tokens.ts
+  - frontend/src/context/BannerContext.tsx
+  - frontend/src/pages/PeoplePage.tsx
+  - frontend/src/pages/ProjectsPage.tsx
+  - frontend/src/main.ts
+  - frontend/src/pages/DashboardPage.tsx
+  - frontend/src/hooks/useApi.ts
 tests:
-  - backend/tests/report_reader.rs
-  - backend/tests/dashboard.rs
-  - backend/tests/runs_execution.rs
-  - backend/tests/person_trends.rs
-  - backend/tests/project_config.rs
-  - backend/tests/identity.rs
+  - frontend/src/hooks/useApi.test.ts
+  - frontend/src/pages/PeoplePage.unmatched.test.tsx
+  - frontend/src/test/setup.ts
+  - frontend/src/components/ui/atoms.test.tsx
+  - frontend/src/pages/MrInboxPage.test.tsx
+  - frontend/src/components/layout/Banner.test.tsx
+  - frontend/src/pages/DashboardPage.catchup.test.tsx
+  - frontend/src/lib/catchup.test.ts
+  - frontend/src/lib/format.test.ts
+  - frontend/src/lib/icons.test.ts
+  - frontend/src/theme.test.ts
+  - frontend/src/App.routes.test.tsx
 -->
 
 ---
