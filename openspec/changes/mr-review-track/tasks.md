@@ -28,8 +28,9 @@
 
 ## 4. mr-review: headless workflow
 
-- [x] 4.1 建立 `skills/scan-mrs-headless/WORKFLOW.md`，改造自 `cto:scan-mrs` 的 review 本體邏輯（僅供邏輯參考）：移除互動確認與 `glab mr note`/`glab mr merge` 副作用；**不得**執行 `glab mr list` 做 MR 發現（已由 triage script 完成）。Workflow 以 manifest 的 `mr_iid` + `eligible_mrs.json` 內該 MR 的 metadata 為範圍，每次子行程只處理單一 MR；允許 `glab mr diff`/`glab mr view` 取得 review 素材。驗證：`grep` 確認 WORKFLOW.md 不含 `glab mr list`、不含 `glab mr note`/`glab mr merge`/互動式問句。
+- [x] 4.1 建立 `skills/scan-mrs-headless/WORKFLOW.md`，改造自 `cto:scan-mrs` 的 review 本體邏輯（僅供邏輯參考）：移除互動確認與 `glab mr note`/`glab mr merge` 副作用；**不得**執行 `glab mr list` 做 MR 發現（已由 triage script 完成）。Workflow 以 manifest 的 `mr_iid` + `eligible_mrs.json` 內該 MR 的 metadata 為範圍，每次子行程只處理單一 MR；變更用後端預算的 `change_*` 檔（基準 `origin/<target_branch>...HEAD`；**禁止** `glab mr diff` 與全量重跑 git diff）；允許 `glab mr view` 取得討論脈絡；草稿優先於觀察、禁止廣掃 reports。驗證：`grep` 確認 WORKFLOW.md 不含 `glab mr list`、不含 `glab mr note`/`glab mr merge`/`glab mr diff`/互動式問句。
 - [x] 4.2 WORKFLOW.md 定義草稿檔輸出格式（frontmatter 含 `mr_iid`/`mr_title`/`review_round`/`author_identity`）落地至 manifest 指定的 `draft_dir`，並將工程師觀察片段寫入 `reports/<project>/<person>/_pending/`。驗證：以固定測試用 manifest（含單一 `mr_iid`）手動執行一次 workflow，確認 `draft_dir` 下產出的檔案 frontmatter 符合契約欄位。
+- [x] 4.3 後端在 spawn 每個 MR agent 前預寫 `change_log.txt` / `change_stat.txt` / `change.diff`（diff 有大小上限），並把路徑寫入 per-MR manifest。驗證：`mr_change_materials` 單元測試涵蓋產出與截斷；manifest 測試含三個 path 欄位。
 
 ## 4b. reviewer-execution: MR 子行程 session 持久化
 

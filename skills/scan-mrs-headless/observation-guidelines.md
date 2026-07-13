@@ -1,9 +1,32 @@
 # observation-guidelines.md — 工程師觀察片段寫作規範
 
 > **讀者**：管理者（週報／1on1），**不是** MR 作者。  
-> **落檔**：`{pending_dir}/mr-{mr_iid}-round-{review_round}.md`  
 > **契約強度**：僅寫作規範；**heading 可同義**，後端不解析標題。下列「建議段落」為首選形狀，同義標題可接受。  
 > **與草稿分界**：草稿見 `output-contract.md`（收件匣／GitLab note）。本檔內容**不得**複製進草稿正文，草稿也**不得**整段貼進本檔。
+
+---
+
+## 落檔（兩處一起維護）
+
+同一場次正文寫一次，落兩處：
+
+| 目標 | 路徑 | 用途 |
+|------|------|------|
+| **A. 待消費片段** | `{pending_dir}/mr-{mr_iid}-round-{review_round}.md` | 發佈後由週報折入；`pending_dir` 已是 `_pending` |
+| **B. 專案層月檔** | `{person_month_md_path}`（manifest；例 `reports/{project}/{person}/2026-07.md`） | 當月 MR／架構審查場次流水；與週報成長段落**同檔共存** |
+
+例：
+
+- A：`reports/game-backend/Gary Tsai/_pending/mr-4-round-1.md`
+- B：`reports/game-backend/Gary Tsai/2026-07.md`（追加一節，見下）
+
+規則：
+
+1. **先寫 A（整檔覆寫／新建）**，再 **追加 B**（勿覆寫整個月檔）。
+2. B 若檔案不存在：建立並寫標題（例 `# {person} {YYYY-MM} 本專案紀錄`）+ 本場一節。
+3. B 若已存在：檔末追加 `---` 空行後再貼本場一節（與既有週報成長段並存）。
+4. 若本場 `mr_iid`+`review_round` 的標題列已在月檔出現 → **更新該節**或跳過重複追加，勿叠兩份。
+5. **不要**只寫 A 不寫 B，也不要只寫 B 不寫 A。
 
 ---
 
@@ -13,11 +36,13 @@
 
 目標：留下可帶進 1on1 與週報的**行為與思維訊號**，並保留足夠脈絡讓管理者不必重開整份 diff。
 
-僅在對應 `mr_reviews.status='published'` 後，才由 `reviewer-batch` 折入週報。
+僅在對應 `mr_reviews.status='published'` 後，`_pending` 片段才由 `reviewer-batch` 折入週報；**月檔場次節不依賴發佈**，方便管理者隨時翻當月審查史。
 
 ---
 
 ## 建議段落（首選形狀）
+
+A、B 共用同一正文形狀：
 
 ```markdown
 ## YYYY-MM-DD 架構審查：{MR 標題}（第 X 輪）
@@ -71,13 +96,11 @@
 
 寫本場思維模式前，先判斷是否與**過去 review／觀察**構成**重複模式**：
 
-1. **讀取既有脈絡**（若存在則 Read）：
-   - 同人本專案 `_pending/`、`_pending/_archived/` 既有片段
-   - 跨專案人物層：`{person_report_root}/{display_name}/index.md`（若 manifest 無 `person_report_root`，由資料根推得 `reports/_people/{display_name}/index.md`）
-2. **僅當本次觀察與過去構成重複模式**（同一類盲點／同一類強項再次出現）時，才**追加**到人物層 `index.md` 的長期觀察／長期思維對應段落（修訂既有條目或加一條累積敘事；標日期與 MR 作證據錨）。
-3. **單次現象、尚構不成模式** → **只寫在本場「觀察到的思維模式」**，不要每次都改長期檔、也不要在片段末硬塞「長期思維」段。
-
-重點：長期檔是**稀疏、累積、跨場次**的；場次片段是**每場都有**的。
+1. **讀取既有脈絡**（若存在則 Read；路徑已知才讀，勿廣掃）：
+   - 同人本專案 `_pending/`、`_pending/_archived/`、**本月 `YYYY-MM.md`**
+   - 跨專案人物層：`reports/_people/{display_name}/index.md`
+2. **僅當本次觀察與過去構成重複模式**時，才**追加**到人物層 `index.md` 的長期觀察／思維模式段落。
+3. **單次現象** → 只寫在本場「觀察到的思維模式」（A+B），不要每次都改人物層 `index.md`。
 
 ---
 
@@ -92,20 +115,21 @@
 
 ## 禁止
 
-- 把即將／已經寫進 `draft_dir` 的 GitLab note **全文**貼進觀察片段。
+- 把即將／已經寫進 `draft_dir` 的 GitLab note **全文**貼進觀察。
 - 只寫「表現不錯／需加強」而無證據。
 - 純產量評論（commit 數、行數當好壞標準）。
-- **每次審查都改寫／追加長期思維**（無重複模式卻動長期檔）。
+- **每次審查都改寫人物層長期思維**（無重複模式卻動 `index.md`）。
+- 覆寫整份月檔、或把場次寫到 `reports/`／`reports/{project}/` 根目錄。
 - 要求使用者確認、寫入 GitLab、修改 SQLite 或 repo 原始碼。
 
 ---
 
 ## 與草稿的對照（防搞混）
 
-| | 觀察片段（本檔） | MR 草稿（`output-contract.md`） |
+| | 觀察（本檔：A+B） | MR 草稿（`output-contract.md`） |
 |--|--|--|
 | 讀者 | 管理者 | MR 作者／GitLab |
 | 目的 | 場次紀錄 + 思維模式 | 可發佈的 code review |
-| 思維模式 | **必寫**；長期僅在重複模式時追加 | **不要**寫成對人評價主軸 |
+| 思維模式 | **必寫**；人物層長期僅重複模式 | **不要**寫成對人評價主軸 |
 | Heading | 可同義（首選見上方範本） | 審查摘要／上一輪表／做得好／需要修正／追問／整體評估 |
 | 結尾 | 無須 `By: AI Agent` | 發佈時由後端附加 marker |

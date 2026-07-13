@@ -27,6 +27,7 @@ def main() -> None:
                 "mr_iid": mr_iid,
                 "mr_title": "feat test",
                 "source_branch": "main",
+                "target_branch": "main",
                 "author_identity": "alice@example.com",
                 "review_round": 1,
             }

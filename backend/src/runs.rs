@@ -859,6 +859,36 @@ pub fn mr_poll_draft_dir(data_root: &Path, run_id: i64, project_id: i64) -> Path
         .join("drafts")
 }
 
+/// Absolute paths to precomputed change materials for one MR agent subprocess.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ManifestChangeMaterials {
+    pub change_log_path: String,
+    pub change_stat_path: String,
+    pub change_diff_path: String,
+}
+
+impl ManifestChangeMaterials {
+    pub fn from_paths(paths: &crate::mr_change_materials::ChangeMaterialPaths) -> Self {
+        Self {
+            change_log_path: paths
+                .change_log_path
+                .display()
+                .to_string()
+                .replace('\\', "/"),
+            change_stat_path: paths
+                .change_stat_path
+                .display()
+                .to_string()
+                .replace('\\', "/"),
+            change_diff_path: paths
+                .change_diff_path
+                .display()
+                .to_string()
+                .replace('\\', "/"),
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub struct MrPollManifest<'a> {
     pub mode: &'static str,
@@ -866,6 +896,10 @@ pub struct MrPollManifest<'a> {
     pub repo_path: &'a str,
     pub draft_dir: String,
     pub pending_dir: String,
+    /// Project-layer monthly file for this person (`reports/{project}/{person}/YYYY-MM.md`).
+    /// Per-MR observation sessions are appended here in addition to `_pending` snippets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub person_month_md_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reviewer_username: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -879,6 +913,13 @@ pub struct MrPollManifest<'a> {
     /// Previously published AI reviews for this MR (oldest first). Used by round 2+.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub prior_published_reviews: Vec<PriorPublishedReview>,
+    /// Precomputed `git log` / `diff --stat` / `diff` for the agent (per-MR only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change_log_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change_stat_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change_diff_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -897,6 +938,10 @@ pub async fn write_mr_poll_manifest(
     reviewer_username: Option<&str>,
     mr_iid: Option<i64>,
     prior_published_reviews: Vec<PriorPublishedReview>,
+    change_materials: Option<&ManifestChangeMaterials>,
+    // MR author folder under reports/{project}/ (usually people.display_name).
+    // When set, pending_dir becomes reports/{project}/{person}/_pending.
+    observation_person: Option<&str>,
 ) -> crate::Result<PathBuf> {
     let path = manifest_path(data_root, run_id, project.id);
     if let Some(parent) = path.parent() {
@@ -910,12 +955,37 @@ pub async fn write_mr_poll_manifest(
         .display()
         .to_string()
         .replace('\\', "/");
-    let pending_dir = data_root
-        .join("reports")
-        .join(&project.name)
-        .display()
-        .to_string()
-        .replace('\\', "/");
+    let pending_dir = match observation_person.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(person) => {
+            let dir = data_root
+                .join("reports")
+                .join(&project.name)
+                .join(person)
+                .join("_pending");
+            std::fs::create_dir_all(&dir)?;
+            dir.display().to_string().replace('\\', "/")
+        }
+        None => data_root
+            .join("reports")
+            .join(&project.name)
+            .display()
+            .to_string()
+            .replace('\\', "/"),
+    };
+    let person_month_md_path = observation_person.map(str::trim).filter(|s| !s.is_empty()).map(
+        |person| {
+            let month = Utc::now().format("%Y-%m").to_string();
+            let path = data_root
+                .join("reports")
+                .join(&project.name)
+                .join(person)
+                .join(format!("{month}.md"));
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            path.display().to_string().replace('\\', "/")
+        },
+    );
     let eligible_path = eligible_mrs_path(data_root, run_id, project.id)
         .display()
         .to_string()
@@ -927,6 +997,7 @@ pub async fn write_mr_poll_manifest(
         repo_path,
         draft_dir,
         pending_dir,
+        person_month_md_path,
         reviewer_username: reviewer_username.map(str::to_string),
         since: Some(since),
         eligible_mrs_path: eligible_path,
@@ -934,6 +1005,9 @@ pub async fn write_mr_poll_manifest(
         mr_review_require_label: project.mr_review_require_label.clone(),
         mr_iid,
         prior_published_reviews,
+        change_log_path: change_materials.map(|m| m.change_log_path.clone()),
+        change_stat_path: change_materials.map(|m| m.change_stat_path.clone()),
+        change_diff_path: change_materials.map(|m| m.change_diff_path.clone()),
     };
 
     let json = serde_json::to_string_pretty(&manifest).map_err(|err| {
@@ -1004,6 +1078,11 @@ mod tests {
             body: "Prior AI review body".into(),
         }];
 
+        let materials = ManifestChangeMaterials {
+            change_log_path: "/data/mr-68/change_log.txt".into(),
+            change_stat_path: "/data/mr-68/change_stat.txt".into(),
+            change_diff_path: "/data/mr-68/change.diff".into(),
+        };
         let path = tokio::runtime::Runtime::new()
             .expect("rt")
             .block_on(write_mr_poll_manifest(
@@ -1014,6 +1093,8 @@ mod tests {
                 None,
                 Some(68),
                 prior,
+                Some(&materials),
+                Some("Alice Chen"),
             ))
             .expect("write manifest");
 
@@ -1024,6 +1105,34 @@ mod tests {
         assert_eq!(
             json["prior_published_reviews"][0]["body"],
             "Prior AI review body"
+        );
+        assert_eq!(json["change_log_path"], "/data/mr-68/change_log.txt");
+        assert_eq!(json["change_stat_path"], "/data/mr-68/change_stat.txt");
+        assert_eq!(json["change_diff_path"], "/data/mr-68/change.diff");
+        let pending = json["pending_dir"].as_str().expect("pending_dir");
+        assert!(
+            pending.ends_with("reports/alpha/Alice Chen/_pending")
+                || pending.ends_with(r"reports\alpha\Alice Chen\_pending"),
+            "pending_dir should be reports/{{project}}/{{person}}/_pending, got {pending}"
+        );
+        assert!(
+            temp.path()
+                .join("reports")
+                .join("alpha")
+                .join("Alice Chen")
+                .join("_pending")
+                .is_dir(),
+            "_pending directory should be created"
+        );
+        let month_path = json["person_month_md_path"].as_str().expect("month path");
+        assert!(
+            month_path.contains("reports/alpha/Alice Chen/")
+                || month_path.contains(r"reports\alpha\Alice Chen\"),
+            "person_month_md_path should be under person folder, got {month_path}"
+        );
+        assert!(
+            month_path.ends_with(".md"),
+            "person_month_md_path should be a .md file, got {month_path}"
         );
     }
 }

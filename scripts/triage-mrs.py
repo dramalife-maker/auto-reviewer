@@ -281,33 +281,22 @@ def triage_mr(
 
     notes = extract_notes(mr_detail)
     ai_note = find_latest_ai_note(notes)
+    base = {
+        "mr_iid": mr_iid,
+        "mr_title": str(merged.get("title") or ""),
+        "source_branch": str(merged.get("source_branch") or ""),
+        "target_branch": str(merged.get("target_branch") or ""),
+        "author_identity": author_identity(merged),
+    }
     if ai_note is None:
-        return {
-            "mr_iid": mr_iid,
-            "mr_title": str(merged.get("title") or ""),
-            "source_branch": str(merged.get("source_branch") or ""),
-            "author_identity": author_identity(merged),
-            "review_round": 1,
-        }, None
+        return {**base, "review_round": 1}, None
 
     ai_note_time = note_timestamp(ai_note)
     if ai_note_time is None:
-        return {
-            "mr_iid": mr_iid,
-            "mr_title": str(merged.get("title") or ""),
-            "source_branch": str(merged.get("source_branch") or ""),
-            "author_identity": author_identity(merged),
-            "review_round": 2,
-        }, None
+        return {**base, "review_round": 2}, None
 
     if has_activity_since(mr_detail, ai_note_time):
-        return {
-            "mr_iid": mr_iid,
-            "mr_title": str(merged.get("title") or ""),
-            "source_branch": str(merged.get("source_branch") or ""),
-            "author_identity": author_identity(merged),
-            "review_round": 2,
-        }, None
+        return {**base, "review_round": 2}, None
 
     return None, {"mr_iid": mr_iid, "skip_reason": "no_new_activity_since_ai_note"}
 

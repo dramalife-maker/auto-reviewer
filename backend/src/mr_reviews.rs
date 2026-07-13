@@ -26,7 +26,7 @@ pub struct EligibleMr {
     pub mr_iid: i64,
     pub mr_title: String,
     pub source_branch: String,
-    /// Merge target branch (e.g. `main`); used for local `git diff origin/<target>...HEAD`.
+    /// Merge target branch (e.g. `main`); used when precomputing `origin/<target>...HEAD` change materials.
     #[serde(default)]
     pub target_branch: String,
     pub author_identity: String,
@@ -515,6 +515,30 @@ async fn resolve_person_id(pool: &SqlitePool, author_identity: &str) -> Result<O
     }
 
     Ok(None)
+}
+
+/// Folder name under `reports/{project}/` for MR observation snippets.
+/// Prefers `people.display_name`; falls back to trimmed `author_identity`.
+pub async fn resolve_observation_person_folder(
+    pool: &SqlitePool,
+    author_identity: &str,
+) -> Result<String, Error> {
+    let trimmed = author_identity.trim();
+    if trimmed.is_empty() {
+        return Ok("_unmapped".into());
+    }
+    if let Some(person_id) = resolve_person_id(pool, trimmed).await? {
+        let name: Option<String> =
+            sqlx::query_scalar("SELECT display_name FROM people WHERE id = ?")
+                .bind(person_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(Error::Database)?;
+        if let Some(name) = name.filter(|n| !n.trim().is_empty()) {
+            return Ok(name);
+        }
+    }
+    Ok(trimmed.to_string())
 }
 
 pub async fn list_mr_reviews(

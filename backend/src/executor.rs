@@ -4,7 +4,8 @@ use std::time::{Duration, Instant};
 
 use sqlx::SqlitePool;
 use tokio::io::AsyncReadExt;
-use tokio::process::{ChildStderr, Command};
+use tokio::process::{ChildStderr, ChildStdout, Command};
+use tokio::task::JoinHandle;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
@@ -77,15 +78,15 @@ pub async fn execute_weekly_batch(
     command.stdout(Stdio::null()).stderr(Stdio::piped());
 
     let mut child = command.spawn().map_err(Error::Io)?;
-    let mut stderr = child.stderr.take();
+    let stderr_task = spawn_stderr_drain(child.stderr.take());
     let wait_outcome = wait_with_cancel(&mut child, timeout_sec, &cancel).await;
 
     let duration_sec = started.elapsed().as_secs() as i64;
-    // Kill before draining stderr so timeout/cancel is not blocked on a still-running child.
+    // Kill before awaiting drain so timeout/cancel is not blocked on a still-running child.
     if !matches!(wait_outcome, WaitOutcome::Exited(_)) {
         kill_process_tree(&mut child).await;
     }
-    let stderr_text = read_child_stderr(&mut stderr).await;
+    let stderr_text = join_drain(stderr_task).await;
 
     match wait_outcome {
         WaitOutcome::Exited(Ok(status)) if status.success() => {
@@ -154,20 +155,21 @@ pub async fn execute_mr_review(
         }
     };
 
-    let mut stdout = child.stdout.take();
-    let mut stderr = child.stderr.take();
+    // Drain pipes while waiting. If we only read after wait(), a chatty
+    // stream-json agent fills the ~64KiB pipe buffer and blocks forever
+    // (classic deadlock); wall timeout then looks like "agent too slow".
+    let stdout_task = spawn_stdout_drain(child.stdout.take());
+    let stderr_task = spawn_stderr_drain(child.stderr.take());
     let wait_started = Instant::now();
     let wait_outcome = wait_with_cancel(&mut child, timeout_sec, &cancel).await;
     let wait_ms = wait_started.elapsed().as_millis() as u64;
 
     let drain_started = Instant::now();
-    // On timeout/cancel, kill before draining pipes — otherwise read_to_end blocks until
-    // the child exits and the configured timeout/cancellation is effectively ignored.
     if !matches!(wait_outcome, WaitOutcome::Exited(_)) {
         kill_process_tree(&mut child).await;
     }
-    let stdout_text = read_child_stdout(&mut stdout).await;
-    let stderr_text = read_child_stderr(&mut stderr).await;
+    let stdout_text = join_drain(stdout_task).await;
+    let stderr_text = join_drain(stderr_task).await;
     let drain_ms = drain_started.elapsed().as_millis() as u64;
 
     let duration_sec = started.elapsed().as_secs() as i64;
@@ -237,21 +239,21 @@ pub async fn execute_agent_turn(
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let mut child = command.spawn().map_err(Error::Io)?;
-    let mut stdout = child.stdout.take();
-    let mut stderr = child.stderr.take();
+    let stdout_task = spawn_stdout_drain(child.stdout.take());
+    let stderr_task = spawn_stderr_drain(child.stderr.take());
 
     let status = tokio::select! {
         _ = cancel.cancelled() => {
             kill_process_tree(&mut child).await;
-            let _ = read_child_stdout(&mut stdout).await;
-            let _ = read_child_stderr(&mut stderr).await;
+            let _ = join_drain(stdout_task).await;
+            let _ = join_drain(stderr_task).await;
             return Err(Error::AgentFailed(SHUTDOWN_INTERRUPTED_ERROR.to_string()));
         }
         status = child.wait() => status.map_err(Error::Io)?,
     };
 
-    let stdout_text = read_child_stdout(&mut stdout).await;
-    let stderr_text = read_child_stderr(&mut stderr).await;
+    let stdout_text = join_drain(stdout_task).await;
+    let stderr_text = join_drain(stderr_task).await;
 
     if !status.success() {
         return Err(Error::AgentFailed(format_executor_failure(
@@ -364,26 +366,34 @@ async fn kill_process_tree(child: &mut tokio::process::Child) {
     let _ = child.kill().await;
 }
 
-async fn read_child_stderr(stderr: &mut Option<ChildStderr>) -> String {
-    let Some(stderr) = stderr else {
-        return String::new();
-    };
-    let mut buf = Vec::new();
-    if stderr.read_to_end(&mut buf).await.is_err() {
-        return String::new();
-    }
-    String::from_utf8_lossy(&buf).into_owned()
+fn spawn_stdout_drain(stdout: Option<ChildStdout>) -> JoinHandle<String> {
+    tokio::spawn(async move {
+        let Some(mut stdout) = stdout else {
+            return String::new();
+        };
+        let mut buf = Vec::new();
+        if stdout.read_to_end(&mut buf).await.is_err() {
+            return String::new();
+        }
+        String::from_utf8_lossy(&buf).into_owned()
+    })
 }
 
-async fn read_child_stdout(stdout: &mut Option<tokio::process::ChildStdout>) -> String {
-    let Some(stdout) = stdout else {
-        return String::new();
-    };
-    let mut buf = Vec::new();
-    if stdout.read_to_end(&mut buf).await.is_err() {
-        return String::new();
-    }
-    String::from_utf8_lossy(&buf).into_owned()
+fn spawn_stderr_drain(stderr: Option<ChildStderr>) -> JoinHandle<String> {
+    tokio::spawn(async move {
+        let Some(mut stderr) = stderr else {
+            return String::new();
+        };
+        let mut buf = Vec::new();
+        if stderr.read_to_end(&mut buf).await.is_err() {
+            return String::new();
+        }
+        String::from_utf8_lossy(&buf).into_owned()
+    })
+}
+
+async fn join_drain(handle: JoinHandle<String>) -> String {
+    handle.await.unwrap_or_default()
 }
 
 const AUTH_FAILURE_MESSAGE: &str =
@@ -528,18 +538,19 @@ fn build_weekly_command(
     }
 
     let (workflow, contract) = weekly_skill_paths(config);
+    let prompt = base_reviewer_prompt(manifest_path);
     match config.reviewer_agent() {
         ReviewerAgent::Claude => build_claude_command(
             config,
             working_dir,
-            manifest_path,
+            &prompt,
             &[&workflow, &contract],
             true,
         ),
         ReviewerAgent::Cursor => build_cursor_command(
             config,
             working_dir,
-            manifest_path,
+            &prompt,
             &[
                 ("WORKFLOW", workflow.as_path()),
                 ("OUTPUT CONTRACT", contract.as_path()),
@@ -563,18 +574,19 @@ fn build_mr_scan_command(
     }
 
     let (workflow, contract, observation) = mr_scan_skill_paths(config);
+    let prompt = mr_scan_reviewer_prompt(manifest_path);
     match config.reviewer_agent() {
         ReviewerAgent::Claude => build_claude_command(
             config,
             working_dir,
-            manifest_path,
+            &prompt,
             &[&workflow, &contract, &observation],
             false,
         ),
         ReviewerAgent::Cursor => build_cursor_command(
             config,
             working_dir,
-            manifest_path,
+            &prompt,
             &[
                 ("WORKFLOW", workflow.as_path()),
                 ("OUTPUT CONTRACT (draft / inbox)", contract.as_path()),
@@ -715,15 +727,23 @@ fn base_reviewer_prompt(manifest_path: &Path) -> String {
     )
 }
 
+fn mr_scan_reviewer_prompt(manifest_path: &Path) -> String {
+    let manifest_str = manifest_path.display().to_string();
+    format!(
+        "Headless MR review. First Read manifest: {manifest_str}. Follow appended workflow. \
+Time-boxed: Read change_stat+change_log first; change.diff at most once (no paging); \
+then Read ≤8 key source files from the worktree; write draft_dir draft BEFORE observation; exit. \
+Non-interactive; do not ask questions; do not Glob reports/**."
+    )
+}
+
 fn build_claude_command(
     config: &AppConfig,
     working_dir: &Path,
-    manifest_path: &Path,
+    prompt: &str,
     prompt_files: &[&Path],
     disable_session_persistence: bool,
 ) -> Result<Command, Error> {
-    let prompt = base_reviewer_prompt(manifest_path);
-
     let mut command = reviewer_command("claude");
     command
         .current_dir(working_dir)
@@ -755,18 +775,18 @@ fn build_claude_command(
 fn build_cursor_command(
     config: &AppConfig,
     working_dir: &Path,
-    manifest_path: &Path,
+    prompt: &str,
     prompt_sections: &[(&str, &Path)],
 ) -> Result<Command, Error> {
-    let mut prompt = base_reviewer_prompt(manifest_path);
+    let mut full_prompt = prompt.to_string();
     for (label, path) in prompt_sections {
         let text = std::fs::read_to_string(path).map_err(Error::Io)?;
-        prompt.push_str("\n\n--- ");
-        prompt.push_str(label);
-        prompt.push_str(" ---\n");
-        prompt.push_str(&text);
+        full_prompt.push_str("\n\n--- ");
+        full_prompt.push_str(label);
+        full_prompt.push_str(" ---\n");
+        full_prompt.push_str(&text);
     }
-    let prompt = prepare_prompt_for_cli(&prompt);
+    let full_prompt = prepare_prompt_for_cli(&full_prompt);
 
     let mut command = reviewer_command("cursor-agent");
     command
@@ -777,7 +797,7 @@ fn build_cursor_command(
         .arg("--trust")
         .arg("--force");
     append_model_arg(&mut command, config);
-    command.arg(prompt);
+    command.arg(full_prompt);
 
     Ok(command)
 }
@@ -902,6 +922,14 @@ mod tests {
             joined.contains("output-contract.md"),
             "expected draft contract in append files, got: {joined}"
         );
+    }
+
+    #[test]
+    fn mr_scan_prompt_is_time_boxed() {
+        let prompt = mr_scan_reviewer_prompt(Path::new("/data/manifest.json"));
+        assert!(prompt.contains("change.diff at most once"));
+        assert!(prompt.contains("≤8 key source files"));
+        assert!(prompt.contains("draft BEFORE observation"));
     }
 
     fn test_config() -> AppConfig {

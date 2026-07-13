@@ -220,3 +220,58 @@ async fn execute_weekly_batch_still_reports_timeout_when_cancel_not_fired() {
 
     std::env::remove_var("REVIEWER_EXECUTOR");
 }
+
+fn flood_stdout_executor_path() -> std::path::PathBuf {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    if cfg!(windows) {
+        fixtures.join("flood_stdout.cmd")
+    } else {
+        fixtures.join("flood_stdout.sh")
+    }
+}
+
+/// Parent must drain stdout while waiting. Otherwise a child that writes more
+/// than the OS pipe buffer (~64KiB) blocks on write and never exits — which
+/// surfaces as SkippedTimeout even though the work already finished.
+#[tokio::test]
+async fn execute_mr_review_drains_stdout_while_waiting() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::env::set_var("DATA_ROOT_DIR", temp.path());
+    std::env::set_var("REVIEWER_EXECUTOR", flood_stdout_executor_path());
+
+    let config = reviewer_server::config::AppConfig::from_env().expect("config");
+    let working_dir = temp.path().to_path_buf();
+    let manifest_path = temp.path().join("manifest.json");
+    std::fs::write(&manifest_path, "{}").expect("write manifest");
+
+    let result = execute_mr_review(
+        &config,
+        &working_dir,
+        &manifest_path,
+        15,
+        config.reviewer_agent(),
+        CancellationToken::new(),
+    )
+    .await;
+
+    assert_eq!(
+        result.outcome,
+        ExecuteOutcome::Success,
+        "flooded stdout must not deadlock into timeout; error={:?} wait_ms={}",
+        result.error,
+        result.wait_ms
+    );
+    assert!(
+        result.stdout.len() >= 200 * 1024,
+        "expected full flooded stdout, got {} bytes",
+        result.stdout.len()
+    );
+    assert!(
+        result.wait_ms < 10_000,
+        "should finish quickly once pipes drain; wait_ms={}",
+        result.wait_ms
+    );
+
+    std::env::remove_var("REVIEWER_EXECUTOR");
+}

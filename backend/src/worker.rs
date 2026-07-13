@@ -12,11 +12,15 @@ use crate::executor::{
     execute_mr_review, execute_weekly_batch, parse_agent_session_id, summarize_agent_output,
     ExecuteOutcome,
 };
+use crate::mr_change_materials::{
+    mr_change_materials_dir, prepare_change_materials, write_stub_change_materials,
+    DEFAULT_DIFF_MAX_BYTES,
+};
 use crate::mr_reviews::{self, run_triage_script};
 use crate::runs::{
     self, eligible_mrs_path, fetch_next_queued_run_project, finalize_run_if_complete,
     finish_run_project, load_mr_poll_project, load_schedule_settings, mark_run_project_running,
-    write_mr_poll_manifest, RunProjectRow, SHUTDOWN_INTERRUPTED_ERROR,
+    write_mr_poll_manifest, ManifestChangeMaterials, RunProjectRow, SHUTDOWN_INTERRUPTED_ERROR,
 };
 use crate::summary::ingest_project_summaries;
 use crate::worktree::{provision_mr_worktree, supply_worktree, WorktreeKind};
@@ -298,6 +302,8 @@ async fn process_mr_run_project(
         None,
         None,
         Vec::new(),
+        None,
+        None,
     )
     .await
     {
@@ -513,6 +519,88 @@ async fn process_mr_run_project(
         );
 
         let stage_started = Instant::now();
+        let materials_dir = mr_change_materials_dir(
+            config.data_dir(),
+            job.run_id,
+            job.project_id,
+            eligible.mr_iid,
+        );
+        let material_paths = if config.reviewer_executor().is_some() {
+            match write_stub_change_materials(&materials_dir) {
+                Ok(paths) => paths,
+                Err(err) => {
+                    warn!(
+                        run_id = job.run_id,
+                        project = %job.name,
+                        mr_iid = eligible.mr_iid,
+                        elapsed_ms = stage_started.elapsed().as_millis() as u64,
+                        "mr stub change materials failed: {err}"
+                    );
+                    had_failure = true;
+                    continue;
+                }
+            }
+        } else if eligible.target_branch.trim().is_empty() {
+            warn!(
+                run_id = job.run_id,
+                project = %job.name,
+                mr_iid = eligible.mr_iid,
+                elapsed_ms = stage_started.elapsed().as_millis() as u64,
+                "mr change materials skipped: empty target_branch"
+            );
+            had_failure = true;
+            continue;
+        } else {
+            match prepare_change_materials(
+                &mr_worktree,
+                &eligible.target_branch,
+                &materials_dir,
+                DEFAULT_DIFF_MAX_BYTES,
+            )
+            .await
+            {
+                Ok(paths) => paths,
+                Err(err) => {
+                    warn!(
+                        run_id = job.run_id,
+                        project = %job.name,
+                        mr_iid = eligible.mr_iid,
+                        target_branch = %eligible.target_branch,
+                        elapsed_ms = stage_started.elapsed().as_millis() as u64,
+                        "mr change materials failed: {err}"
+                    );
+                    had_failure = true;
+                    continue;
+                }
+            }
+        };
+        let change_materials = ManifestChangeMaterials::from_paths(&material_paths);
+        info!(
+            run_id = job.run_id,
+            project = %job.name,
+            mr_iid = eligible.mr_iid,
+            stage = "prepare_change_materials",
+            elapsed_ms = stage_started.elapsed().as_millis() as u64,
+            diff_truncated = material_paths.diff_truncated,
+            "mr scan stage"
+        );
+
+        let stage_started = Instant::now();
+        let observation_person =
+            match mr_reviews::resolve_observation_person_folder(pool, &eligible.author_identity)
+                .await
+            {
+                Ok(name) => name,
+                Err(err) => {
+                    warn!(
+                        run_id = job.run_id,
+                        project = %job.name,
+                        mr_iid = eligible.mr_iid,
+                        "resolve observation person failed: {err}; using author_identity"
+                    );
+                    eligible.author_identity.trim().to_string()
+                }
+            };
         let manifest_path = match write_mr_poll_manifest(
             config.data_dir(),
             job.run_id,
@@ -521,6 +609,8 @@ async fn process_mr_run_project(
             None,
             Some(eligible.mr_iid),
             prior_published_reviews,
+            Some(&change_materials),
+            Some(observation_person.as_str()),
         )
         .await
         {

@@ -185,11 +185,10 @@ author_identity: gary@co.com
 
 ## 觀察片段（另檔 — 非本契約）
 
-觀察寫入 manifest `pending_dir`，**寫作規範見同目錄 `observation-guidelines.md`**。
+觀察寫作規範見 `observation-guidelines.md`。同一場次落兩處：
 
-```
-{pending_dir}/mr-{mr_iid}-round-{review_round}.md
-```
+1. `{pending_dir}/mr-{mr_iid}-round-{review_round}.md`
+2. `{person_month_md_path}`（專案層月檔追加）
 
 本檔**只約束草稿**。不要把觀察的對人／思維模式敘事寫進草稿 body。
 

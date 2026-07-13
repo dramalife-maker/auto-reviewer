@@ -76,6 +76,7 @@
       "mr_iid": 42,
       "mr_title": "feat: add cache",
       "source_branch": "feature/cache",
+      "target_branch": "main",
       "author_identity": "alice@co.com",
       "review_round": 1
     }
@@ -119,7 +120,7 @@
 **邊界**：
 - Script 只讀 GitLab（`glab`），不碰 SQLite、不呼叫 AI。
 - Script 失敗（`glab` 錯誤、JSON 解析失敗）→ 整個 `run_project` 標 `failed`，不 spawn agent。
-- Agent workflow **不得**再執行 `glab mr list` 做 MR 發現；允許對**已指定**的 `mr_iid` 執行 `glab mr diff`／`glab mr view` 取得 review 素材（這是 review 本體，非 triage）。
+- Agent workflow **不得**再執行 `glab mr list` 做 MR 發現；變更素材由 worker 預寫 `change_log`／`change_stat`／`change.diff`（基準 `origin/<target_branch>...HEAD`；**禁止** `glab mr diff` 與 agent 全量重跑 git diff）。允許對**已指定**的 `mr_iid` 執行 `glab mr view` 取得討論／描述（這是 review 本體，非 triage）。
 
 **替代方案（否決）**：維持由 agent workflow 自行 `glab mr list` 篩選。否決理由：高頻輪詢下重複 tool call 燒 token，且篩選邏輯為確定性規則，不需要 LLM 推理。
 
@@ -165,7 +166,7 @@
   - `POST /api/mr-reviews/:id/ignore` → `200`。
   - `POST /api/mr-reviews/:id/agent-turn { "message": string }` → `200 { reply, agent_session_id }`；無 session 或非 `draft` → `409`；agent 執行失敗 → `502`。
 - manifest（`mode="mr_poll"`）新增欄位對齊 `schema.md §4.3`：`draft_dir`、`pending_dir`、`reviewer_username`、`since`（可選）、`eligible_mrs_path`（triage 輸出 JSON 路徑，通常與 manifest 同目錄的 `eligible_mrs.json`）、`mr_review_skip_labels`（JSON 陣列）、`mr_review_require_label`（可選字串）。
-- triage 輸出 `eligible_mrs.json` 契約：`eligible[]` 每項含 `mr_iid`（int）、`mr_title`、`source_branch`、`author_identity`、`review_round`（1|2）；`skipped[]` 每項含 `mr_iid`、`skip_reason`。
+- triage 輸出 `eligible_mrs.json` 契約：`eligible[]` 每項含 `mr_iid`（int）、`mr_title`、`source_branch`、`target_branch`、`author_identity`、`review_round`（1|2）；`skipped[]` 每項含 `mr_iid`、`skip_reason`。
 - headless 草稿檔 frontmatter 契約：`mr_iid`（int，必填）、`mr_title`（string）、`review_round`（int，必填，1 或 2）、`author_identity`（string，MR author 的 email 或 glab username，供後端比對 `person_identities` 得出 `person_id`；比對不到則 `person_id=NULL`）。
 
 **失敗模式**：

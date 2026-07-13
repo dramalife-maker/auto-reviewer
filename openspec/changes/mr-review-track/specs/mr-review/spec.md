@@ -10,9 +10,9 @@ The script MUST:
 3. Before round/dedup logic, apply **readiness gates** from manifest: skip GitLab draft MRs; skip MRs bearing any label in `mr_review_skip_labels`; when `mr_review_require_label` is set, skip MRs that do not bear that label.
 4. Write `eligible_mrs.json` next to the manifest with `eligible[]` (MRs to review) and `skipped[]` (MRs excluded with `skip_reason`).
 
-Each `eligible[]` entry MUST include `mr_iid`, `mr_title`, `source_branch`, `author_identity`, and `review_round`.
+Each `eligible[]` entry MUST include `mr_iid`, `mr_title`, `source_branch`, `target_branch`, `author_identity`, and `review_round`.
 
-The backend MUST read `eligible[]` and spawn agent subprocesses only for those entries. When `eligible` is empty, the backend MUST mark the run project `done` without spawning any agent.
+The backend MUST read `eligible[]` and spawn agent subprocesses only for those entries, **one at a time in queue order** within the project. When `eligible` is empty, the backend MUST mark the run project `done` without spawning any agent.
 
 When the triage script exits non-zero or produces unparseable output, the backend MUST mark the run project `failed` and MUST NOT spawn agents.
 
@@ -29,7 +29,7 @@ When the triage script exits non-zero or produces unparseable output, the backen
 #### Scenario: Only eligible MRs receive agent subprocesses
 
 - **WHEN** triage writes `eligible` with MR iids 42 and 55 and `skipped` with MR iid 7
-- **THEN** exactly two agent subprocesses are spawned, scoped to iids 42 and 55
+- **THEN** exactly two agent subprocesses are spawned, scoped to iids 42 and 55, and the second starts only after the first exits
 
 #### Scenario: Draft merge request is skipped before review
 
