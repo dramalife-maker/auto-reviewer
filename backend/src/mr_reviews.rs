@@ -786,10 +786,12 @@ pub fn pending_snippet_relative_path(
 
 /// Paths (relative to `report_root`) for published MR observation snippets the weekly
 /// batch may fold into `summary.md`. When multiple rounds are published for one MR,
-/// only the latest round is included.
+/// only the latest round is included. Snippets already consumed (file deleted from
+/// `_pending/`) are omitted so they are not re-listed every week.
 pub async fn load_published_pending_snippets(
     pool: &SqlitePool,
     project_id: i64,
+    report_root: &Path,
 ) -> Result<Vec<String>, Error> {
     #[derive(sqlx::FromRow)]
     struct Row {
@@ -823,11 +825,15 @@ pub async fn load_published_pending_snippets(
             );
             continue;
         };
-        snippets.push(pending_snippet_relative_path(
+        let relative = pending_snippet_relative_path(
             &person_folder,
             row.mr_iid,
             row.review_round,
-        ));
+        );
+        if !report_root.join(&relative).is_file() {
+            continue;
+        }
+        snippets.push(relative);
     }
     Ok(snippets)
 }

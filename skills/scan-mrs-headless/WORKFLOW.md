@@ -43,7 +43,7 @@
 - 允許對**已指定的** `mr_iid` 執行 `glab mr view`（僅為討論／描述；見 §1）。
 - 允許在 `repo_path` 內 Read／Grep **diff 內出現的檔案**；**禁止** Write repo 原始碼。
 - 允許寫入：`draft_dir`（草稿）、`pending_dir` 下本場片段、`person_month_md_path`（追加本場）、以及**僅在重複模式時**追加人物層 `index.md`（見 `observation-guidelines.md`）。
-- 允許 Read：同人既有 `_pending/`／`_archived/`、本月 `YYYY-MM.md`、人物層 `reports/_people/{display_name}/`（若存在）——**僅當路徑已知**，不要 Glob 找。
+- 允許 Read：同人既有 `_pending/`、本月 `YYYY-MM.md`、人物層 `reports/_people/{display_name}/`（若存在）——**僅當路徑已知**，不要 Glob 找。
 
 ---
 

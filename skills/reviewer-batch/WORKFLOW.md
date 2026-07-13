@@ -75,8 +75,8 @@
 | 後續追蹤中仍開放、適合 1on1 的問句 | 可成為新的 `## 待確認`（遵守延續規則；勿把已能在 repo 定論的事實題寫進去） |
 | 上一輪已解／修法細節 | 最多一句帶過；不要把 ❌ 表複製進 summary |
 
-3. 寫完本次報告後，將**已消費**的片段搬移至 `{report_root}/{person}/_pending/_archived/`（若目錄不存在則建立），不要刪除。
-4. **不要** Read 或搬移未列於 `published_pending_snippets` 的 `_pending/` 檔案。
+3. 寫完本次報告後，**刪除**已消費的 `{report_root}/{person}/_pending/mr-*.md`（場次正文已在專案層 `YYYY-MM.md`；**不要**搬到 `_archived/`，也不需要 `_archived` 目錄）。
+4. **不要** Read 或刪除未列於 `published_pending_snippets` 的 `_pending/` 檔案（含仍為 draft／ignored 的片段）。
 
 ### 2.3 歷史脈絡（可選）
 
@@ -87,7 +87,7 @@ Read 若已存在：
 - `{person_report_root}/{display_name}/_notes.md` — **僅**歷史待確認（待確認清單用；**不是**長期思維模式檔）
 - `{report_root}/{person}/index.md` —（可選）本專案技術脈絡補充
 - `{report_root}/{person}/YYYY-MM.md`（`run_date` 所在月份）— **本專案**月度成長素材
-- 同人 `_pending/_archived/` 近期片段 — 判斷「是否構成重複模式」時參考
+- 同人專案層 `YYYY-MM.md`、`_pending/` 尚存片段 — 判斷「是否構成重複模式」時參考
 
 用於延續敘事、避免與過去待確認矛盾；**不要**複製整段舊文到 summary。
 
@@ -165,7 +165,7 @@ Read 若已存在：
 | 檔案 | 動作 |
 |------|------|
 | `YYYY-MM.md` | **必做**。追加本週**跨專案**成長綜合段落（引用各專案本週重點，非複製專案層月檔全文）；同月多段以 `---` 分隔 |
-| `index.md` | **稀疏**。僅當本週觀察／已消費 MR 場次與過去（`index.md`、`_archived`、月檔）構成**重複模式**或明確**成長跡象**時，才追加或修訂「長期觀察／思維模式」條目（標日期與 MR／專案作證據錨）。**單次現象不要每週改 index** |
+| `index.md` | **稀疏**。僅當本週觀察／已消費 MR 場次與過去（`index.md`、專案層月檔）構成**重複模式**或明確**成長跡象**時，才追加或修訂「長期觀察／思維模式」條目（標日期與 MR／專案作證據錨）。**單次現象不要每週改 index** |
 | `_notes.md` | **僅**將本次 summary `## 待確認` 條目追加為 `- [YYYY-MM] 問題文字`（供趨勢「歷史待確認」）。**不要**把思維模式寫進 `_notes.md` |
 
 建議 `index.md` 長期區塊形狀（可同義；初次建立時可寫標題）：
@@ -224,7 +224,7 @@ Read 若已存在：
 - [ ] 已 Read manifest.json
 - [ ] 已依 manifest `authors` 處理每位工程師（非自行 git 歸戶）
 - [ ] 已讀 `open_pending`；延續／已釐清沿用原文；未把已釐清項同時寫進待確認
-- [ ] 已消費之 `published_pending_snippets`：濃縮折入 report／summary（思維模式→成長面向）；未整段貼上；已搬 `_archived/`
+- [ ] 已消費之 `published_pending_snippets`：濃縮折入 report／summary（思維模式→成長面向）；未整段貼上；已**刪除**對應 `_pending` 檔（不建 `_archived`）
 - [ ] 每份 `summary.md` frontmatter 與四個 heading 正確（含可空的 `## 已釐清`）
 - [ ] 路徑均在 `{report_root}/{person}/{run_date}/`
 - [ ] 已更新專案層與人物層 `YYYY-MM.md`（若有產 report）

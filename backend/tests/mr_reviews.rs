@@ -579,7 +579,12 @@ async fn published_pending_snippets_only_include_published_reviews() {
         .expect("update status");
     }
 
-    let snippets = mr_reviews::load_published_pending_snippets(&pool, project_id)
+    let report_root = temp.path().join("reports/alpha");
+    let pending = report_root.join("Alice Chen/_pending");
+    std::fs::create_dir_all(&pending).expect("pending dir");
+    std::fs::write(pending.join("mr-10-round-1.md"), "obs\n").expect("snippet");
+
+    let snippets = mr_reviews::load_published_pending_snippets(&pool, project_id, &report_root)
         .await
         .expect("snippets");
     assert_eq!(snippets.len(), 1);
@@ -587,6 +592,13 @@ async fn published_pending_snippets_only_include_published_reviews() {
         snippets[0],
         "Alice Chen/_pending/mr-10-round-1.md"
     );
+
+    // Consumed (deleted) snippets must not be re-listed.
+    std::fs::remove_file(pending.join("mr-10-round-1.md")).expect("delete");
+    let after = mr_reviews::load_published_pending_snippets(&pool, project_id, &report_root)
+        .await
+        .expect("snippets after delete");
+    assert!(after.is_empty());
 }
 
 #[tokio::test]
@@ -638,6 +650,12 @@ async fn weekly_manifest_lists_published_pending_snippets() {
         .execute(&pool)
         .await
         .expect("publish");
+
+    let pending = temp
+        .path()
+        .join("reports/alpha/Alice Chen/_pending");
+    std::fs::create_dir_all(&pending).expect("pending dir");
+    std::fs::write(pending.join("mr-42-round-1.md"), "obs\n").expect("snippet");
 
     let project = sqlx::query_as::<_, reviewer_server::runs::ProjectRow>(
         "SELECT id, name, repo_path FROM projects WHERE id = ?",

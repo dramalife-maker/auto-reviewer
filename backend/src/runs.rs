@@ -785,9 +785,8 @@ pub async fn write_weekly_manifest(
     let since = (Utc::now() - chrono::Duration::days(7))
         .format("%Y-%m-%d")
         .to_string();
-    let report_root = data_root
-        .join("reports")
-        .join(&project.name)
+    let report_root_path = data_root.join("reports").join(&project.name);
+    let report_root = report_root_path
         .display()
         .to_string()
         .replace('\\', "/");
@@ -807,8 +806,12 @@ pub async fn write_weekly_manifest(
     )
     .await?;
 
-    let published_pending_snippets =
-        crate::mr_reviews::load_published_pending_snippets(pool, project.id).await?;
+    let published_pending_snippets = crate::mr_reviews::load_published_pending_snippets(
+        pool,
+        project.id,
+        &report_root_path,
+    )
+    .await?;
     let open_pending = load_open_pending_for_project(pool, project.id).await?;
 
     let manifest = RunManifest {

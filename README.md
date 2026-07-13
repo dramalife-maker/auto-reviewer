@@ -102,21 +102,41 @@ curl http://127.0.0.1:8080/health
 
 首次啟動會建立 `$DATA_ROOT_DIR/reviewer.db`、執行 migration，並建立 `repos/`、`reports/` 目錄。
 
-報告目錄佈局：
+### 報告目錄（`reports/`）意涵
+
+`$DATA_ROOT_DIR/reports/` 是**以人為中心的檔案庫**（SQLite 只存路徑與狀態；趨勢／週報正文讀檔）。分成兩層，目錄名中的 `{person}` = `people.display_name`：
 
 ```text
 $DATA_ROOT_DIR/reports/
-  _people/{display_name}/     # 跨專案長期觀察（趨勢 Tab）
-    index.md
-    YYYY-MM.md                # 跨專案月度成長軌跡
-    _notes.md
-  {project_name}/{display_name}/
-    YYYY-MM.md                # 本專案月度成長（workflow 每週追加）
-    {YYYY-MM-DD}/
-      summary.md              # 本週 Tab
+  _people/{person}/                    # 人物層（跨專案）← 趨勢 Tab 讀這裡
+    index.md                           # 長期觀察／思維模式（稀疏；重複模式才追加）
+    YYYY-MM.md                         # 跨專案月度成長綜合
+    _notes.md                          # 歷史待確認（僅待確認文字，不是思維模式）
+
+  {project}/{person}/                  # 專案層（單一 repo）
+    YYYY-MM.md                         # 本專案當月流水（MR 場次 + 週報成長段同檔）
+    _pending/                          # MR 觀察佇列（發佈後待週報折入；折入後刪除）
+      mr-{iid}-round-{n}.md
+    index.md                           # （可選）本專案技術脈絡
+    {YYYY-MM-DD}/                      # 單次週報產出
+      summary.md                       # 精簡版（DB ingest + 本週 Tab）
+      report.md                        # 完整版
 ```
 
-舊筆記遷移見 [`docs/idea/migration-person-observations.md`](docs/idea/migration-person-observations.md)。
+| 路徑 | 誰寫 | 意涵 |
+|------|------|------|
+| `_people/…` | 週報 `reviewer-batch`（人物層）；MR 僅在**重複模式**時可補 `index.md` | 跨專案視角；趨勢 API 只讀此層 |
+| `{project}/{person}/YYYY-MM.md` | **兩軌都寫**：MR `scan-mrs-headless` 追加「架構審查」場次節；週報追加成長綜合段（勿重貼已有 MR 場次） | 本 repo 當月人讀流水帳（長期留底） |
+| `{project}/{person}/_pending/mr-*.md` | 僅 MR 軌道（與月檔場次**同正文**另存一份） | 週報折入佇列；**僅 published 才消費**；折入後**刪除**（不需 `_archived`） |
+| `{YYYY-MM-DD}/summary.md` | 僅週報 | 本週卡片／待確認 ingest 來源 |
+
+**兩軌怎麼接：**
+
+1. MR 掃描 → 草稿進收件匣（`runs/…/drafts/`，不在 `reports/`）＋觀察寫 `_pending` **與** 專案層 `YYYY-MM.md`
+2. 管理者發佈 MR review → 該筆 `_pending` 才進入週報的 `published_pending_snippets`（檔案仍在才列入）
+3. 週報跑完 → 折入 summary／report，**刪除**已消費 `_pending` 檔，並更新專案層／人物層月檔與（必要時）`_people/index.md`
+
+舊筆記遷移見 [`docs/idea/migration-person-observations.md`](docs/idea/migration-person-observations.md)；完整 schema 見 [`docs/idea/schema.md`](docs/idea/schema.md) §0。
 
 ### 4. 啟動前端（開發）
 
