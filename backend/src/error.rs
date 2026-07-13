@@ -38,6 +38,11 @@ pub enum Error {
     SummaryParse(String),
     #[error("mr review conflict")]
     MrReviewConflict,
+    #[error("draft base hash conflict")]
+    DraftBaseHashConflict {
+        draft_body: String,
+        draft_hash: String,
+    },
     #[error("agent failed: {0}")]
     AgentFailed(String),
     #[error("pending item status must be 'resolved'")]

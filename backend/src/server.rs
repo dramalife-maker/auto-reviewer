@@ -102,6 +102,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/mr-reviews/{id}", patch(update_mr_review))
         .route("/api/mr-reviews/{id}/publish", post(publish_mr_review))
         .route("/api/mr-reviews/{id}/ignore", post(ignore_mr_review))
+        .route("/api/mr-reviews/{id}/restore", post(restore_mr_review))
         .route("/api/mr-reviews/{id}/agent-turn", post(agent_turn_mr_review))
         .with_state(state);
 
@@ -617,6 +618,8 @@ async fn list_mr_reviews(
 #[derive(Deserialize)]
 struct UpdateMrReviewRequest {
     draft_body: String,
+    #[serde(default)]
+    base_hash: Option<String>,
 }
 
 async fn update_mr_review(
@@ -624,9 +627,14 @@ async fn update_mr_review(
     Path(id): Path<i64>,
     Json(body): Json<UpdateMrReviewRequest>,
 ) -> Result<StatusCode, ApiError> {
-    mr_reviews::update_draft(&state.pool, id, &body.draft_body)
-        .await
-        .map_err(ApiError::from)?;
+    mr_reviews::update_draft(
+        &state.pool,
+        id,
+        &body.draft_body,
+        body.base_hash.as_deref(),
+    )
+    .await
+    .map_err(ApiError::from)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -645,6 +653,16 @@ async fn ignore_mr_review(
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
     mr_reviews::ignore(&state.pool, id)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn restore_mr_review(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    mr_reviews::restore(&state.pool, id)
         .await
         .map_err(ApiError::from)?;
     Ok(StatusCode::NO_CONTENT)
@@ -698,6 +716,20 @@ impl From<Error> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        if let Error::DraftBaseHashConflict {
+            draft_body,
+            draft_hash,
+        } = &self.0
+        {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "draft_body": draft_body,
+                    "draft_hash": draft_hash,
+                })),
+            )
+                .into_response();
+        }
         let status = match &self.0 {
             Error::RunConflict
             | Error::DuplicateDisplayName
@@ -705,6 +737,7 @@ impl IntoResponse for ApiError {
             | Error::DuplicateProjectName
             | Error::IdentityConflict
             | Error::MrReviewConflict
+            | Error::DraftBaseHashConflict { .. }
             | Error::PendingItemAlreadyResolved => StatusCode::CONFLICT,
             Error::UnsupportedRunTrigger(_)
             | Error::InvalidPersonName

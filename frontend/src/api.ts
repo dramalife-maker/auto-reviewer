@@ -27,11 +27,22 @@ import { apiUrl } from './config'
 
 export class ApiError extends Error {
   readonly status: number
+  readonly body: string
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, body = '') {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    this.body = body
+  }
+
+  parseJson(): unknown | null {
+    if (!this.body) return null
+    try {
+      return JSON.parse(this.body) as unknown
+    } catch {
+      return null
+    }
   }
 }
 
@@ -39,7 +50,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(apiUrl(path), init)
   if (!response.ok) {
     const text = await response.text()
-    throw new ApiError(text || response.statusText, response.status)
+    throw new ApiError(text || response.statusText, response.status, text)
   }
   if (response.status === 204) {
     return undefined as T
@@ -190,11 +201,18 @@ export function fetchMrReviews(status?: MrReviewStatus): Promise<MrReviewItem[]>
   return request(`/api/mr-reviews${query}`)
 }
 
-export function updateMrReview(id: number, draftBody: string): Promise<void> {
+export function updateMrReview(
+  id: number,
+  draftBody: string,
+  baseHash?: string,
+): Promise<void> {
   return request(`/api/mr-reviews/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ draft_body: draftBody }),
+    body: JSON.stringify({
+      draft_body: draftBody,
+      ...(baseHash !== undefined ? { base_hash: baseHash } : {}),
+    }),
   })
 }
 
@@ -204,6 +222,10 @@ export function publishMrReview(id: number): Promise<MrReviewPublishResponse> {
 
 export function ignoreMrReview(id: number): Promise<void> {
   return request(`/api/mr-reviews/${id}/ignore`, { method: 'POST' })
+}
+
+export function restoreMrReview(id: number): Promise<void> {
+  return request(`/api/mr-reviews/${id}/restore`, { method: 'POST' })
 }
 
 export function agentTurnMrReview(

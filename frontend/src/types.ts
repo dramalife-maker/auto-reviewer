@@ -291,6 +291,13 @@ export interface DashboardResponse {
 
 export type MrReviewStatus = 'draft' | 'published' | 'ignored'
 
+export interface MrReviewChatMessage {
+  id: number
+  role: 'user' | 'assistant'
+  content: string
+  created_at: string
+}
+
 export interface MrReviewItem {
   id: number
   project_id: number
@@ -302,6 +309,8 @@ export interface MrReviewItem {
   review_round: number
   status: MrReviewStatus
   draft_body: string
+  draft_hash: string
+  chat_messages: MrReviewChatMessage[]
   agent_session_id: string | null
   reviewer_agent: string
   created_at: string
@@ -315,4 +324,11 @@ export interface MrReviewPublishResponse {
 export interface MrReviewAgentTurnResponse {
   reply: string
   agent_session_id: string
+  draft_body: string
+  draft_hash: string
+}
+
+export interface MrReviewDraftConflict {
+  draft_body: string
+  draft_hash: string
 }

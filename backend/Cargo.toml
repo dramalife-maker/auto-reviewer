@@ -20,6 +20,7 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 which = "8.0.4"
+sha2 = "0.10"
 
 [dev-dependencies]
 http-body-util = "0.1"

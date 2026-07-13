@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
@@ -55,6 +56,14 @@ pub struct InboxSkippedEligible {
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct ChatMessage {
+    pub id: i64,
+    pub role: String,
+    pub content: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct MrReviewListItem {
     pub id: i64,
     pub project_id: i64,
@@ -66,6 +75,8 @@ pub struct MrReviewListItem {
     pub review_round: i64,
     pub status: String,
     pub draft_body: String,
+    pub draft_hash: String,
+    pub chat_messages: Vec<ChatMessage>,
     pub agent_session_id: Option<String>,
     pub reviewer_agent: String,
     pub created_at: String,
@@ -136,6 +147,14 @@ pub async fn load_prior_published_reviews(
 pub struct AgentTurnResponse {
     pub reply: String,
     pub agent_session_id: String,
+    pub draft_body: String,
+    pub draft_hash: String,
+}
+
+/// SHA-256 hex digest of strip-frontmatter draft body (stable, lowercase).
+pub fn draft_body_hash(body: &str) -> String {
+    let digest = Sha256::digest(body.as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 pub fn triage_script_path(config: &AppConfig) -> PathBuf {
@@ -567,6 +586,9 @@ pub async fn list_mr_reviews(
     let mut items = Vec::with_capacity(rows.len());
     for row in rows {
         let raw = std::fs::read_to_string(&row.draft_md_path).unwrap_or_default();
+        let draft_body = strip_draft_frontmatter(&raw).to_string();
+        let draft_hash = draft_body_hash(&draft_body);
+        let chat_messages = load_chat_messages(pool, row.id).await?;
         items.push(MrReviewListItem {
             id: row.id,
             project_id: row.project_id,
@@ -577,13 +599,57 @@ pub async fn list_mr_reviews(
             mr_title: row.mr_title,
             review_round: row.review_round,
             status: row.status,
-            draft_body: strip_draft_frontmatter(&raw).to_string(),
+            draft_body,
+            draft_hash,
+            chat_messages,
             agent_session_id: row.agent_session_id,
             reviewer_agent: row.reviewer_agent,
             created_at: row.created_at,
         });
     }
     Ok(items)
+}
+
+async fn load_chat_messages(pool: &SqlitePool, mr_review_id: i64) -> Result<Vec<ChatMessage>, Error> {
+    sqlx::query_as::<_, ChatMessage>(
+        r#"
+        SELECT id, role, content, created_at
+        FROM mr_review_chat_messages
+        WHERE mr_review_id = ?
+        ORDER BY id ASC
+        "#,
+    )
+    .bind(mr_review_id)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)
+}
+
+async fn insert_chat_turn(
+    pool: &SqlitePool,
+    mr_review_id: i64,
+    user_content: &str,
+    assistant_content: &str,
+) -> Result<(), Error> {
+    let mut tx = pool.begin().await.map_err(Error::Database)?;
+    sqlx::query(
+        "INSERT INTO mr_review_chat_messages (mr_review_id, role, content) VALUES (?, 'user', ?)",
+    )
+    .bind(mr_review_id)
+    .bind(user_content)
+    .execute(&mut *tx)
+    .await
+    .map_err(Error::Database)?;
+    sqlx::query(
+        "INSERT INTO mr_review_chat_messages (mr_review_id, role, content) VALUES (?, 'assistant', ?)",
+    )
+    .bind(mr_review_id)
+    .bind(assistant_content)
+    .execute(&mut *tx)
+    .await
+    .map_err(Error::Database)?;
+    tx.commit().await.map_err(Error::Database)?;
+    Ok(())
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -633,13 +699,29 @@ async fn load_mr_review(pool: &SqlitePool, id: i64) -> Result<MrReviewDetailRow,
     .ok_or(Error::NotFound)
 }
 
-pub async fn update_draft(pool: &SqlitePool, id: i64, body: &str) -> Result<(), Error> {
+pub async fn update_draft(
+    pool: &SqlitePool,
+    id: i64,
+    body: &str,
+    base_hash: Option<&str>,
+) -> Result<(), Error> {
     let row = load_mr_review(pool, id).await?;
     if row.status != "draft" {
         return Err(Error::MrReviewConflict);
     }
 
     let existing = std::fs::read_to_string(&row.draft_md_path).unwrap_or_default();
+    let current_body = strip_draft_frontmatter(&existing).to_string();
+    let current_hash = draft_body_hash(&current_body);
+    if let Some(expected) = base_hash {
+        if expected != current_hash {
+            return Err(Error::DraftBaseHashConflict {
+                draft_body: current_body,
+                draft_hash: current_hash,
+            });
+        }
+    }
+
     let frontmatter = parse_draft_frontmatter(&existing).unwrap_or(DraftFrontmatter {
         mr_iid: row.mr_iid,
         mr_title: row.mr_title.clone(),
@@ -715,6 +797,22 @@ pub async fn ignore(pool: &SqlitePool, id: i64) -> Result<(), Error> {
     Ok(())
 }
 
+/// Restore an ignored review back to draft. Published reviews cannot be restored.
+pub async fn restore(pool: &SqlitePool, id: i64) -> Result<(), Error> {
+    let row = load_mr_review(pool, id).await?;
+    if row.status != "ignored" {
+        return Err(Error::MrReviewConflict);
+    }
+    sqlx::query(
+        "UPDATE mr_reviews SET status = 'draft', updated_at = datetime('now') WHERE id = ?",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
 pub async fn agent_turn(
     pool: &SqlitePool,
     config: &AppConfig,
@@ -746,9 +844,17 @@ pub async fn agent_turn(
         .await
         .map_err(Error::Database)?;
 
+    insert_chat_turn(pool, id, message, &reply).await?;
+
+    let raw = std::fs::read_to_string(&row.draft_md_path).unwrap_or_default();
+    let draft_body = strip_draft_frontmatter(&raw).to_string();
+    let draft_hash = draft_body_hash(&draft_body);
+
     Ok(AgentTurnResponse {
         reply,
         agent_session_id: session_id,
+        draft_body,
+        draft_hash,
     })
 }
 
