@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 
 import { fetchRun, fetchRuns } from '../api'
@@ -14,6 +14,8 @@ import {
 } from '../lib/format'
 import type { RunListItem, RunStatus, SkipSummary } from '../types'
 
+const AUTO_REFRESH_SEC = 60
+
 export function RunsPage() {
   const navigate = useNavigate()
   const params = useParams()
@@ -24,58 +26,90 @@ export function RunsPage() {
   const [selectedRunId, setSelectedRunId] = useState<number | null>(routeRunId)
   const [selectedRun, setSelectedRun] = useState<RunStatus | null>(null)
   const [loading, setLoading] = useState(true)
-
-  const loadRuns = useCallback(async () => {
-    setLoading(true)
-    try {
-      const response = await fetchRuns({ limit: 50 })
-      setRuns(response.runs)
-      setTotal(response.total)
-      setSelectedRunId((current) => current ?? routeRunId ?? response.runs[0]?.id ?? null)
-    } catch (error) {
-      setRuns([])
-      setTotal(0)
-      toast.show(error instanceof Error ? error.message : '無法載入執行紀錄', true)
-    } finally {
-      setLoading(false)
-    }
-  }, [toast, routeRunId])
+  const [secondsLeft, setSecondsLeft] = useState(AUTO_REFRESH_SEC)
+  const selectedRunIdRef = useRef(selectedRunId)
 
   useEffect(() => {
-    void loadRuns()
+    selectedRunIdRef.current = selectedRunId
+  }, [selectedRunId])
+
+  const loadRuns = useCallback(
+    async (isInitial: boolean) => {
+      if (isInitial) setLoading(true)
+      try {
+        const response = await fetchRuns({ limit: 50 })
+        setRuns(response.runs)
+        setTotal(response.total)
+        setSelectedRunId((current) => current ?? routeRunId ?? response.runs[0]?.id ?? null)
+      } catch (error) {
+        if (isInitial) {
+          setRuns([])
+          setTotal(0)
+          toast.show(error instanceof Error ? error.message : '無法載入執行紀錄', true)
+        }
+      } finally {
+        if (isInitial) setLoading(false)
+      }
+    },
+    [toast, routeRunId],
+  )
+
+  const loadDetail = useCallback(
+    async (isInitial: boolean) => {
+      const runId = selectedRunIdRef.current
+      if (runId === null) return
+      try {
+        const run = await fetchRun(runId)
+        if (selectedRunIdRef.current === runId) {
+          setSelectedRun(run)
+        }
+      } catch (error) {
+        if (isInitial && selectedRunIdRef.current === runId) {
+          setSelectedRun(null)
+          toast.show(error instanceof Error ? error.message : `無法載入 Run #${runId}`, true)
+        }
+      }
+    },
+    [toast],
+  )
+
+  const refreshNow = useCallback(() => {
+    void loadRuns(false)
+    void loadDetail(false)
+    setSecondsLeft(AUTO_REFRESH_SEC)
+  }, [loadRuns, loadDetail])
+
+  useEffect(() => {
+    void loadRuns(true)
   }, [loadRuns])
-
-  useEffect(() => {
-    if (routeRunId !== null && Number.isFinite(routeRunId)) {
-      setSelectedRunId(routeRunId)
-    }
-  }, [routeRunId])
 
   useEffect(() => {
     if (selectedRunId === null) {
       setSelectedRun(null)
       return
     }
+    void loadDetail(true)
+  }, [loadDetail, selectedRunId])
 
-    let cancelled = false
-    async function loadDetail() {
-      try {
-        const run = await fetchRun(selectedRunId!)
-        if (!cancelled) {
-          setSelectedRun(run)
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setSecondsLeft((current) => {
+        if (current <= 1) {
+          void loadRuns(false)
+          void loadDetail(false)
+          return AUTO_REFRESH_SEC
         }
-      } catch (error) {
-        if (!cancelled) {
-          setSelectedRun(null)
-          toast.show(error instanceof Error ? error.message : `無法載入 Run #${selectedRunId}`, true)
-        }
-      }
+        return current - 1
+      })
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [loadRuns, loadDetail])
+
+  useEffect(() => {
+    if (routeRunId !== null && Number.isFinite(routeRunId)) {
+      setSelectedRunId(routeRunId)
     }
-    void loadDetail()
-    return () => {
-      cancelled = true
-    }
-  }, [toast, selectedRunId])
+  }, [routeRunId])
 
   const subtitle = useMemo(
     () => `顯示最近 ${runs.length}／共 ${total} 筆 · 依開始時間新到舊`,
@@ -89,9 +123,21 @@ export function RunsPage() {
 
   return (
     <div className="mx-auto flex max-w-[1280px] flex-col gap-5">
-      <header>
-        <h1 className="text-[28px] font-bold tracking-tight text-ink">執行紀錄</h1>
-        <p className="mt-1 text-[13.5px] text-ink-muted">{subtitle}</p>
+      <header className="flex items-center justify-between gap-3">
+        <div>
+          <h1 className="text-[28px] font-bold tracking-tight text-ink">執行紀錄</h1>
+          <p className="mt-1 text-[13.5px] text-ink-muted">{subtitle}</p>
+        </div>
+        <div className="flex items-center gap-2 text-[13px] text-ink-muted">
+          <span>{secondsLeft}s 後自動刷新</span>
+          <button
+            type="button"
+            onClick={refreshNow}
+            className="rounded-md border border-border px-3 py-1.5 text-[13px] font-medium text-ink transition hover:bg-page"
+          >
+            立即刷新
+          </button>
+        </div>
       </header>
 
       <div className="grid h-[620px] grid-cols-[300px_1fr] overflow-hidden rounded-xl border border-border bg-surface">
