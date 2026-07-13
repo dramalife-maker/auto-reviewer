@@ -4,6 +4,7 @@ use chrono::{Datelike, Duration, FixedOffset, NaiveDateTime, NaiveTime, Utc, Wee
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tokio_cron_scheduler::{Job, JobScheduler};
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use crate::runs::{create_mr_poll_run, create_scheduled_run};
@@ -54,6 +55,24 @@ pub async fn trigger_scheduled_run(pool: &SqlitePool) -> Result<Option<i64>, Err
     }
 }
 
+/// Cancellation-aware wrapper the weekly cron job callback delegates to.
+/// Exists as a standalone function so the "no enqueue after cancel" guard
+/// is unit-testable without waiting on real cron timing.
+pub async fn trigger_scheduled_run_unless_cancelled(
+    pool: &SqlitePool,
+    worker: &RunWorker,
+    cancel: &CancellationToken,
+) {
+    if cancel.is_cancelled() {
+        return;
+    }
+    match trigger_scheduled_run(pool).await {
+        Ok(Some(_run_id)) => worker.wake(),
+        Ok(None) => {}
+        Err(err) => error!("scheduled run failed: {err}"),
+    }
+}
+
 pub async fn trigger_mr_poll_run(pool: &SqlitePool) -> Result<Option<i64>, Error> {
     let config = load_schedule_config(pool).await?;
     if config.mr_poll_interval_min <= 0 {
@@ -67,10 +86,31 @@ pub async fn trigger_mr_poll_run(pool: &SqlitePool) -> Result<Option<i64>, Error
     }
 }
 
-pub async fn start_scheduler(pool: SqlitePool, worker: Arc<RunWorker>) -> Result<(), Error> {
+/// Cancellation-aware wrapper the mr-poll cron job callback delegates to.
+/// See [`trigger_scheduled_run_unless_cancelled`].
+pub async fn trigger_mr_poll_run_unless_cancelled(
+    pool: &SqlitePool,
+    worker: &RunWorker,
+    cancel: &CancellationToken,
+) {
+    if cancel.is_cancelled() {
+        return;
+    }
+    match trigger_mr_poll_run(pool).await {
+        Ok(Some(_run_id)) => worker.wake(),
+        Ok(None) => {}
+        Err(err) => error!("mr poll run failed: {err}"),
+    }
+}
+
+pub async fn start_scheduler(
+    pool: SqlitePool,
+    worker: Arc<RunWorker>,
+    cancel: CancellationToken,
+) -> Result<(), Error> {
     let config = load_schedule_config(&pool).await?;
     let tz = schedule_timezone(&config)?;
-    let scheduler = JobScheduler::new().await.map_err(|err| {
+    let mut scheduler = JobScheduler::new().await.map_err(|err| {
         Error::SummaryParse(format!("scheduler init: {err}"))
     })?;
 
@@ -78,16 +118,14 @@ pub async fn start_scheduler(pool: SqlitePool, worker: Arc<RunWorker>) -> Result
         let cron = build_cron_expression(&config)?;
         let job_pool = pool.clone();
         let job_worker = worker.clone();
+        let job_cancel = cancel.clone();
         scheduler
             .add(Job::new_async_tz(cron.as_str(), tz, move |_uuid, _lock| {
                 let pool = job_pool.clone();
                 let worker = job_worker.clone();
+                let cancel = job_cancel.clone();
                 Box::pin(async move {
-                    match trigger_scheduled_run(&pool).await {
-                        Ok(Some(_run_id)) => worker.wake(),
-                        Ok(None) => {}
-                        Err(err) => error!("scheduled run failed: {err}"),
-                    }
+                    trigger_scheduled_run_unless_cancelled(&pool, &worker, &cancel).await;
                 })
             })
             .map_err(|err| Error::SummaryParse(format!("scheduler job: {err}")))?)
@@ -101,12 +139,22 @@ pub async fn start_scheduler(pool: SqlitePool, worker: Arc<RunWorker>) -> Result
         info!("weekly schedule disabled; weekly cron not registered");
     }
 
-    start_mr_poll_scheduler(&scheduler, &pool, worker, &config, tz).await?;
+    start_mr_poll_scheduler(&scheduler, &pool, worker, &config, tz, cancel.clone()).await?;
 
     scheduler
         .start()
         .await
         .map_err(|err| Error::SummaryParse(format!("scheduler start: {err}")))?;
+
+    // Stop the cron scheduler from firing new jobs once shutdown begins.
+    // `JobScheduler` is not `Send + Sync`-shared here, so the shutdown call
+    // is driven from a dedicated task that owns it for its remaining life.
+    tokio::spawn(async move {
+        cancel.cancelled().await;
+        if let Err(err) = scheduler.shutdown().await {
+            error!("scheduler shutdown error: {err}");
+        }
+    });
 
     Ok(())
 }
@@ -117,6 +165,7 @@ async fn start_mr_poll_scheduler(
     worker: Arc<RunWorker>,
     config: &ScheduleConfigRow,
     tz: FixedOffset,
+    cancel: CancellationToken,
 ) -> Result<(), Error> {
     if config.mr_poll_interval_min <= 0 {
         info!("mr poll disabled (mr_poll_interval_min <= 0)");
@@ -130,12 +179,9 @@ async fn start_mr_poll_scheduler(
         .add(Job::new_async_tz(cron.as_str(), tz, move |_uuid, _lock| {
             let pool = job_pool.clone();
             let worker = job_worker.clone();
+            let cancel = cancel.clone();
             Box::pin(async move {
-                match trigger_mr_poll_run(&pool).await {
-                    Ok(Some(_run_id)) => worker.wake(),
-                    Ok(None) => {}
-                    Err(err) => error!("mr poll run failed: {err}"),
-                }
+                trigger_mr_poll_run_unless_cancelled(&pool, &worker, &cancel).await;
             })
         })
         .map_err(|err| Error::SummaryParse(format!("mr poll scheduler job: {err}")))?)

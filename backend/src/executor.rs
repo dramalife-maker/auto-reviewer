@@ -6,10 +6,39 @@ use sqlx::SqlitePool;
 use tokio::io::AsyncReadExt;
 use tokio::process::{ChildStderr, Command};
 use tokio::time;
+use tokio_util::sync::CancellationToken;
 
 use crate::config::{AppConfig, ReviewerAgent};
-use crate::runs::{ProjectRow, write_weekly_manifest};
+use crate::runs::{ProjectRow, write_weekly_manifest, SHUTDOWN_INTERRUPTED_ERROR};
 use crate::Error;
+
+/// The result of racing a child process wait against timeout and shutdown
+/// cancellation.
+enum WaitOutcome {
+    Exited(std::io::Result<std::process::ExitStatus>),
+    TimedOut,
+    Cancelled,
+}
+
+/// Race a child's `wait()` against a timeout and a shutdown cancellation
+/// token. Cancellation and timeout are mutually exclusive outcomes — if the
+/// token fires first, the result is `Cancelled` even if the timeout would
+/// also have elapsed around the same moment.
+async fn wait_with_cancel(
+    child: &mut tokio::process::Child,
+    timeout_sec: u64,
+    cancel: &CancellationToken,
+) -> WaitOutcome {
+    tokio::select! {
+        _ = cancel.cancelled() => WaitOutcome::Cancelled,
+        result = time::timeout(Duration::from_secs(timeout_sec), child.wait()) => {
+            match result {
+                Ok(status) => WaitOutcome::Exited(status),
+                Err(_) => WaitOutcome::TimedOut,
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecuteOutcome {
@@ -21,8 +50,13 @@ pub enum ExecuteOutcome {
 pub struct MrReviewExecuteResult {
     pub outcome: ExecuteOutcome,
     pub duration_sec: i64,
+    /// Wall time spent waiting for the child (until exit or timeout).
+    pub wait_ms: u64,
+    /// Time spent killing (on timeout) + draining stdout/stderr pipes.
+    pub drain_ms: u64,
     pub error: Option<String>,
     pub stdout: String,
+    pub stderr: String,
 }
 
 pub async fn execute_weekly_batch(
@@ -32,6 +66,7 @@ pub async fn execute_weekly_batch(
     project: &ProjectRow,
     working_dir: &Path,
     timeout_sec: u64,
+    cancel: CancellationToken,
 ) -> Result<(ExecuteOutcome, i64, Option<String>), Error> {
     let working_dir_str = working_dir.display().to_string();
     let manifest_path =
@@ -43,23 +78,25 @@ pub async fn execute_weekly_batch(
 
     let mut child = command.spawn().map_err(Error::Io)?;
     let mut stderr = child.stderr.take();
-    let wait_result = time::timeout(Duration::from_secs(timeout_sec), child.wait()).await;
+    let wait_outcome = wait_with_cancel(&mut child, timeout_sec, &cancel).await;
 
     let duration_sec = started.elapsed().as_secs() as i64;
-    // Kill before draining stderr so timeout is not blocked on a still-running child.
-    if wait_result.is_err() {
+    // Kill before draining stderr so timeout/cancel is not blocked on a still-running child.
+    if !matches!(wait_outcome, WaitOutcome::Exited(_)) {
         kill_process_tree(&mut child).await;
     }
     let stderr_text = read_child_stderr(&mut stderr).await;
 
-    match wait_result {
-        Ok(Ok(status)) if status.success() => Ok((ExecuteOutcome::Success, duration_sec, None)),
-        Ok(Ok(status)) => Ok((
+    match wait_outcome {
+        WaitOutcome::Exited(Ok(status)) if status.success() => {
+            Ok((ExecuteOutcome::Success, duration_sec, None))
+        }
+        WaitOutcome::Exited(Ok(status)) => Ok((
             ExecuteOutcome::Failed,
             duration_sec,
             Some(format_executor_failure(&stderr_text, Some(&status))),
         )),
-        Ok(Err(err)) => Ok((
+        WaitOutcome::Exited(Err(err)) => Ok((
             ExecuteOutcome::Failed,
             duration_sec,
             Some(if stderr_text.trim().is_empty() {
@@ -68,7 +105,12 @@ pub async fn execute_weekly_batch(
                 format_executor_failure(&stderr_text, None)
             }),
         )),
-        Err(_) => Ok((ExecuteOutcome::SkippedTimeout, duration_sec, None)),
+        WaitOutcome::TimedOut => Ok((ExecuteOutcome::SkippedTimeout, duration_sec, None)),
+        WaitOutcome::Cancelled => Ok((
+            ExecuteOutcome::Failed,
+            duration_sec,
+            Some(SHUTDOWN_INTERRUPTED_ERROR.to_string()),
+        )),
     }
 }
 
@@ -78,6 +120,7 @@ pub async fn execute_mr_review(
     manifest_path: &Path,
     timeout_sec: u64,
     _agent: ReviewerAgent,
+    cancel: CancellationToken,
 ) -> MrReviewExecuteResult {
     let started = Instant::now();
     let mut command = match build_mr_scan_command(config, working_dir, manifest_path) {
@@ -86,8 +129,11 @@ pub async fn execute_mr_review(
             return MrReviewExecuteResult {
                 outcome: ExecuteOutcome::Failed,
                 duration_sec: 0,
+                wait_ms: 0,
+                drain_ms: 0,
                 error: Some(err.to_string()),
                 stdout: String::new(),
+                stderr: String::new(),
             };
         }
     };
@@ -99,53 +145,82 @@ pub async fn execute_mr_review(
             return MrReviewExecuteResult {
                 outcome: ExecuteOutcome::Failed,
                 duration_sec: 0,
+                wait_ms: 0,
+                drain_ms: 0,
                 error: Some(format!("executor spawn failed: {err}")),
                 stdout: String::new(),
+                stderr: String::new(),
             };
         }
     };
 
     let mut stdout = child.stdout.take();
     let mut stderr = child.stderr.take();
-    let wait_result = time::timeout(Duration::from_secs(timeout_sec), child.wait()).await;
+    let wait_started = Instant::now();
+    let wait_outcome = wait_with_cancel(&mut child, timeout_sec, &cancel).await;
+    let wait_ms = wait_started.elapsed().as_millis() as u64;
 
-    let duration_sec = started.elapsed().as_secs() as i64;
-    // On timeout, kill before draining pipes — otherwise read_to_end blocks until the
-    // child exits and the configured timeout is effectively ignored.
-    if wait_result.is_err() {
+    let drain_started = Instant::now();
+    // On timeout/cancel, kill before draining pipes — otherwise read_to_end blocks until
+    // the child exits and the configured timeout/cancellation is effectively ignored.
+    if !matches!(wait_outcome, WaitOutcome::Exited(_)) {
         kill_process_tree(&mut child).await;
     }
     let stdout_text = read_child_stdout(&mut stdout).await;
     let stderr_text = read_child_stderr(&mut stderr).await;
+    let drain_ms = drain_started.elapsed().as_millis() as u64;
 
-    match wait_result {
-        Ok(Ok(status)) if status.success() => MrReviewExecuteResult {
+    let duration_sec = started.elapsed().as_secs() as i64;
+
+    match wait_outcome {
+        WaitOutcome::Exited(Ok(status)) if status.success() => MrReviewExecuteResult {
             outcome: ExecuteOutcome::Success,
             duration_sec,
+            wait_ms,
+            drain_ms,
             error: None,
             stdout: stdout_text,
+            stderr: stderr_text,
         },
-        Ok(Ok(status)) => MrReviewExecuteResult {
+        WaitOutcome::Exited(Ok(status)) => MrReviewExecuteResult {
             outcome: ExecuteOutcome::Failed,
             duration_sec,
+            wait_ms,
+            drain_ms,
             error: Some(format_executor_failure(&stderr_text, Some(&status))),
             stdout: stdout_text,
+            stderr: stderr_text,
         },
-        Ok(Err(err)) => MrReviewExecuteResult {
+        WaitOutcome::Exited(Err(err)) => MrReviewExecuteResult {
             outcome: ExecuteOutcome::Failed,
             duration_sec,
+            wait_ms,
+            drain_ms,
             error: Some(if stderr_text.trim().is_empty() {
                 format!("executor wait failed: {err}")
             } else {
                 format_executor_failure(&stderr_text, None)
             }),
             stdout: stdout_text,
+            stderr: stderr_text,
         },
-        Err(_) => MrReviewExecuteResult {
+        WaitOutcome::TimedOut => MrReviewExecuteResult {
             outcome: ExecuteOutcome::SkippedTimeout,
             duration_sec,
+            wait_ms,
+            drain_ms,
             error: None,
             stdout: stdout_text,
+            stderr: stderr_text,
+        },
+        WaitOutcome::Cancelled => MrReviewExecuteResult {
+            outcome: ExecuteOutcome::Failed,
+            duration_sec,
+            wait_ms,
+            drain_ms,
+            error: Some(SHUTDOWN_INTERRUPTED_ERROR.to_string()),
+            stdout: stdout_text,
+            stderr: stderr_text,
         },
     }
 }
@@ -156,6 +231,7 @@ pub async fn execute_agent_turn(
     session_id: &str,
     message: &str,
     agent: ReviewerAgent,
+    cancel: CancellationToken,
 ) -> Result<(String, Option<String>), Error> {
     let mut command = build_agent_turn_command(config, working_dir, session_id, message, agent)?;
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -163,7 +239,16 @@ pub async fn execute_agent_turn(
     let mut child = command.spawn().map_err(Error::Io)?;
     let mut stdout = child.stdout.take();
     let mut stderr = child.stderr.take();
-    let status = child.wait().await.map_err(Error::Io)?;
+
+    let status = tokio::select! {
+        _ = cancel.cancelled() => {
+            kill_process_tree(&mut child).await;
+            let _ = read_child_stdout(&mut stdout).await;
+            let _ = read_child_stderr(&mut stderr).await;
+            return Err(Error::AgentFailed(SHUTDOWN_INTERRUPTED_ERROR.to_string()));
+        }
+        status = child.wait() => status.map_err(Error::Io)?,
+    };
 
     let stdout_text = read_child_stdout(&mut stdout).await;
     let stderr_text = read_child_stderr(&mut stderr).await;
@@ -325,6 +410,107 @@ fn format_executor_failure(stderr: &str, status: Option<&std::process::ExitStatu
     } else {
         "executor failed".to_string()
     }
+}
+
+/// Compact view of agent stream-json stdout + stderr for diagnostics.
+#[derive(Debug, Clone)]
+pub struct AgentOutputSummary {
+    pub stdout_bytes: usize,
+    pub stderr_bytes: usize,
+    pub stdout_lines: usize,
+    pub event_types: String,
+    pub last_event_type: Option<String>,
+    pub last_assistant_snippet: Option<String>,
+    pub stdout_tail: String,
+    pub stderr_tail: String,
+}
+
+const AGENT_LOG_TAIL_CHARS: usize = 1200;
+const ASSISTANT_SNIPPET_CHARS: usize = 240;
+
+/// Summarize agent pipes without dumping the full stream-json transcript.
+pub fn summarize_agent_output(stdout: &str, stderr: &str) -> AgentOutputSummary {
+    let mut type_counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut last_event_type = None;
+    let mut last_assistant = None;
+    let mut stdout_lines = 0usize;
+
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        stdout_lines += 1;
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let event_type = value
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        *type_counts.entry(event_type.clone()).or_default() += 1;
+        last_event_type = Some(event_type.clone());
+
+        if event_type == "assistant" {
+            if let Some(text) = value
+                .pointer("/message/content/0/text")
+                .and_then(|v| v.as_str())
+                .or_else(|| value.get("text").and_then(|v| v.as_str()))
+                .or_else(|| value.get("content").and_then(|v| v.as_str()))
+            {
+                last_assistant = Some(truncate_chars(text.trim(), ASSISTANT_SNIPPET_CHARS));
+            }
+        }
+    }
+
+    let event_types = type_counts
+        .iter()
+        .map(|(name, count)| format!("{name}={count}"))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    AgentOutputSummary {
+        stdout_bytes: stdout.len(),
+        stderr_bytes: stderr.len(),
+        stdout_lines,
+        event_types,
+        last_event_type,
+        last_assistant_snippet: last_assistant,
+        stdout_tail: tail_chars(stdout, AGENT_LOG_TAIL_CHARS),
+        stderr_tail: tail_chars(stderr, AGENT_LOG_TAIL_CHARS),
+    }
+}
+
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for (i, ch) in text.chars().enumerate() {
+        if i >= max_chars {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn tail_chars(text: &str, max_chars: usize) -> String {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let count = trimmed.chars().count();
+    if count <= max_chars {
+        return trimmed.to_string();
+    }
+    let skip = count - max_chars;
+    let mut out = String::from("…");
+    for (i, ch) in trimmed.chars().enumerate() {
+        if i >= skip {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 fn build_weekly_command(
@@ -615,6 +801,22 @@ fn prepare_prompt_for_cli(prompt: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn summarize_agent_output_counts_events_and_tails() {
+        let stdout = r#"{"type":"system","subtype":"init","session_id":"s1"}
+{"type":"assistant","text":"looking at the diff"}
+{"type":"assistant","message":{"content":[{"text":"final note"}]}}
+"#;
+        let stderr = "warn: slow tool\n";
+        let summary = summarize_agent_output(stdout, stderr);
+        assert_eq!(summary.stdout_lines, 3);
+        assert!(summary.event_types.contains("assistant=2"));
+        assert!(summary.event_types.contains("system=1"));
+        assert_eq!(summary.last_event_type.as_deref(), Some("assistant"));
+        assert_eq!(summary.last_assistant_snippet.as_deref(), Some("final note"));
+        assert!(summary.stderr_tail.contains("warn: slow tool"));
+    }
 
     #[test]
     fn prepare_prompt_for_cli_replaces_lf_on_windows() {

@@ -1,6 +1,11 @@
 use reviewer_server::db::init_pool;
 use reviewer_server::runs::{create_mr_poll_run, create_scheduled_run};
-use reviewer_server::schedule::{load_schedule_config, trigger_scheduled_run};
+use reviewer_server::schedule::{
+    load_schedule_config, trigger_mr_poll_run_unless_cancelled, trigger_scheduled_run,
+    trigger_scheduled_run_unless_cancelled,
+};
+use reviewer_server::worker::RunWorker;
+use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
 async fn schedule_config_seeded() {
@@ -128,4 +133,56 @@ async fn create_scheduled_run_uses_schedule_trigger() {
         .await
         .expect("trigger");
     assert_eq!(trigger, "schedule");
+}
+
+/// The weekly cron job callback delegates to this wrapper; once the shared
+/// shutdown token is cancelled, it must not enqueue a new "schedule" run
+/// even though the cron config itself is enabled.
+#[tokio::test]
+async fn weekly_cron_callback_does_not_enqueue_after_cancel() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::env::set_var("DATA_ROOT_DIR", temp.path());
+    let pool = init_pool(temp.path()).await.expect("init pool");
+
+    let config = reviewer_server::config::AppConfig::from_env().expect("config");
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let worker = RunWorker::spawn(config, pool.clone(), cancel.clone());
+
+    trigger_scheduled_run_unless_cancelled(&pool, &worker, &cancel).await;
+
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs")
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert_eq!(count, 0, "no run must be enqueued after cancellation");
+}
+
+/// Same guard as the weekly job, for the mr-poll cron callback.
+#[tokio::test]
+async fn mr_poll_cron_callback_does_not_enqueue_after_cancel() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::env::set_var("DATA_ROOT_DIR", temp.path());
+    let pool = init_pool(temp.path()).await.expect("init pool");
+
+    sqlx::query(
+        "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('alpha', ?, 1)",
+    )
+    .bind(temp.path().join("repos/alpha").display().to_string())
+    .execute(&pool)
+    .await
+    .expect("insert project");
+
+    let config = reviewer_server::config::AppConfig::from_env().expect("config");
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let worker = RunWorker::spawn(config, pool.clone(), cancel.clone());
+
+    trigger_mr_poll_run_unless_cancelled(&pool, &worker, &cancel).await;
+
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs")
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert_eq!(count, 0, "no mr poll run must be enqueued after cancellation");
 }

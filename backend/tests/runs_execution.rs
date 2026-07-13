@@ -11,6 +11,7 @@ use reviewer_server::summary::{count_pending_for_person, count_reports_for_run, 
 use reviewer_server::worker::{process_run_project, resolve_working_dir};
 use reviewer_server::worktree::provision_all;
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
 static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -38,6 +39,109 @@ async fn insert_projects(pool: &sqlx::SqlitePool, temp: &tempfile::TempDir) {
     .execute(pool)
     .await
     .expect("insert beta");
+}
+
+#[tokio::test]
+async fn fetch_next_queued_run_project_claims_row_once() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_app_state_env(&temp).await;
+
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    insert_projects(&pool, &temp).await;
+
+    let run_id = sqlx::query(
+        "INSERT INTO runs (trigger, status, project_total) VALUES ('manual_all', 'running', 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert run")
+    .last_insert_rowid();
+
+    let project_id: i64 = sqlx::query_scalar("SELECT id FROM projects WHERE name = 'alpha'")
+        .fetch_one(&pool)
+        .await
+        .expect("project id");
+
+    sqlx::query(
+        "INSERT INTO run_projects (run_id, project_id, state) VALUES (?, ?, 'queued')",
+    )
+    .bind(run_id)
+    .bind(project_id)
+    .execute(&pool)
+    .await
+    .expect("insert run project");
+
+    let first = runs::fetch_next_queued_run_project(&pool)
+        .await
+        .expect("claim")
+        .expect("one job");
+    assert_eq!(first.name, "alpha");
+
+    let state: String = sqlx::query_scalar("SELECT state FROM run_projects WHERE id = ?")
+        .bind(first.id)
+        .fetch_one(&pool)
+        .await
+        .expect("state");
+    assert_eq!(state, "running");
+
+    let second = runs::fetch_next_queued_run_project(&pool)
+        .await
+        .expect("second claim");
+    assert!(
+        second.is_none(),
+        "same queued row must not be claimed twice"
+    );
+}
+
+#[tokio::test]
+async fn drain_queue_does_not_dequeue_after_cancel() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_app_state_env(&temp).await;
+
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    insert_projects(&pool, &temp).await;
+
+    let run_id = sqlx::query(
+        "INSERT INTO runs (trigger, status, project_total) VALUES ('manual_all', 'running', 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert run")
+    .last_insert_rowid();
+
+    let project_id: i64 = sqlx::query_scalar("SELECT id FROM projects WHERE name = 'alpha'")
+        .fetch_one(&pool)
+        .await
+        .expect("project id");
+
+    let run_project_id = sqlx::query(
+        "INSERT INTO run_projects (run_id, project_id, state) VALUES (?, ?, 'queued')",
+    )
+    .bind(run_id)
+    .bind(project_id)
+    .execute(&pool)
+    .await
+    .expect("insert run project")
+    .last_insert_rowid();
+
+    let config = reviewer_server::config::AppConfig::from_env().expect("config");
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let worker = reviewer_server::worker::RunWorker::spawn(config, pool.clone(), cancel);
+
+    worker.drain_queue().await.expect("drain queue");
+
+    let state: String = sqlx::query_scalar("SELECT state FROM run_projects WHERE id = ?")
+        .bind(run_project_id)
+        .fetch_one(&pool)
+        .await
+        .expect("state");
+    assert_eq!(
+        state, "queued",
+        "drain_queue must not dequeue after the worker's token is cancelled"
+    );
 }
 
 #[tokio::test]
@@ -191,6 +295,118 @@ async fn duplicate_project_run_returns_409() {
 }
 
 #[tokio::test]
+async fn startup_recovery_fails_orphaned_running_project_and_finalizes_run() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pool = init_pool(temp.path()).await.expect("init pool");
+
+    sqlx::query(
+        "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('alpha', ?, 0)",
+    )
+    .bind(temp.path().join("repos/alpha").display().to_string())
+    .execute(&pool)
+    .await
+    .expect("insert project");
+
+    let project_id: i64 = sqlx::query_scalar("SELECT id FROM projects WHERE name = 'alpha'")
+        .fetch_one(&pool)
+        .await
+        .expect("project id");
+
+    let run_id = sqlx::query(
+        "INSERT INTO runs (trigger, status, project_total) VALUES ('manual_all', 'running', 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert run")
+    .last_insert_rowid();
+
+    let run_project_id = sqlx::query(
+        "INSERT INTO run_projects (run_id, project_id, state) VALUES (?, ?, 'running')",
+    )
+    .bind(run_id)
+    .bind(project_id)
+    .execute(&pool)
+    .await
+    .expect("insert run project")
+    .last_insert_rowid();
+
+    runs::recover_orphaned_running_projects(&pool)
+        .await
+        .expect("recover orphaned running projects");
+
+    let (state, error): (String, Option<String>) = sqlx::query_as(
+        "SELECT state, error FROM run_projects WHERE id = ?",
+    )
+    .bind(run_project_id)
+    .fetch_one(&pool)
+    .await
+    .expect("run project row");
+    assert_eq!(state, "failed");
+    assert!(
+        error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("interrupted by previous shutdown"),
+        "error={error:?}"
+    );
+
+    let run_status: String = sqlx::query_scalar("SELECT status FROM runs WHERE id = ?")
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("run status");
+    assert_eq!(run_status, "failed", "parent run must be finalized");
+}
+
+#[tokio::test]
+async fn startup_recovery_leaves_queued_rows_untouched() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pool = init_pool(temp.path()).await.expect("init pool");
+
+    sqlx::query(
+        "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('alpha', ?, 0)",
+    )
+    .bind(temp.path().join("repos/alpha").display().to_string())
+    .execute(&pool)
+    .await
+    .expect("insert project");
+
+    let project_id: i64 = sqlx::query_scalar("SELECT id FROM projects WHERE name = 'alpha'")
+        .fetch_one(&pool)
+        .await
+        .expect("project id");
+
+    let run_id = sqlx::query(
+        "INSERT INTO runs (trigger, status, project_total) VALUES ('manual_all', 'running', 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert run")
+    .last_insert_rowid();
+
+    let run_project_id = sqlx::query(
+        "INSERT INTO run_projects (run_id, project_id, state) VALUES (?, ?, 'queued')",
+    )
+    .bind(run_id)
+    .bind(project_id)
+    .execute(&pool)
+    .await
+    .expect("insert run project")
+    .last_insert_rowid();
+
+    runs::recover_orphaned_running_projects(&pool)
+        .await
+        .expect("recover orphaned running projects");
+
+    let state: String = sqlx::query_scalar("SELECT state FROM run_projects WHERE id = ?")
+        .bind(run_project_id)
+        .fetch_one(&pool)
+        .await
+        .expect("state");
+    assert_eq!(state, "queued", "queued rows must survive startup recovery");
+}
+
+#[tokio::test]
 async fn worker_marks_skipped_timeout() {
     let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
     let temp = tempfile::tempdir().expect("tempdir");
@@ -251,7 +467,7 @@ async fn worker_marks_skipped_timeout() {
         mr_scan_force: 0,
     };
 
-    process_run_project(&pool, &config, job, 1)
+    process_run_project(&pool, &config, job, 1, CancellationToken::new())
         .await
         .expect("process run project");
 
@@ -327,7 +543,7 @@ async fn mr_scan_timeout_still_ingests_draft_on_disk() {
         mr_scan_force: 0,
     };
 
-    process_run_project(&pool, &config, job, 1)
+    process_run_project(&pool, &config, job, 1, CancellationToken::new())
         .await
         .expect("process mr scan");
 

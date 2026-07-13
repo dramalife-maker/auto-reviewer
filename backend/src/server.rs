@@ -666,7 +666,7 @@ async fn agent_turn_mr_review(
             "message is required".into(),
         )));
     }
-    let response = mr_reviews::agent_turn(&state.pool, &state.config, id, message)
+    let response = mr_reviews::agent_turn(&state.pool, &state.config, id, message, state.shutdown.clone())
         .await
         .map_err(ApiError::from)?;
     Ok(Json(response))

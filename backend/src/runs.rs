@@ -13,6 +13,15 @@ pub fn is_mr_trigger(trigger: &str) -> bool {
 pub const DEFAULT_MR_REVIEW_SKIP_LABELS: &[&str] =
     &["wip", "do-not-review", "no-ai-review"];
 
+/// Error string stamped on `run_projects.error` when an in-flight row is
+/// interrupted by the current process's coordinated shutdown.
+pub const SHUTDOWN_INTERRUPTED_ERROR: &str = "interrupted by shutdown";
+
+/// Error string stamped on `run_projects.error` when startup recovery finds
+/// a `running` row orphaned by a previous process that never shut down
+/// cleanly (e.g. `kill -9`).
+pub const PREVIOUS_SHUTDOWN_INTERRUPTED_ERROR: &str = "interrupted by previous shutdown";
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ProjectRow {
     pub id: i64,
@@ -301,19 +310,46 @@ pub async fn create_batch_run(pool: &sqlx::SqlitePool, trigger: &str) -> crate::
 pub async fn fetch_next_queued_run_project(
     pool: &sqlx::SqlitePool,
 ) -> crate::Result<Option<RunProjectRow>> {
-    let row = sqlx::query_as::<_, RunProjectRow>(
-        "SELECT rp.id, rp.run_id, rp.project_id, p.name, p.repo_path, r.trigger, r.mr_scan_force
-         FROM run_projects rp
-         INNER JOIN projects p ON p.id = rp.project_id
-         INNER JOIN runs r ON r.id = rp.run_id
-         WHERE r.status = 'running' AND rp.state = 'queued'
-         ORDER BY rp.id
-         LIMIT 1",
-    )
-    .fetch_optional(pool)
-    .await
-    .map_err(crate::Error::Database)?;
-    Ok(row)
+    // Atomically claim so drain_queue cannot spawn the same queued row twice:
+    // SELECT then UPDATE … WHERE state='queued'; lost races retry.
+    loop {
+        let mut tx = pool.begin().await.map_err(crate::Error::Database)?;
+
+        let row = sqlx::query_as::<_, RunProjectRow>(
+            "SELECT rp.id, rp.run_id, rp.project_id, p.name, p.repo_path, r.trigger, r.mr_scan_force
+             FROM run_projects rp
+             INNER JOIN projects p ON p.id = rp.project_id
+             INNER JOIN runs r ON r.id = rp.run_id
+             WHERE r.status = 'running' AND rp.state = 'queued'
+             ORDER BY rp.id
+             LIMIT 1",
+        )
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(crate::Error::Database)?;
+
+        let Some(row) = row else {
+            tx.rollback().await.map_err(crate::Error::Database)?;
+            return Ok(None);
+        };
+
+        let updated = sqlx::query(
+            "UPDATE run_projects
+             SET state = 'running', started_at = datetime('now')
+             WHERE id = ? AND state = 'queued'",
+        )
+        .bind(row.id)
+        .execute(&mut *tx)
+        .await
+        .map_err(crate::Error::Database)?;
+
+        if updated.rows_affected() == 1 {
+            tx.commit().await.map_err(crate::Error::Database)?;
+            return Ok(Some(row));
+        }
+
+        tx.rollback().await.map_err(crate::Error::Database)?;
+    }
 }
 
 pub async fn mark_run_project_running(
@@ -396,6 +432,40 @@ pub async fn finalize_run_if_complete(pool: &sqlx::SqlitePool, run_id: i64) -> c
     .execute(pool)
     .await
     .map_err(crate::Error::Database)?;
+
+    Ok(())
+}
+
+/// Startup recovery: fail every `run_projects` row left `running` by a
+/// previous process that never shut down cleanly (e.g. `kill -9`), and
+/// finalize each affected parent run. MUST run before the run worker begins
+/// dequeuing so no worker ever races this recovery pass. `queued` rows are
+/// left untouched so they can still be dequeued after this process starts.
+pub async fn recover_orphaned_running_projects(pool: &sqlx::SqlitePool) -> crate::Result<()> {
+    let run_ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT DISTINCT run_id FROM run_projects WHERE state = 'running'",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(crate::Error::Database)?;
+
+    if run_ids.is_empty() {
+        return Ok(());
+    }
+
+    sqlx::query(
+        "UPDATE run_projects
+         SET state = 'failed', finished_at = datetime('now'), error = ?
+         WHERE state = 'running'",
+    )
+    .bind(PREVIOUS_SHUTDOWN_INTERRUPTED_ERROR)
+    .execute(pool)
+    .await
+    .map_err(crate::Error::Database)?;
+
+    for run_id in run_ids {
+        finalize_run_if_complete(pool, run_id).await?;
+    }
 
     Ok(())
 }

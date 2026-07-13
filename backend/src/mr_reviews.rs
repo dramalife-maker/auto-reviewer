@@ -5,6 +5,7 @@ use std::process::Stdio;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tokio::process::Command;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::config::{AppConfig, ReviewerAgent};
@@ -25,6 +26,9 @@ pub struct EligibleMr {
     pub mr_iid: i64,
     pub mr_title: String,
     pub source_branch: String,
+    /// Merge target branch (e.g. `main`); used for local `git diff origin/<target>...HEAD`.
+    #[serde(default)]
+    pub target_branch: String,
     pub author_identity: String,
     pub review_round: i64,
 }
@@ -692,6 +696,7 @@ pub async fn agent_turn(
     config: &AppConfig,
     id: i64,
     message: &str,
+    cancel: CancellationToken,
 ) -> Result<AgentTurnResponse, Error> {
     let row = load_mr_review(pool, id).await?;
     if row.status != "draft" {
@@ -707,7 +712,7 @@ pub async fn agent_turn(
         .await?;
     let agent = ReviewerAgent::parse_db_value(&row.reviewer_agent);
     let (reply, new_session_id) =
-        execute_agent_turn(config, &working_dir, session_id, message, agent).await?;
+        execute_agent_turn(config, &working_dir, session_id, message, agent, cancel).await?;
 
     let session_id = new_session_id.unwrap_or_else(|| session_id.to_string());
     sqlx::query("UPDATE mr_reviews SET agent_session_id = ?, updated_at = datetime('now') WHERE id = ?")
@@ -919,6 +924,7 @@ Body text
                 mr_iid: 10,
                 mr_title: "a".into(),
                 source_branch: "feat/a".into(),
+                target_branch: "main".into(),
                 author_identity: "alice".into(),
                 review_round: 1,
             },
@@ -926,6 +932,7 @@ Body text
                 mr_iid: 11,
                 mr_title: "b".into(),
                 source_branch: "feat/b".into(),
+                target_branch: "main".into(),
                 author_identity: "bob".into(),
                 review_round: 2,
             },
@@ -933,6 +940,7 @@ Body text
                 mr_iid: 12,
                 mr_title: "c".into(),
                 source_branch: "feat/c".into(),
+                target_branch: "main".into(),
                 author_identity: "carol".into(),
                 review_round: 1,
             },
@@ -955,6 +963,7 @@ Body text
             mr_iid: 10,
             mr_title: "a".into(),
             source_branch: "feat/a".into(),
+            target_branch: "main".into(),
             author_identity: "alice".into(),
             review_round: 1,
         }];
@@ -999,6 +1008,7 @@ Body text
                 mr_iid: 10,
                 mr_title: "a".into(),
                 source_branch: "feat/a".into(),
+                target_branch: "main".into(),
                 author_identity: "alice".into(),
                 review_round: 1,
             }],
@@ -1120,6 +1130,7 @@ Body text
             mr_iid: 42,
             mr_title: "t".into(),
             source_branch: "feat/x".into(),
+            target_branch: "main".into(),
             author_identity: "a@b.com".into(),
             review_round: 1,
         }];
