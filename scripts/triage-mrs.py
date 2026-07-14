@@ -167,14 +167,15 @@ def note_body(note: dict[str, Any]) -> str:
 
 def extract_notes(mr: dict[str, Any]) -> list[dict[str, Any]]:
     notes: list[dict[str, Any]] = []
-    for key in ("notes", "comments", "user_notes", "system_notes", "discussions"):
+    # Include PascalCase `Notes`: `glab mr view -F json -c` emits that key.
+    for key in ("notes", "Notes", "comments", "user_notes", "system_notes", "discussions"):
         value = mr.get(key)
         if isinstance(value, list):
             for item in value:
                 if isinstance(item, dict):
                     notes.append(item)
         elif isinstance(value, dict):
-            for nested_key in ("notes", "comments", "items"):
+            for nested_key in ("notes", "Notes", "comments", "items"):
                 nested = value.get(nested_key)
                 if isinstance(nested, list):
                     for item in nested:

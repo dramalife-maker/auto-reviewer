@@ -165,6 +165,26 @@ class TriageMrsTests(unittest.TestCase):
             {"mr_iid": 7, "skip_reason": "no_new_activity_since_ai_note"},
         )
 
+    def test_skip_no_activity_reads_glab_pascalcase_notes(self) -> None:
+        """glab mr view -F json -c returns `Notes`, not lowercase `notes`."""
+        summary = _mr_summary(5)
+        detail = {
+            "iid": 5,
+            "Notes": [
+                {
+                    "body": "Round 1 review\n\nBy: AI Agent",
+                    "created_at": "2026-07-14T17:56:52.514+08:00",
+                }
+            ],
+            "updated_at": "2026-07-14T17:56:52.514+08:00",
+        }
+        eligible, skipped = triage_mr(summary, detail, [], None)
+        self.assertIsNone(eligible)
+        self.assertEqual(
+            skipped,
+            {"mr_iid": 5, "skip_reason": "no_new_activity_since_ai_note"},
+        )
+
     def test_apply_label_gates_case_insensitive(self) -> None:
         reason = apply_label_gates({"labels": ["Do-Not-Review"]}, ["do-not-review"], None)
         self.assertEqual(reason, "label:do-not-review")
