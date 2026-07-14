@@ -602,30 +602,32 @@ function MrReviewDraftPanel({
             </span>
           ) : null}
         </div>
-        <div className="flex rounded-md border border-border p-0.5" role="group" aria-label="編輯模式">
-          <button
-            type="button"
-            aria-pressed={editorMode === 'edit'}
-            className={[
-              'rounded px-2.5 py-1 text-xs font-semibold',
-              editorMode === 'edit' ? 'bg-mr-soft text-mr-dark' : 'text-ink-muted hover:bg-page',
-            ].join(' ')}
-            onClick={() => setEditorMode('edit')}
-          >
-            編輯
-          </button>
-          <button
-            type="button"
-            aria-pressed={editorMode === 'preview'}
-            className={[
-              'rounded px-2.5 py-1 text-xs font-semibold',
-              editorMode === 'preview' ? 'bg-mr-soft text-mr-dark' : 'text-ink-muted hover:bg-page',
-            ].join(' ')}
-            onClick={() => setEditorMode('preview')}
-          >
-            Preview
-          </button>
-        </div>
+        {isDraft ? (
+          <div className="flex rounded-md border border-border p-0.5" role="group" aria-label="編輯模式">
+            <button
+              type="button"
+              aria-pressed={editorMode === 'edit'}
+              className={[
+                'rounded px-2.5 py-1 text-xs font-semibold',
+                editorMode === 'edit' ? 'bg-mr-soft text-mr-dark' : 'text-ink-muted hover:bg-page',
+              ].join(' ')}
+              onClick={() => setEditorMode('edit')}
+            >
+              編輯
+            </button>
+            <button
+              type="button"
+              aria-pressed={editorMode === 'preview'}
+              className={[
+                'rounded px-2.5 py-1 text-xs font-semibold',
+                editorMode === 'preview' ? 'bg-mr-soft text-mr-dark' : 'text-ink-muted hover:bg-page',
+              ].join(' ')}
+              onClick={() => setEditorMode('preview')}
+            >
+              Preview
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {conflict ? (
