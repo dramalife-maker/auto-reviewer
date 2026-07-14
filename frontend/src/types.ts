@@ -109,6 +109,7 @@ export interface RunProjectStatus {
   finished_at: string | null
   duration_sec: number | null
   skip_summary?: SkipSummary | null
+  outputs?: ProjectOutputs | null
 }
 
 export interface SkipSummaryItem {
@@ -119,6 +120,24 @@ export interface SkipSummaryItem {
 export interface SkipSummary {
   by_reason: Record<string, number>
   items: SkipSummaryItem[]
+}
+
+export interface MrDraftsOutput {
+  count: number
+}
+
+export interface WeeklyReportPerson {
+  person_id: number
+  display_name: string
+}
+
+export interface WeeklyReportsOutput {
+  people: WeeklyReportPerson[]
+}
+
+export interface ProjectOutputs {
+  mr_drafts?: MrDraftsOutput | null
+  weekly_reports?: WeeklyReportsOutput | null
 }
 
 export interface RunListItem {

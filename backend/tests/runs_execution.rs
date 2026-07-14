@@ -1743,3 +1743,222 @@ async fn get_run_running_mr_omits_skip_summary() {
     let json: Value = serde_json::from_slice(&body).expect("json");
     assert!(json["projects"][0]["skip_summary"].is_null());
 }
+
+#[tokio::test]
+async fn get_run_finished_mr_exposes_draft_outputs_count() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_app_state_env(&temp).await;
+
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    sqlx::query(
+        "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('game-backend', ?, 0)",
+    )
+    .bind(temp.path().join("repos/game-backend").display().to_string())
+    .execute(&pool)
+    .await
+    .expect("insert project");
+
+    let run_id = sqlx::query(
+        "INSERT INTO runs (trigger, status, started_at, finished_at, project_total)
+         VALUES ('mr_poll', 'success', '2026-07-05 09:00:00', '2026-07-05 09:05:00', 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert run")
+    .last_insert_rowid();
+
+    sqlx::query("INSERT INTO run_projects (run_id, project_id, state) VALUES (?, 1, 'done')")
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .expect("insert run_project");
+
+    let drafts = runs::mr_poll_draft_dir(temp.path(), run_id, 1);
+    std::fs::create_dir_all(&drafts).expect("mkdir");
+    std::fs::write(drafts.join("68-r1.md"), "# draft").expect("write draft");
+    std::fs::write(drafts.join("69-r1.md"), "# draft2").expect("write draft2");
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/runs/{run_id}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.expect("body").to_bytes();
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    let outputs = &json["projects"][0]["outputs"];
+    assert_eq!(outputs["mr_drafts"]["count"], 2);
+    assert!(outputs["weekly_reports"].is_null());
+}
+
+#[tokio::test]
+async fn get_run_finished_weekly_exposes_report_people() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_app_state_env(&temp).await;
+
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    sqlx::query(
+        "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('game-backend', ?, 0)",
+    )
+    .bind(temp.path().join("repos/game-backend").display().to_string())
+    .execute(&pool)
+    .await
+    .expect("insert project");
+    let person_id = sqlx::query("INSERT INTO people (display_name) VALUES ('Alice')")
+        .execute(&pool)
+        .await
+        .expect("insert person")
+        .last_insert_rowid();
+
+    let run_id = sqlx::query(
+        "INSERT INTO runs (trigger, status, started_at, finished_at, project_total)
+         VALUES ('schedule', 'success', '2026-07-05 09:00:00', '2026-07-05 09:05:00', 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert run")
+    .last_insert_rowid();
+
+    sqlx::query("INSERT INTO run_projects (run_id, project_id, state) VALUES (?, 1, 'done')")
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .expect("insert run_project");
+
+    sqlx::query(
+        "INSERT INTO reports (project_id, person_id, run_id, report_date, report_md_path, summary_md_path)
+         VALUES (1, ?, ?, '2026-07-05', 'r.md', 's.md')",
+    )
+    .bind(person_id)
+    .bind(run_id)
+    .execute(&pool)
+    .await
+    .expect("insert report");
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/runs/{run_id}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.expect("body").to_bytes();
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    let outputs = &json["projects"][0]["outputs"];
+    assert!(outputs["mr_drafts"].is_null());
+    let people = outputs["weekly_reports"]["people"].as_array().expect("people");
+    assert_eq!(people.len(), 1);
+    assert_eq!(people[0]["person_id"], person_id);
+    assert_eq!(people[0]["display_name"], "Alice");
+}
+
+#[tokio::test]
+async fn get_run_running_omits_outputs() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_app_state_env(&temp).await;
+
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    sqlx::query(
+        "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('game-backend', ?, 0)",
+    )
+    .bind(temp.path().join("repos/game-backend").display().to_string())
+    .execute(&pool)
+    .await
+    .expect("insert project");
+
+    let run_id = sqlx::query(
+        "INSERT INTO runs (trigger, status, started_at, project_total)
+         VALUES ('mr_poll', 'running', '2026-07-05 09:00:00', 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert run")
+    .last_insert_rowid();
+
+    sqlx::query("INSERT INTO run_projects (run_id, project_id, state) VALUES (?, 1, 'running')")
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .expect("insert run_project");
+
+    let drafts = runs::mr_poll_draft_dir(temp.path(), run_id, 1);
+    std::fs::create_dir_all(&drafts).expect("mkdir");
+    std::fs::write(drafts.join("1.md"), "# x").expect("write");
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/runs/{run_id}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.expect("body").to_bytes();
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    assert!(json["projects"][0]["outputs"].is_null());
+}
+
+#[tokio::test]
+async fn get_run_missing_drafts_dir_omits_mr_drafts() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_app_state_env(&temp).await;
+
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    sqlx::query(
+        "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('game-backend', ?, 0)",
+    )
+    .bind(temp.path().join("repos/game-backend").display().to_string())
+    .execute(&pool)
+    .await
+    .expect("insert project");
+
+    let run_id = sqlx::query(
+        "INSERT INTO runs (trigger, status, started_at, finished_at, project_total)
+         VALUES ('mr_poll', 'success', '2026-07-05 09:00:00', '2026-07-05 09:05:00', 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert run")
+    .last_insert_rowid();
+
+    sqlx::query("INSERT INTO run_projects (run_id, project_id, state) VALUES (?, 1, 'done')")
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .expect("insert run_project");
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/runs/{run_id}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.expect("body").to_bytes();
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    assert!(json["projects"][0]["outputs"].is_null());
+}

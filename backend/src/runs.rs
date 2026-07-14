@@ -716,6 +716,78 @@ pub fn load_skip_summary(data_root: &Path, run_id: i64, project_id: i64) -> Skip
     SkipSummary { by_reason, items }
 }
 
+#[derive(Debug, Clone, Serialize, sqlx::FromRow, PartialEq, Eq)]
+pub struct WeeklyReportPerson {
+    pub person_id: i64,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MrDraftsOutput {
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WeeklyReportsOutput {
+    pub people: Vec<WeeklyReportPerson>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectOutputs {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mr_drafts: Option<MrDraftsOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weekly_reports: Option<WeeklyReportsOutput>,
+}
+
+pub async fn list_weekly_report_people(
+    pool: &sqlx::SqlitePool,
+    run_id: i64,
+    project_id: i64,
+) -> crate::Result<Vec<WeeklyReportPerson>> {
+    sqlx::query_as::<_, WeeklyReportPerson>(
+        "SELECT r.person_id, p.display_name
+         FROM reports r
+         INNER JOIN people p ON p.id = r.person_id
+         WHERE r.run_id = ? AND r.project_id = ?
+         ORDER BY p.display_name COLLATE NOCASE, r.person_id",
+    )
+    .bind(run_id)
+    .bind(project_id)
+    .fetch_all(pool)
+    .await
+    .map_err(crate::Error::Database)
+}
+
+/// Derive outputs for one project. Missing drafts dir → no mr_drafts; empty reports → no weekly.
+pub async fn load_project_outputs(
+    pool: &sqlx::SqlitePool,
+    data_root: &Path,
+    run_id: i64,
+    project_id: i64,
+) -> crate::Result<Option<ProjectOutputs>> {
+    let draft_count = count_mr_draft_md_files(data_root, run_id, project_id);
+    let people = list_weekly_report_people(pool, run_id, project_id).await?;
+    let mr_drafts = if draft_count > 0 {
+        Some(MrDraftsOutput { count: draft_count })
+    } else {
+        None
+    };
+    let weekly_reports = if people.is_empty() {
+        None
+    } else {
+        Some(WeeklyReportsOutput { people })
+    };
+    if mr_drafts.is_none() && weekly_reports.is_none() {
+        Ok(None)
+    } else {
+        Ok(Some(ProjectOutputs {
+            mr_drafts,
+            weekly_reports,
+        }))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct ManifestOpenPending {
     pub id: i64,
@@ -872,6 +944,26 @@ pub fn mr_poll_draft_dir(data_root: &Path, run_id: i64, project_id: i64) -> Path
         .join("projects")
         .join(project_id.to_string())
         .join("drafts")
+}
+
+/// Count `*.md` files directly under the run project's drafts directory.
+/// Missing or unreadable directories return 0 (must not fail run detail).
+pub fn count_mr_draft_md_files(data_root: &Path, run_id: i64, project_id: i64) -> i64 {
+    let dir = mr_poll_draft_dir(data_root, run_id, project_id);
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return 0;
+    };
+    let mut count = 0i64;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if path.extension().and_then(|ext| ext.to_str()) == Some("md") {
+            count += 1;
+        }
+    }
+    count
 }
 
 /// Absolute paths to precomputed change materials for one MR agent subprocess.
@@ -1071,6 +1163,24 @@ mod tests {
     }
 
     #[test]
+    fn count_mr_draft_md_files_missing_dir_is_zero() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        assert_eq!(count_mr_draft_md_files(temp.path(), 9, 3), 0);
+    }
+
+    #[test]
+    fn count_mr_draft_md_files_counts_markdown_only() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let dir = mr_poll_draft_dir(temp.path(), 9, 3);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(dir.join("a.md"), "# a").expect("write a");
+        std::fs::write(dir.join("b.md"), "# b").expect("write b");
+        std::fs::write(dir.join("notes.txt"), "x").expect("write txt");
+        std::fs::create_dir_all(dir.join("sub")).expect("subdir");
+        assert_eq!(count_mr_draft_md_files(temp.path(), 9, 3), 2);
+    }
+
+    #[test]
     fn write_mr_poll_manifest_includes_prior_published_reviews() {
         let temp = tempfile::tempdir().expect("tempdir");
         let project = MrPollProjectRow {
@@ -1158,5 +1268,64 @@ mod tests {
             path,
             Path::new("/data/reviewer/reports/game-backend/.notes")
         );
+    }
+
+    #[tokio::test]
+    async fn list_weekly_report_people_empty_when_no_rows() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pool = crate::db::init_pool(temp.path()).await.expect("init pool");
+        sqlx::query("INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('alpha', '/r', 0)")
+            .execute(&pool)
+            .await
+            .expect("insert project");
+        let run_id = sqlx::query(
+            "INSERT INTO runs (trigger, status, project_total) VALUES ('schedule', 'success', 1)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert run")
+        .last_insert_rowid();
+        let people = list_weekly_report_people(&pool, run_id, 1)
+            .await
+            .expect("list");
+        assert!(people.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_weekly_report_people_returns_person_id_and_display_name() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pool = crate::db::init_pool(temp.path()).await.expect("init pool");
+        sqlx::query("INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('alpha', '/r', 0)")
+            .execute(&pool)
+            .await
+            .expect("insert project");
+        let person_id = sqlx::query("INSERT INTO people (display_name) VALUES ('Alice Chen')")
+            .execute(&pool)
+            .await
+            .expect("insert person")
+            .last_insert_rowid();
+        let run_id = sqlx::query(
+            "INSERT INTO runs (trigger, status, project_total) VALUES ('schedule', 'success', 1)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert run")
+        .last_insert_rowid();
+        sqlx::query(
+            "INSERT INTO reports (project_id, person_id, run_id, report_date, report_md_path, summary_md_path)
+             VALUES (1, ?, ?, '2026-07-05', 'r.md', 's.md')",
+        )
+        .bind(person_id)
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .expect("insert report");
+
+        let people = list_weekly_report_people(&pool, run_id, 1)
+            .await
+            .expect("list");
+        assert_eq!(people.len(), 1);
+        assert_eq!(people[0].person_id, person_id);
+        assert_eq!(people[0].display_name, "Alice Chen");
     }
 }

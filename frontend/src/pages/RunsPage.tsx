@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 
 import { fetchRun, fetchRuns } from '../api'
 import { Card, ListRow, StatusPill } from '../components/ui'
@@ -12,9 +12,10 @@ import {
   humanizeTrigger,
   runStatusTone,
 } from '../lib/format'
-import type { RunListItem, RunStatus, SkipSummary } from '../types'
+import type { ProjectOutputs, RunListItem, RunStatus, SkipSummary } from '../types'
 
 const AUTO_REFRESH_SEC = 60
+const WEEKLY_PEOPLE_DISPLAY_CAP = 8
 
 export function RunsPage() {
   const navigate = useNavigate()
@@ -237,6 +238,7 @@ function RunDetail({ run }: { run: RunStatus }) {
                     {humanizeProjectError(project.error)}
                   </p>
                 ) : null}
+                {hasOutputs(project.outputs) ? <OutputsHints outputs={project.outputs!} /> : null}
                 {hasSkipSummary(project.skip_summary) ? (
                   <SkipSummaryCard summary={project.skip_summary!} />
                 ) : null}
@@ -265,6 +267,54 @@ function MetaItem({ label, value }: { label: string; value: string }) {
 function hasSkipSummary(summary: SkipSummary | null | undefined): boolean {
   if (!summary) return false
   return Object.keys(summary.by_reason).length > 0 || summary.items.length > 0
+}
+
+function hasOutputs(outputs: ProjectOutputs | null | undefined): boolean {
+  if (!outputs) return false
+  const draftCount = outputs.mr_drafts?.count ?? 0
+  const people = outputs.weekly_reports?.people ?? []
+  return draftCount > 0 || people.length > 0
+}
+
+function OutputsHints({ outputs }: { outputs: ProjectOutputs }) {
+  const draftCount = outputs.mr_drafts?.count ?? 0
+  const people = outputs.weekly_reports?.people ?? []
+  const visiblePeople = people.slice(0, WEEKLY_PEOPLE_DISPLAY_CAP)
+  const remaining = people.length - visiblePeople.length
+
+  return (
+    <div className="mt-3 rounded-lg border border-border-subtle bg-page p-3 text-[13px] text-ink">
+      <div className="text-[12px] font-semibold text-ink-secondary">產出</div>
+      <div className="mt-2 grid gap-2">
+        {draftCount > 0 ? (
+          <p>
+            已產出 {draftCount} 份 MR 草稿 →{' '}
+            <Link className="text-primary underline-offset-2 hover:underline" to="/mr-inbox">
+              MR 收件匣
+            </Link>
+          </p>
+        ) : null}
+        {people.length > 0 ? (
+          <p>
+            已產出{' '}
+            {visiblePeople.map((person, index) => (
+              <span key={person.person_id}>
+                {index > 0 ? '、' : null}
+                <Link
+                  className="text-primary underline-offset-2 hover:underline"
+                  to={`/reports/${person.person_id}`}
+                >
+                  {person.display_name}
+                </Link>
+              </span>
+            ))}
+            {remaining > 0 ? `…等共 ${people.length} 人` : null}
+            的週報
+          </p>
+        ) : null}
+      </div>
+    </div>
+  )
 }
 
 function SkipSummaryCard({ summary }: { summary: SkipSummary }) {

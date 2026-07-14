@@ -59,6 +59,8 @@ pub struct RunProjectStatusResponse {
     pub duration_sec: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skip_summary: Option<runs::SkipSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outputs: Option<runs::ProjectOutputs>,
 }
 
 #[derive(Serialize)]
@@ -211,8 +213,9 @@ async fn get_run(
     let project_rows = runs::list_run_project_statuses(&state.pool, run_id)
         .await
         .map_err(ApiError::from)?;
-    // Skip file IO while run is still active (2s polling path); history of finished MR runs loads summaries.
-    let include_skip = runs::is_mr_trigger(&run.trigger) && run.status != "running";
+    // Skip / outputs file+DB IO while run is still active (2s polling path).
+    let include_detail = run.status != "running";
+    let include_skip = runs::is_mr_trigger(&run.trigger) && include_detail;
     let skip_summaries = if include_skip {
         let data_dir = state.config.data_dir().to_path_buf();
         let project_ids: Vec<i64> = project_rows.iter().map(|row| row.project_id).collect();
@@ -233,26 +236,31 @@ async fn get_run(
         Vec::new()
     };
 
-    let projects = project_rows
-        .into_iter()
-        .enumerate()
-        .map(|(idx, row)| {
-            let skip_summary = if include_skip {
-                skip_summaries.get(idx).cloned()
-            } else {
-                None
-            };
-            RunProjectStatusResponse {
-                name: row.name,
-                state: row.state,
-                error: row.error,
-                started_at: row.started_at,
-                finished_at: row.finished_at,
-                duration_sec: row.duration_sec,
-                skip_summary,
-            }
-        })
-        .collect();
+    let mut projects = Vec::with_capacity(project_rows.len());
+    for (idx, row) in project_rows.into_iter().enumerate() {
+        let skip_summary = if include_skip {
+            skip_summaries.get(idx).cloned()
+        } else {
+            None
+        };
+        let outputs = if include_detail {
+            runs::load_project_outputs(&state.pool, state.config.data_dir(), run_id, row.project_id)
+                .await
+                .map_err(ApiError::from)?
+        } else {
+            None
+        };
+        projects.push(RunProjectStatusResponse {
+            name: row.name,
+            state: row.state,
+            error: row.error,
+            started_at: row.started_at,
+            finished_at: row.finished_at,
+            duration_sec: row.duration_sec,
+            skip_summary,
+            outputs,
+        });
+    }
     Ok(Json(RunStatusResponse {
         id: run.id,
         trigger: run.trigger,
