@@ -369,11 +369,17 @@ export function MrInboxPage() {
               </div>
               <Button
                 aria-label="收合收件匣列表"
-                className="mt-1 shrink-0 px-2 py-1.5 text-xs"
+                className="mt-1 shrink-0 p-1.5"
                 onClick={() => setListOpen(false)}
+                title="收合收件匣列表"
                 variant="ghost"
               >
-                收合
+                <svg aria-hidden="true" className="size-4" fill="currentColor" viewBox="0 0 48 48">
+                  <path d="M32.6,22.6a1.9,1.9,0,0,0,0,2.8l5.9,6a2.1,2.1,0,0,0,2.7.2,1.9,1.9,0,0,0,.2-3L38.8,26H44a2,2,0,0,0,0-4H38.8l2.6-2.6a1.9,1.9,0,0,0-.2-3,2.1,2.1,0,0,0-2.7.2Z" />
+                  <path d="M15.4,25.4a1.9,1.9,0,0,0,0-2.8l-5.9-6a2.1,2.1,0,0,0-2.7-.2,1.9,1.9,0,0,0-.2,3L9.2,22H4a2,2,0,0,0,0,4H9.2L6.6,28.6a1.9,1.9,0,0,0,.2,3,2.1,2.1,0,0,0,2.7-.2Z" />
+                  <path d="M26,6V42a2,2,0,0,0,4,0V6a2,2,0,0,0-4,0Z" />
+                  <path d="M22,42V6a2,2,0,0,0-4,0V42a2,2,0,0,0,4,0Z" />
+                </svg>
               </Button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto py-2">
@@ -725,11 +731,17 @@ function MrReviewChatPanel({
         </h4>
         <Button
           aria-label="收合 Agent Chat"
-          className="px-2 py-1.5 text-xs"
+          className="p-1.5"
           onClick={onCollapse}
+          title="收合 Agent Chat"
           variant="ghost"
         >
-          收合
+          <svg aria-hidden="true" className="size-4" fill="currentColor" viewBox="0 0 48 48">
+            <path d="M32.6,22.6a1.9,1.9,0,0,0,0,2.8l5.9,6a2.1,2.1,0,0,0,2.7.2,1.9,1.9,0,0,0,.2-3L38.8,26H44a2,2,0,0,0,0-4H38.8l2.6-2.6a1.9,1.9,0,0,0-.2-3,2.1,2.1,0,0,0-2.7.2Z" />
+            <path d="M15.4,25.4a1.9,1.9,0,0,0,0-2.8l-5.9-6a2.1,2.1,0,0,0-2.7-.2,1.9,1.9,0,0,0-.2,3L9.2,22H4a2,2,0,0,0,0,4H9.2L6.6,28.6a1.9,1.9,0,0,0,.2,3,2.1,2.1,0,0,0,2.7-.2Z" />
+            <path d="M26,6V42a2,2,0,0,0,4,0V6a2,2,0,0,0-4,0Z" />
+            <path d="M22,42V6a2,2,0,0,0-4,0V42a2,2,0,0,0,4,0Z" />
+          </svg>
         </Button>
       </div>
       <div className="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto rounded-lg bg-surface">
