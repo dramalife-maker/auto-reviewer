@@ -75,6 +75,8 @@ export function MrInboxPage() {
   const [chatInput, setChatInput] = useState('')
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [chatLoading, setChatLoading] = useState(false)
+  const [listOpen, setListOpen] = useState(true)
+  const [chatOpen, setChatOpen] = useState(true)
   const [pendingConfirm, setPendingConfirm] = useState<'publish' | 'ignore' | null>(null)
   const editorDirtyRef = useRef(false)
   const baselineBodyRef = useRef('')
@@ -120,6 +122,10 @@ export function MrInboxPage() {
   const selected = useMemo(
     () => reviews.find((review) => review.id === selectedId) ?? null,
     [reviews, selectedId],
+  )
+
+  const showChatPanel = Boolean(
+    selected && (selected.status === 'draft' || chatMessages.length > 0),
   )
 
   // Hydrate editor + chat only when the selected review id changes.
@@ -354,38 +360,69 @@ export function MrInboxPage() {
         <p className="mt-1 text-sm text-ink-muted">AI 產出的 MR review 草稿，發布前可編輯與追問。</p>
       </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[260px_minmax(0,1.4fr)_minmax(0,1fr)] gap-4 overflow-hidden">
-        <Card className="flex min-h-0 flex-col overflow-hidden">
-          <Tabs items={FILTERS} value={status} onChange={handleFilterChange} accent="mr" />
-          <div className="min-h-0 flex-1 overflow-y-auto py-2">
-            {loading ? (
-              <p className="px-3 py-2 text-sm text-ink-muted">載入中...</p>
-            ) : reviews.length === 0 ? (
-              <p className="px-3 py-2 text-sm text-ink-muted">尚無{statusLabel(status)} MR review</p>
-            ) : (
-              reviews.map((review) => (
-                <ListRow
-                  key={review.id}
-                  active={review.id === selectedId}
-                  accent="mr"
-                  onClick={() => handleSelect(review)}
-                >
-                  <span className="block truncate font-semibold">
-                    !{review.mr_iid} {review.mr_title ?? `MR !${review.mr_iid}`}
-                  </span>
-                  <span className="mt-1 block truncate text-xs text-ink-muted">
-                    {review.project_name} · !{review.mr_iid} · {review.author_name ?? '未歸戶'}
-                  </span>
-                  <span className="mt-1 block text-xs text-ink-meta">
-                    第 {review.review_round} 輪 · {formatTimestamp(review.created_at)}
-                  </span>
-                </ListRow>
-              ))
-            )}
-          </div>
-        </Card>
+      <div className="flex min-h-0 flex-1 gap-4 overflow-hidden">
+        {listOpen ? (
+          <Card className="flex w-[240px] shrink-0 flex-col overflow-hidden">
+            <div className="flex shrink-0 items-start gap-1 pr-1">
+              <div className="min-w-0 flex-1">
+                <Tabs items={FILTERS} value={status} onChange={handleFilterChange} accent="mr" />
+              </div>
+              <Button
+                aria-label="收合收件匣列表"
+                className="mt-1 shrink-0 px-2 py-1.5 text-xs"
+                onClick={() => setListOpen(false)}
+                variant="ghost"
+              >
+                收合
+              </Button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto py-2">
+              {loading ? (
+                <p className="px-3 py-2 text-sm text-ink-muted">載入中...</p>
+              ) : reviews.length === 0 ? (
+                <p className="px-3 py-2 text-sm text-ink-muted">尚無{statusLabel(status)} MR review</p>
+              ) : (
+                reviews.map((review) => (
+                  <ListRow
+                    key={review.id}
+                    active={review.id === selectedId}
+                    accent="mr"
+                    onClick={() => handleSelect(review)}
+                  >
+                    <span className="block truncate font-semibold">
+                      !{review.mr_iid} {review.mr_title ?? `MR !${review.mr_iid}`}
+                    </span>
+                    <span className="mt-1 block truncate text-xs text-ink-muted">
+                      {review.project_name} · !{review.mr_iid} · {review.author_name ?? '未歸戶'}
+                    </span>
+                    <span className="mt-1 block text-xs text-ink-meta">
+                      第 {review.review_round} 輪 · {formatTimestamp(review.created_at)}
+                    </span>
+                  </ListRow>
+                ))
+              )}
+            </div>
+          </Card>
+        ) : (
+          <Card className="flex w-12 shrink-0 flex-col items-center gap-3 overflow-hidden py-3">
+            <Button
+              aria-label="展開收件匣列表"
+              className="px-2 py-1.5 text-xs"
+              onClick={() => setListOpen(true)}
+              variant="ghost"
+            >
+              列表
+            </Button>
+            {selected ? (
+              <span className="px-1 text-center text-xs font-semibold text-mr-dark [writing-mode:vertical-rl]">
+                !{selected.mr_iid}
+              </span>
+            ) : null}
+            <span className="text-[11px] text-ink-meta">{reviews.length}</span>
+          </Card>
+        )}
 
-        <Card className="flex min-h-0 flex-col overflow-hidden p-5">
+        <Card className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-5">
           {selected ? (
             <MrReviewDraftPanel
               actionLoading={actionLoading}
@@ -417,27 +454,37 @@ export function MrInboxPage() {
             />
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-ink-muted">
-              選擇左側 MR review
+              {listOpen ? '選擇左側 MR review' : '展開左側列表以選擇 MR review'}
             </div>
           )}
         </Card>
 
-        <Card className="flex min-h-0 flex-col overflow-hidden p-5">
-          {selected ? (
-            <MrReviewChatPanel
-              chatInput={chatInput}
-              chatLoading={chatLoading}
-              chatMessages={chatMessages}
-              onAgentTurn={handleAgentTurn}
-              onChatInputChange={setChatInput}
-              review={selected}
-            />
+        {showChatPanel ? (
+          chatOpen ? (
+            <Card className="flex w-[400px] shrink-0 flex-col overflow-hidden p-5">
+              <MrReviewChatPanel
+                chatInput={chatInput}
+                chatLoading={chatLoading}
+                chatMessages={chatMessages}
+                onAgentTurn={handleAgentTurn}
+                onChatInputChange={setChatInput}
+                onCollapse={() => setChatOpen(false)}
+                review={selected!}
+              />
+            </Card>
           ) : (
-            <div className="flex h-full items-center justify-center text-sm text-ink-muted">
-              選擇左側 MR review
-            </div>
-          )}
-        </Card>
+            <Card className="flex w-12 shrink-0 flex-col items-center overflow-hidden py-3">
+              <Button
+                aria-label="展開 Agent Chat"
+                className="px-2 py-1.5 text-xs"
+                onClick={() => setChatOpen(true)}
+                variant="ghost"
+              >
+                Chat
+              </Button>
+            </Card>
+          )
+        ) : null}
       </div>
 
       <ConfirmDialog
@@ -648,6 +695,7 @@ function MrReviewChatPanel({
   chatLoading,
   onChatInputChange,
   onAgentTurn,
+  onCollapse,
 }: {
   review: MrReviewItem
   chatMessages: ChatMessage[]
@@ -655,6 +703,7 @@ function MrReviewChatPanel({
   chatLoading: boolean
   onChatInputChange: (value: string) => void
   onAgentTurn: () => void
+  onCollapse: () => void
 }) {
   const isDraft = review.status === 'draft'
   const chatReadOnly = !isDraft
@@ -670,9 +719,19 @@ function MrReviewChatPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <h4 className="shrink-0 text-sm font-semibold">
-        Agent Chat{chatReadOnly ? '（唯讀）' : ''}
-      </h4>
+      <div className="flex shrink-0 items-center justify-between gap-2">
+        <h4 className="text-sm font-semibold">
+          Agent Chat{chatReadOnly ? '（唯讀）' : ''}
+        </h4>
+        <Button
+          aria-label="收合 Agent Chat"
+          className="px-2 py-1.5 text-xs"
+          onClick={onCollapse}
+          variant="ghost"
+        >
+          收合
+        </Button>
+      </div>
       <div className="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto rounded-lg bg-surface">
         {chatMessages.length === 0 ? (
           <p className="rounded-lg bg-page p-3 text-sm text-ink-muted">針對這份 review 向 AI 追問細節。</p>
