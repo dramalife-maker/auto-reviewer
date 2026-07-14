@@ -731,6 +731,8 @@ pub struct RunManifest<'a> {
     pub repo_path: &'a str,
     pub report_root: String,
     pub person_report_root: String,
+    /// Project-level ADR directory: `{report_root}/.notes`.
+    pub notes_dir: String,
     pub run_date: String,
     pub since: String,
     pub output_contract: &'static str,
@@ -769,6 +771,18 @@ pub fn manifest_path(data_root: &Path, run_id: i64, project_id: i64) -> PathBuf 
         .join("manifest.json")
 }
 
+/// `{DATA_ROOT}/reports/{project_name}/.notes` — project ADR store (index + adr-*.md).
+pub fn project_notes_dir(data_root: &Path, project_name: &str) -> PathBuf {
+    data_root
+        .join("reports")
+        .join(project_name)
+        .join(".notes")
+}
+
+fn path_display_normalized(path: &Path) -> String {
+    path.display().to_string().replace('\\', "/")
+}
+
 pub async fn write_weekly_manifest(
     pool: &sqlx::SqlitePool,
     data_root: &Path,
@@ -786,16 +800,13 @@ pub async fn write_weekly_manifest(
         .format("%Y-%m-%d")
         .to_string();
     let report_root_path = data_root.join("reports").join(&project.name);
-    let report_root = report_root_path
-        .display()
-        .to_string()
-        .replace('\\', "/");
-    let person_report_root = data_root
-        .join("reports")
-        .join(crate::person_trends::PERSON_REPORT_DIR)
-        .display()
-        .to_string()
-        .replace('\\', "/");
+    let report_root = path_display_normalized(&report_root_path);
+    let person_report_root = path_display_normalized(
+        &data_root
+            .join("reports")
+            .join(crate::person_trends::PERSON_REPORT_DIR),
+    );
+    let notes_dir = path_display_normalized(&project_notes_dir(data_root, &project.name));
 
     let authors = identity::prepare_manifest_authors(
         pool,
@@ -820,6 +831,7 @@ pub async fn write_weekly_manifest(
         repo_path,
         report_root,
         person_report_root,
+        notes_dir,
         run_date,
         since,
         output_contract: "output-contract.md",
@@ -899,6 +911,8 @@ pub struct MrPollManifest<'a> {
     pub repo_path: &'a str,
     pub draft_dir: String,
     pub pending_dir: String,
+    /// Project-level ADR directory: `reports/{project}/.notes`.
+    pub notes_dir: String,
     /// Project-layer monthly file for this person (`reports/{project}/{person}/YYYY-MM.md`).
     /// Per-MR observation sessions are appended here in addition to `_pending` snippets.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -954,10 +968,7 @@ pub async fn write_mr_poll_manifest(
     let since = (Utc::now() - chrono::Duration::days(7))
         .format("%Y-%m-%d")
         .to_string();
-    let draft_dir = mr_poll_draft_dir(data_root, run_id, project.id)
-        .display()
-        .to_string()
-        .replace('\\', "/");
+    let draft_dir = path_display_normalized(&mr_poll_draft_dir(data_root, run_id, project.id));
     let pending_dir = match observation_person.map(str::trim).filter(|s| !s.is_empty()) {
         Some(person) => {
             let dir = data_root
@@ -966,15 +977,11 @@ pub async fn write_mr_poll_manifest(
                 .join(person)
                 .join("_pending");
             std::fs::create_dir_all(&dir)?;
-            dir.display().to_string().replace('\\', "/")
+            path_display_normalized(&dir)
         }
-        None => data_root
-            .join("reports")
-            .join(&project.name)
-            .display()
-            .to_string()
-            .replace('\\', "/"),
+        None => path_display_normalized(&data_root.join("reports").join(&project.name)),
     };
+    let notes_dir = path_display_normalized(&project_notes_dir(data_root, &project.name));
     let person_month_md_path = observation_person.map(str::trim).filter(|s| !s.is_empty()).map(
         |person| {
             let month = Utc::now().format("%Y-%m").to_string();
@@ -986,13 +993,10 @@ pub async fn write_mr_poll_manifest(
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            path.display().to_string().replace('\\', "/")
+            path_display_normalized(&path)
         },
     );
-    let eligible_path = eligible_mrs_path(data_root, run_id, project.id)
-        .display()
-        .to_string()
-        .replace('\\', "/");
+    let eligible_path = path_display_normalized(&eligible_mrs_path(data_root, run_id, project.id));
 
     let manifest = MrPollManifest {
         mode: "mr_poll",
@@ -1000,6 +1004,7 @@ pub async fn write_mr_poll_manifest(
         repo_path,
         draft_dir,
         pending_dir,
+        notes_dir,
         person_month_md_path,
         reviewer_username: reviewer_username.map(str::to_string),
         since: Some(since),
@@ -1136,6 +1141,22 @@ mod tests {
         assert!(
             month_path.ends_with(".md"),
             "person_month_md_path should be a .md file, got {month_path}"
+        );
+        let notes_dir = json["notes_dir"].as_str().expect("notes_dir");
+        assert!(
+            notes_dir.ends_with("reports/alpha/.notes")
+                || notes_dir.ends_with(r"reports\alpha\.notes"),
+            "notes_dir should be reports/{{project}}/.notes, got {notes_dir}"
+        );
+    }
+
+    #[test]
+    fn project_notes_dir_joins_reports_project_dot_notes() {
+        let root = Path::new("/data/reviewer");
+        let path = project_notes_dir(root, "game-backend");
+        assert_eq!(
+            path,
+            Path::new("/data/reviewer/reports/game-backend/.notes")
         );
     }
 }

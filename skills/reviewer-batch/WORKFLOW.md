@@ -18,14 +18,23 @@
    - `since`（分析窗口起日，`YYYY-MM-DD`，含當日）
    - `authors`（已歸戶工程師陣列：`email`, `git_name`, `person_id`, `display_name`）
    - `open_pending`（本專案目前 `status='open'` 的待確認；元素含 `id`, `person_id`, `display_name`, `question`。寫 `## 待確認` 時必須遵守下方「待確認延續規則」）
+   - `notes_dir`（本專案 ADR 目錄，例 `$DATA_ROOT_DIR/reports/game-backend/.notes`；內含 `index.md` 與 `adr-*.md`。**必讀**，見下方「專案 ADR」）
    - `published_pending_snippets`（可選陣列；相對於 `report_root` 的路徑，例如 `Alice Chen/_pending/mr-42-round-1.md`。後端依 `mr_reviews.status='published'` 預先篩選；未列於此陣列的 `_pending/` 片段**不得**折入週報）
    - `output_contract`（固定為 `output-contract.md`，格式見同目錄 appended 規格）
 3. 若 `mode` 不是 `weekly_batch`，停止並在 stderr 說明（仍 exit 0 除非無法讀 manifest）。
 
+**專案 ADR（`notes_dir`，硬性）**：
+
+1. 若 `{notes_dir}/index.md` 存在 → Read 之；缺檔＝尚無已知決策。
+2. 寫新的技術選擇類 `## 待確認` 或盤點是否延續此類議題前，對 index 所列決策按需 Read 對應 `adr-*.md` 的 **`<tl;dr>`**（TL;DR 足夠即可，不必全文）。
+3. **禁止**把已在 ADR `<tl;dr>` 結案的主題寫成**新的** `## 待確認` 問句（例：ADR 已定「Session 用 Redis」→ 不得再問「為何選 Redis」）。
+4. Headless **本行程不寫** ADR（不新增 `adr-*.md`、不改 `index.md`）。ADR 寫入僅經 MR agent chat 顯式指令。
+5. `.notes` 是專案保留目錄，**不是**工程師 `display_name` 資料夾；人物待確認歷史仍只在 `{person_report_root}/{display_name}/_notes.md`。
+
 **寫入限制（硬性）**：
 
-- 允許寫入：`{report_root}/**` 底下所有檔案，以及 `{person_report_root}/{display_name}/**`（跨專案長期檔）。
-- 允許讀取：`repo_path` 下 git 歷史、`report_root` 與 `{person_report_root}/{display_name}/` 既有檔案（含 `_pending/`）。
+- 允許寫入：`{report_root}/**` 底下所有檔案，以及 `{person_report_root}/{display_name}/**`（跨專案長期檔）。**例外**：不要寫入 `{report_root}/.notes/`（headless 只讀 ADR）。
+- 允許讀取：`repo_path` 下 git 歷史、`report_root`（含 `.notes/`）、與 `{person_report_root}/{display_name}/` 既有檔案（含 `_pending/`）。
 - **禁止**寫入 manifest 路徑以外的新根目錄、禁止修改 `repos/` 原始碼（除 Read 外不 Write repo 內容）。
 
 ---
@@ -221,12 +230,13 @@ Read 若已存在：
 
 ## 7. 快速檢查清單
 
-- [ ] 已 Read manifest.json
+- [ ] 已 Read manifest.json（含 `notes_dir`）
+- [ ] 已讀 `{notes_dir}/index.md`（若存在）；新 `## 待確認` 未重問已知 ADR 技術選擇
 - [ ] 已依 manifest `authors` 處理每位工程師（非自行 git 歸戶）
 - [ ] 已讀 `open_pending`；延續／已釐清沿用原文；未把已釐清項同時寫進待確認
 - [ ] 已消費之 `published_pending_snippets`：濃縮折入 report／summary（思維模式→成長面向）；未整段貼上；已**刪除**對應 `_pending` 檔（不建 `_archived`）
 - [ ] 每份 `summary.md` frontmatter 與四個 heading 正確（含可空的 `## 已釐清`）
-- [ ] 路徑均在 `{report_root}/{person}/{run_date}/`
+- [ ] 路徑均在 `{report_root}/{person}/{run_date}/`（且未把 `.notes` 當人物目錄）
 - [ ] 已更新專案層與人物層 `YYYY-MM.md`（若有產 report）
 - [ ] 人物層 `index.md`：僅重複模式／成長跡象才追加；未每週複貼 summary
 - [ ] `_notes.md` 僅追加待確認文字（無思維模式）

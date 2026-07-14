@@ -159,6 +159,7 @@ async fn execute_agent_turn_fails_on_cancel_with_shutdown_error() {
         &working_dir,
         "sess-1",
         "clarify please",
+        "/data/reports/alpha/.notes",
         config.reviewer_agent(),
         token,
     )

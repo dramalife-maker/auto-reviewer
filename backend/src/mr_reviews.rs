@@ -833,8 +833,20 @@ pub async fn agent_turn(
     let working_dir = resolve_project_resident_worktree(pool, &row.project_name, &row.project_id)
         .await?;
     let agent = ReviewerAgent::parse_db_value(&row.reviewer_agent);
-    let (reply, new_session_id) =
-        execute_agent_turn(config, &working_dir, session_id, message, agent, cancel).await?;
+    let notes_dir = crate::runs::project_notes_dir(config.data_dir(), &row.project_name)
+        .display()
+        .to_string()
+        .replace('\\', "/");
+    let (reply, new_session_id) = execute_agent_turn(
+        config,
+        &working_dir,
+        session_id,
+        message,
+        &notes_dir,
+        agent,
+        cancel,
+    )
+    .await?;
 
     let session_id = new_session_id.unwrap_or_else(|| session_id.to_string());
     sqlx::query("UPDATE mr_reviews SET agent_session_id = ?, updated_at = datetime('now') WHERE id = ?")

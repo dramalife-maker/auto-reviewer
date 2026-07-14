@@ -200,6 +200,15 @@ async fn manifest_includes_person_report_root() {
         .to_string()
         .replace('\\', "/");
     assert_eq!(json["person_report_root"], expected);
+    let expected_notes = temp
+        .path()
+        .join("reports")
+        .join("alpha")
+        .join(".notes")
+        .display()
+        .to_string()
+        .replace('\\', "/");
+    assert_eq!(json["notes_dir"], expected_notes);
     let open_pending = json["open_pending"].as_array().expect("open_pending array");
     assert!(open_pending.is_empty());
 }

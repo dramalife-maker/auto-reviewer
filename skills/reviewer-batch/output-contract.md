@@ -84,6 +84,7 @@ Bullet 規則：
 - section 之間不要插入其他 level-2 heading。
 - **延續既有 open**：寫入 `## 待確認` 時文字必須等於 `manifest.open_pending[].question`。
 - **已釐清**：寫入 `## 已釐清` 時文字必須等於對應 open `question`，且不得同時出現在 `## 待確認`。僅省略兩區 ≠ resolve。詳見 `WORKFLOW.md`「待確認延續規則」。
+- **專案 ADR**：寫新的技術選擇類 `## 待確認` 前必須遵守 `WORKFLOW.md`「專案 ADR（notes_dir）」；已知決策不得再寫成新問句。
 
 ### 寫作規範（觀察折入）
 

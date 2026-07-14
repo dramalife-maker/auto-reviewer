@@ -232,10 +232,12 @@ pub async fn execute_agent_turn(
     working_dir: &Path,
     session_id: &str,
     message: &str,
+    notes_dir: &str,
     agent: ReviewerAgent,
     cancel: CancellationToken,
 ) -> Result<(String, Option<String>), Error> {
-    let mut command = build_agent_turn_command(config, working_dir, session_id, message, agent)?;
+    let mut command =
+        build_agent_turn_command(config, working_dir, session_id, message, notes_dir, agent)?;
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let mut child = command.spawn().map_err(Error::Io)?;
@@ -604,6 +606,7 @@ fn build_agent_turn_command(
     working_dir: &Path,
     session_id: &str,
     message: &str,
+    notes_dir: &str,
     agent: ReviewerAgent,
 ) -> Result<Command, Error> {
     if let Some(program) = config.reviewer_executor() {
@@ -614,6 +617,9 @@ fn build_agent_turn_command(
         }
         return Ok(Command::new(program));
     }
+
+    let prompt = agent_turn_prompt(notes_dir, message);
+    let skill_path = adr_notes_skill_path(config);
 
     match agent {
         ReviewerAgent::Claude => {
@@ -629,8 +635,10 @@ fn build_agent_turn_command(
                 .arg(config.data_dir())
                 .arg("--add-dir")
                 .arg(working_dir)
+                .arg("--append-system-prompt-file")
+                .arg(&skill_path)
                 .arg("-p")
-                .arg(message)
+                .arg(prompt)
                 .arg("--resume")
                 .arg(session_id)
                 .arg("--output-format")
@@ -639,7 +647,11 @@ fn build_agent_turn_command(
             Ok(command)
         }
         ReviewerAgent::Cursor => {
-            let prompt = prepare_prompt_for_cli(message);
+            let skill_text = std::fs::read_to_string(&skill_path).map_err(Error::Io)?;
+            let mut full = prompt;
+            full.push_str("\n\n--- PROJECT ADR NOTES SKILL ---\n");
+            full.push_str(&skill_text);
+            let full = prepare_prompt_for_cli(&full);
             let mut command = reviewer_command("cursor-agent");
             command
                 .current_dir(working_dir)
@@ -651,10 +663,22 @@ fn build_agent_turn_command(
                 .arg("--resume")
                 .arg(session_id);
             append_model_arg(&mut command, config);
-            command.arg(prompt);
+            command.arg(full);
             Ok(command)
         }
     }
+}
+
+fn agent_turn_prompt(notes_dir: &str, message: &str) -> String {
+    format!("[project-adr] notes_dir={notes_dir}\n\n{message}")
+}
+
+fn adr_notes_skill_path(config: &AppConfig) -> PathBuf {
+    config
+        .app_root()
+        .join("skills")
+        .join("project-adr-notes")
+        .join("SKILL.md")
 }
 
 /// Build a `Command` for a reviewer CLI, resolving Windows shims robustly.
@@ -930,6 +954,39 @@ mod tests {
         assert!(prompt.contains("change.diff at most once"));
         assert!(prompt.contains("≤8 key source files"));
         assert!(prompt.contains("draft BEFORE observation"));
+    }
+
+    #[test]
+    fn agent_turn_claude_command_appends_adr_skill_and_notes_dir() {
+        let config = test_config();
+        let command = build_agent_turn_command(
+            &config,
+            config.app_root(),
+            "sess-1",
+            "record as ADR please",
+            "/data/reports/alpha/.notes",
+            ReviewerAgent::Claude,
+        )
+        .expect("cmd");
+        let args = command_args(&command);
+        let joined = args.join(" ");
+        assert!(
+            joined.contains("project-adr-notes") && joined.contains("SKILL.md"),
+            "expected ADR skill append, got: {joined}"
+        );
+        assert!(
+            joined.contains("[project-adr] notes_dir=/data/reports/alpha/.notes"),
+            "expected notes_dir in prompt, got: {joined}"
+        );
+    }
+
+    #[test]
+    fn agent_turn_prompt_prefixes_notes_dir() {
+        let prompt = agent_turn_prompt("/data/reports/alpha/.notes", "記成 ADR");
+        assert_eq!(
+            prompt,
+            "[project-adr] notes_dir=/data/reports/alpha/.notes\n\n記成 ADR"
+        );
     }
 
     fn test_config() -> AppConfig {

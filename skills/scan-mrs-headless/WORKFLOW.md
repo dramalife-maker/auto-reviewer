@@ -18,6 +18,7 @@
    - `draft_dir`（MR review 草稿落檔目錄）
    - `pending_dir`（**已含** `{person}/_pending`；例 `reports/<project>/<person>/_pending`）
    - `person_month_md_path`（專案層月檔，例 `reports/<project>/<person>/2026-07.md`；與 `_pending` **一起**追加本場觀察）
+   - `notes_dir`（本專案 ADR 目錄，例 `reports/<project>/.notes`；**必讀**，見下方「專案 ADR」）
    - `change_log_path` / `change_stat_path` / `change_diff_path`（後端預寫的變更素材；**必讀**）
    - `reviewer_username`（GitLab 視角，可選）
    - `since`（可選；分析窗口起日）
@@ -31,6 +32,13 @@
 5. 若 `change_log_path`／`change_stat_path`／`change_diff_path` 任一缺失，停止並在 stderr 說明。
 6. 若 `target_branch` 為空，停止並在 stderr 說明（無法解讀預算素材基準）。
 7. 若本趟為 per-MR（有 `mr_iid`）卻缺少 `person_month_md_path`，停止並在 stderr 說明。
+
+**專案 ADR（`notes_dir`，硬性）**：
+
+1. 若 `{notes_dir}/index.md` 存在 → Read 之；缺檔＝尚無已知決策。
+2. 寫「建議追問」中的**技術選擇**題前，對 index 所列決策按需 Read 對應 `adr-*.md` 的 **`<tl;dr>`**。
+3. **禁止**把已在 ADR `<tl;dr>` 結案的主題列為建議追問（例：已定 Redis session → 不要再問為何選 Redis）。
+4. Headless **不寫** ADR（不新增／不改 `.notes/`）。`.notes` **不是**人物資料夾。
 
 **硬性限制**：
 
@@ -192,16 +200,18 @@ Checklist：
 
 ## 6. 快速檢查清單
 
-- [ ] 已 Read manifest.json 與 `eligible_mrs.json`（含 `target_branch`）
+- [ ] 已 Read manifest.json 與 `eligible_mrs.json`（含 `target_branch`、`notes_dir`）
+- [ ] 已讀 `{notes_dir}/index.md`（若存在）；建議追問未重問已知 ADR 技術選擇
 - [ ] 已 Read `change_stat` + `change_log`；`change.diff` 最多一次、未翻頁讀完
 - [ ] 從 stat 窄讀 ≤8 個關鍵原始檔（未再跑全量 git diff／fetch）
 - [ ] 僅處理 manifest 指定的單一 `mr_iid`
 - [ ] 已執行 `glab mr view … -c` 取得討論脈絡
 - [ ] 主要只 Read diff 內檔案；新模組／整合層才做有限同類對照（§1.3）
-- [ ] 未對 `pending_dir`／`reports/` 做 `**/*` 廣掃
+- [ ] 未對 `pending_dir`／`reports/` 做 `**/*` 廣掃（讀 `.notes/index.md` 與列出的 adr 除外）
 - [ ] 若 `review_round >= 2`：已讀 `prior_published_reviews`（或 GitLab AI notes）並寫入「上一輪疑慮處理狀態」表（沿用編號）
 - [ ] 未以 glab 列舉 open MR
 - [ ] 未執行任何寫入 GitLab 的 glab 指令
+- [ ] 未寫入 `{notes_dir}/`（headless 只讀 ADR）
 - [ ] **先**寫草稿再寫觀察
 - [ ] 草稿 frontmatter 含 `mr_iid` / `mr_title` / `review_round` / `author_identity`
 - [ ] 草稿 body 含契約段落；`[高]` 已事實查核；無思維模式、無自行加 `By: AI Agent`
