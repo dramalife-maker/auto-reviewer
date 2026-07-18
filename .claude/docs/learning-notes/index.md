@@ -36,7 +36,7 @@
 
 | 日期 | 檔案 | 摘要 |
 |------|------|------|
-| <!-- YYYY-MM-DD --> | <!-- path --> | <!-- 一句話描述 --> |
+| 2026-07-18 | 2026-07-18/trends-requested-for-effect-race.md | `useEffect` 請求前 `set` 又把該 state 當 deps → cleanup cancel → loading 永遠不關；改 settle 後再標記或用 ref |
 
 ## 遺留技術債 (Technical Debt)
 
