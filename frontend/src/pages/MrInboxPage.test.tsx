@@ -108,6 +108,7 @@ describe('MrInboxPage', () => {
   })
 
   it('hydrates Agent Chat from list payload chat_messages', async () => {
+    const user = userEvent.setup()
     fetchMrReviews.mockResolvedValue([
       mrReview('draft', 1, {
         chat_messages: [
@@ -128,12 +129,14 @@ describe('MrInboxPage', () => {
     ])
     renderPage('/mr-inbox')
 
+    await user.click(await screen.findByRole('button', { name: '展開 Agent Chat' }))
     expect(await screen.findByText('why flag helper?')).toBeInTheDocument()
     expect(screen.getByText('because it wraps commits')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '送出' })).toBeInTheDocument()
   })
 
   it('shows published chat history as read-only without send controls', async () => {
+    const user = userEvent.setup()
     fetchMrReviews.mockResolvedValue([
       mrReview('published', 1, {
         chat_messages: [
@@ -154,6 +157,7 @@ describe('MrInboxPage', () => {
     ])
     renderPage('/mr-inbox?status=published')
 
+    await user.click(await screen.findByRole('button', { name: '展開 Agent Chat' }))
     expect(await screen.findByText('Agent Chat（唯讀）')).toBeInTheDocument()
     expect(screen.getByText('why flag helper?')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '送出' })).not.toBeInTheDocument()
@@ -164,6 +168,7 @@ describe('MrInboxPage', () => {
     renderPage('/mr-inbox?status=published')
 
     await screen.findByText('Review 內容（唯讀）')
+    expect(screen.queryByRole('button', { name: '展開 Agent Chat' })).not.toBeInTheDocument()
     expect(screen.queryByText(/Agent Chat/)).not.toBeInTheDocument()
   })
 
@@ -195,6 +200,7 @@ describe('MrInboxPage', () => {
     })
     renderPage('/mr-inbox')
 
+    await user.click(await screen.findByRole('button', { name: '展開 Agent Chat' }))
     const input = await screen.findByPlaceholderText('例如：為什麼你標記了 transaction helper？')
     await user.type(input, 'please revise')
     await user.click(screen.getByRole('button', { name: '送出' }))
@@ -217,6 +223,7 @@ describe('MrInboxPage', () => {
     const editor = await screen.findByLabelText('Review 草稿')
     fireEvent.change(editor, { target: { value: 'my local edit' } })
 
+    await user.click(screen.getByRole('button', { name: '展開 Agent Chat' }))
     const input = screen.getByPlaceholderText('例如：為什麼你標記了 transaction helper？')
     await user.type(input, 'please revise')
     await user.click(screen.getByRole('button', { name: '送出' }))
@@ -240,6 +247,7 @@ describe('MrInboxPage', () => {
     const editor = await screen.findByLabelText('Review 草稿')
     fireEvent.change(editor, { target: { value: 'my local edit' } })
 
+    await user.click(screen.getByRole('button', { name: '展開 Agent Chat' }))
     const input = screen.getByPlaceholderText('例如：為什麼你標記了 transaction helper？')
     await user.type(input, 'please revise')
     await user.click(screen.getByRole('button', { name: '送出' }))

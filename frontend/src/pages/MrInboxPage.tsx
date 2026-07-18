@@ -12,7 +12,7 @@ import {
   restoreMrReview,
   updateMrReview,
 } from '../api'
-import { AgentChatPanel } from '../components/AgentChatPanel'
+import { AgentChatLauncher } from '../components/AgentChatLauncher'
 import { Button } from '../components/ui/Button.tsx'
 import { Card } from '../components/ui/Card.tsx'
 import { ConfirmDialog } from '../components/ui/ConfirmDialog.tsx'
@@ -77,7 +77,6 @@ export function MrInboxPage() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [chatLoading, setChatLoading] = useState(false)
   const [listOpen, setListOpen] = useState(true)
-  const [chatOpen, setChatOpen] = useState(true)
   const [pendingConfirm, setPendingConfirm] = useState<'publish' | 'ignore' | null>(null)
   const editorDirtyRef = useRef(false)
   const baselineBodyRef = useRef('')
@@ -466,42 +465,27 @@ export function MrInboxPage() {
           )}
         </Card>
 
-        {showChatPanel ? (
-          chatOpen ? (
-            <Card className="flex w-[400px] shrink-0 flex-col overflow-hidden p-5">
-              <AgentChatPanel
-                className="h-full"
-                messages={chatMessages}
-                input={chatInput}
-                loading={chatLoading}
-                readOnly={selected!.status !== 'draft'}
-                inputDisabled={!selected!.agent_session_id}
-                titleSuffix={selected!.status !== 'draft' ? '（唯讀）' : ''}
-                emptyHint="針對這份 review 向 AI 追問細節。"
-                placeholder={
-                  selected!.agent_session_id
-                    ? '例如：為什麼你標記了 transaction helper？'
-                    : '此草稿沒有 agent session'
-                }
-                onInputChange={setChatInput}
-                onSend={handleAgentTurn}
-                onCollapse={() => setChatOpen(false)}
-              />
-            </Card>
-          ) : (
-            <Card className="flex w-12 shrink-0 flex-col items-center overflow-hidden py-3">
-              <Button
-                aria-label="展開 Agent Chat"
-                className="px-2 py-1.5 text-xs"
-                onClick={() => setChatOpen(true)}
-                variant="ghost"
-              >
-                Chat
-              </Button>
-            </Card>
-          )
-        ) : null}
       </div>
+
+      {showChatPanel ? (
+        <AgentChatLauncher
+          messages={chatMessages}
+          input={chatInput}
+          loading={chatLoading}
+          readOnly={selected!.status !== 'draft'}
+          inputDisabled={!selected!.agent_session_id}
+          titleSuffix={selected!.status !== 'draft' ? '（唯讀）' : ''}
+          emptyHint="針對這份 review 向 AI 追問細節。"
+          placeholder={
+            selected!.agent_session_id
+              ? '例如：為什麼你標記了 transaction helper？'
+              : '此草稿沒有 agent session'
+          }
+          onInputChange={setChatInput}
+          onSend={handleAgentTurn}
+          panelClassName="h-full max-h-[min(70vh,560px)]"
+        />
+      ) : null}
 
       <ConfirmDialog
         open={pendingConfirm === 'ignore'}

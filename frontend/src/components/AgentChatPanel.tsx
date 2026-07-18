@@ -18,7 +18,7 @@ export function AgentChatPanel({
   titleSuffix = '',
   onInputChange,
   onSend,
-  onCollapse,
+  onClose,
   className = '',
 }: {
   messages: AgentChatMessage[]
@@ -31,7 +31,7 @@ export function AgentChatPanel({
   titleSuffix?: string
   onInputChange: (value: string) => void
   onSend: () => void
-  onCollapse: () => void
+  onClose: () => void
   className?: string
 }): ReactNode {
   const composerDisabled = loading || inputDisabled
@@ -42,17 +42,14 @@ export function AgentChatPanel({
       <div className="flex shrink-0 items-center justify-between gap-2">
         <h4 className="text-sm font-semibold">Agent Chat{titleSuffix}</h4>
         <Button
-          aria-label="收合 Agent Chat"
+          aria-label="關閉 Agent Chat"
           className="p-1.5"
-          onClick={onCollapse}
-          title="收合 Agent Chat"
+          onClick={onClose}
+          title="關閉 Agent Chat"
           variant="ghost"
         >
           <svg aria-hidden="true" className="size-4" fill="currentColor" viewBox="0 0 48 48">
-            <path d="M32.6,22.6a1.9,1.9,0,0,0,0,2.8l5.9,6a2.1,2.1,0,0,0,2.7.2,1.9,1.9,0,0,0,.2-3L38.8,26H44a2,2,0,0,0,0-4H38.8l2.6-2.6a1.9,1.9,0,0,0-.2-3,2.1,2.1,0,0,0-2.7.2Z" />
-            <path d="M15.4,25.4a1.9,1.9,0,0,0,0-2.8l-5.9-6a2.1,2.1,0,0,0-2.7-.2,1.9,1.9,0,0,0-.2,3L9.2,22H4a2,2,0,0,0,0,4H9.2L6.6,28.6a1.9,1.9,0,0,0,.2,3,2.1,2.1,0,0,0,2.7-.2Z" />
-            <path d="M26,6V42a2,2,0,0,0,4,0V6a2,2,0,0,0-4,0Z" />
-            <path d="M22,42V6a2,2,0,0,0-4,0V42a2,2,0,0,0,4,0Z" />
+            <path d="M12.4 12.4a2 2 0 0 1 2.8 0L24 21.2l8.8-8.8a2 2 0 1 1 2.8 2.8L26.8 24l8.8 8.8a2 2 0 0 1-2.8 2.8L24 26.8l-8.8 8.8a2 2 0 0 1-2.8-2.8L21.2 24l-8.8-8.8a2 2 0 0 1 0-2.8Z" />
           </svg>
         </Button>
       </div>

@@ -12,7 +12,7 @@ const baseProps = {
   placeholder: '例如：為什麼你標記了 transaction helper？',
   onInputChange: vi.fn(),
   onSend: vi.fn(),
-  onCollapse: vi.fn(),
+  onClose: vi.fn(),
 }
 
 describe('AgentChatPanel', () => {
@@ -63,4 +63,14 @@ describe('AgentChatPanel', () => {
     await user.click(screen.getByRole('button', { name: '送出' }))
     expect(onSend).toHaveBeenCalledTimes(1)
   })
+
+  it('exposes close control that calls onClose', async () => {
+    const user = userEvent.setup()
+    const onClose = vi.fn()
+    render(<AgentChatPanel {...baseProps} onClose={onClose} />)
+
+    await user.click(screen.getByRole('button', { name: '關閉 Agent Chat' }))
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
 })
+

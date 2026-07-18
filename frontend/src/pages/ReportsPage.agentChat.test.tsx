@@ -74,6 +74,7 @@ describe('ReportsPage Agent Chat', () => {
     agentTurnPersonReportChat.mockRejectedValue(new Error('agent failed'))
     renderPage()
 
+    await user.click(await screen.findByRole('button', { name: '展開 Agent Chat' }))
     const input = await screen.findByPlaceholderText('例如：把 alpha 的 one_line 改得更精準')
     await user.type(input, 'tighten one_line')
     await user.click(screen.getByRole('button', { name: '送出' }))
@@ -116,6 +117,7 @@ describe('ReportsPage Agent Chat', () => {
       })
     renderPage()
 
+    await user.click(await screen.findByRole('button', { name: '展開 Agent Chat' }))
     const input = await screen.findByPlaceholderText('例如：把 alpha 的 one_line 改得更精準')
     await user.type(input, 'tighten one_line')
     await user.click(screen.getByRole('button', { name: '送出' }))

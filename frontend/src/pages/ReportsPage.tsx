@@ -12,7 +12,7 @@ import {
   markReportRead,
   resolvePendingItem,
 } from '../api'
-import { AgentChatPanel } from '../components/AgentChatPanel'
+import { AgentChatLauncher } from '../components/AgentChatLauncher'
 import { Avatar } from '../components/ui/Avatar.tsx'
 import { Button } from '../components/ui/Button.tsx'
 import { Card } from '../components/ui/Card.tsx'
@@ -148,7 +148,6 @@ export function ReportsPage() {
   const [trendsLoading, setTrendsLoading] = useState(false)
   const [markingRead, setMarkingRead] = useState(false)
   const [resolvingIds, setResolvingIds] = useState<Set<number>>(new Set())
-  const [chatOpen, setChatOpen] = useState(true)
   const [chatInput, setChatInput] = useState('')
   const [chatMessages, setChatMessages] = useState<ChatBubble[]>([])
   const [chatLoading, setChatLoading] = useState(false)
@@ -376,8 +375,8 @@ export function ReportsPage() {
   }
 
   return (
-    <div className="mx-auto flex max-w-[1200px] gap-4">
-      <Card className="min-w-0 flex-1 p-5 sm:px-6">
+    <div className="mx-auto max-w-[1200px]">
+      <Card className="p-5 sm:px-6">
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
             <Avatar name={person?.display_name ?? trends?.display_name ?? '未知人員'} />
@@ -434,32 +433,15 @@ export function ReportsPage() {
         </div>
       </Card>
 
-      {chatOpen ? (
-        <Card className="flex w-[360px] shrink-0 flex-col overflow-hidden p-5">
-          <AgentChatPanel
-            className="h-[min(70vh,720px)]"
-            messages={chatMessages}
-            input={chatInput}
-            loading={chatLoading}
-            emptyHint="討論並調整這位人員的週報／觀察檔。"
-            placeholder="例如：把 alpha 的 one_line 改得更精準"
-            onInputChange={setChatInput}
-            onSend={handleAgentTurn}
-            onCollapse={() => setChatOpen(false)}
-          />
-        </Card>
-      ) : (
-        <Card className="flex w-12 shrink-0 flex-col items-center overflow-hidden py-3">
-          <Button
-            aria-label="展開 Agent Chat"
-            className="px-2 py-1.5 text-xs"
-            onClick={() => setChatOpen(true)}
-            variant="ghost"
-          >
-            Chat
-          </Button>
-        </Card>
-      )}
+      <AgentChatLauncher
+        messages={chatMessages}
+        input={chatInput}
+        loading={chatLoading}
+        emptyHint="討論並調整這位人員的週報／觀察檔。"
+        placeholder="例如：把 alpha 的 one_line 改得更精準"
+        onInputChange={setChatInput}
+        onSend={handleAgentTurn}
+      />
     </div>
   )
 }
