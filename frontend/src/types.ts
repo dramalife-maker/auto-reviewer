@@ -62,6 +62,17 @@ export interface PendingItem {
   resolution_note: string | null
 }
 
+export type PendingObservationStatus = 'draft' | 'published' | 'ignored' | 'unknown'
+
+export interface PendingObservation {
+  mr_iid: number
+  review_round: number
+  mr_title: string | null
+  status: PendingObservationStatus
+  filename: string
+  content: string
+}
+
 export interface LatestReportItem {
   id: number
   is_read: boolean
@@ -72,10 +83,11 @@ export interface LatestReportItem {
   highlights: string[]
   growth: string[]
   pending_items: PendingItem[]
+  pending_observations: PendingObservation[]
 }
 
 export interface LatestReportsResponse {
-  report_date: string
+  report_date: string | null
   projects: LatestReportItem[]
 }
 
@@ -345,6 +357,25 @@ export interface MrReviewAgentTurnResponse {
   agent_session_id: string
   draft_body: string
   draft_hash: string
+}
+
+export interface PersonReportChatMessage {
+  id: number
+  role: 'user' | 'assistant'
+  content: string
+  created_at: string
+}
+
+export interface PersonReportChatResponse {
+  agent_session_id: string | null
+  reviewer_agent: string
+  chat_messages: PersonReportChatMessage[]
+}
+
+export interface PersonReportChatAgentTurnResponse {
+  reply: string
+  agent_session_id: string | null
+  ingest_warnings?: string[]
 }
 
 export interface MrReviewDraftConflict {

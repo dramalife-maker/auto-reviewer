@@ -12,6 +12,7 @@ use crate::executor::{
     execute_mr_review, execute_weekly_batch, parse_agent_session_id, summarize_agent_output,
     ExecuteOutcome,
 };
+use crate::identity;
 use crate::mr_change_materials::{
     mr_change_materials_dir, prepare_change_materials, write_stub_change_materials,
     DEFAULT_DIFF_MAX_BYTES,
@@ -582,6 +583,90 @@ async fn process_mr_run_project(
             stage = "prepare_change_materials",
             elapsed_ms = stage_started.elapsed().as_millis() as u64,
             diff_truncated = material_paths.diff_truncated,
+            "mr scan stage"
+        );
+
+        // Gate: every commit author on this MR must already be bound to a person.
+        // Unmapped authors would otherwise fall back to raw git identity as the
+        // observation folder name (see `resolve_observation_person_folder`), so this
+        // MR is skipped (not reviewed) until the author is bound.
+        let stage_started = Instant::now();
+        if config.reviewer_executor().is_none() {
+            match crate::mr_change_materials::list_commit_authors(
+                &mr_worktree,
+                &eligible.target_branch,
+            )
+            .await
+            {
+                Ok(authors) => {
+                    let mut unmatched = Vec::new();
+                    for email in &authors {
+                        match identity::resolve_person_by_email(pool, email).await {
+                            Ok(Some(_)) => {}
+                            Ok(None) => unmatched.push(email.clone()),
+                            Err(err) => {
+                                warn!(
+                                    run_id = job.run_id,
+                                    project = %job.name,
+                                    mr_iid = eligible.mr_iid,
+                                    email = %email,
+                                    "identity lookup failed while checking commit authors: {err}"
+                                );
+                                unmatched.push(email.clone());
+                            }
+                        }
+                    }
+                    if !unmatched.is_empty() {
+                        for email in &unmatched {
+                            if let Err(err) = identity::record_unmatched_author(
+                                pool,
+                                identity::KIND_GIT_EMAIL,
+                                email,
+                                job.project_id,
+                                1,
+                            )
+                            .await
+                            {
+                                warn!(
+                                    run_id = job.run_id,
+                                    project = %job.name,
+                                    mr_iid = eligible.mr_iid,
+                                    email = %email,
+                                    "failed to record unmatched author: {err}"
+                                );
+                            }
+                        }
+                        warn!(
+                            run_id = job.run_id,
+                            project = %job.name,
+                            mr_iid = eligible.mr_iid,
+                            unmatched = %unmatched.join(", "),
+                            elapsed_ms = stage_started.elapsed().as_millis() as u64,
+                            "mr review skipped: unmatched commit authors"
+                        );
+                        had_failure = true;
+                        continue;
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        run_id = job.run_id,
+                        project = %job.name,
+                        mr_iid = eligible.mr_iid,
+                        elapsed_ms = stage_started.elapsed().as_millis() as u64,
+                        "mr commit author check failed: {err}"
+                    );
+                    had_failure = true;
+                    continue;
+                }
+            }
+        }
+        info!(
+            run_id = job.run_id,
+            project = %job.name,
+            mr_iid = eligible.mr_iid,
+            stage = "check_commit_authors",
+            elapsed_ms = stage_started.elapsed().as_millis() as u64,
             "mr scan stage"
         );
 

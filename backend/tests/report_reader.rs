@@ -284,3 +284,334 @@ async fn latest_reports_omits_resolved_pending_items() {
     let pending_items = project["pending_items"].as_array().expect("pending_items array");
     assert!(pending_items.is_empty());
 }
+
+fn write_pending_snippet(temp: &tempfile::TempDir, filename: &str, body: &str) {
+    let path = temp
+        .path()
+        .join("reports/game-backend/Alice/_pending")
+        .join(filename);
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir pending");
+    std::fs::write(&path, body).expect("write snippet");
+}
+
+async fn insert_mr_review(
+    pool: &sqlx::SqlitePool,
+    person_id: i64,
+    mr_iid: i64,
+    review_round: i64,
+    title: &str,
+    status: &str,
+) {
+    sqlx::query(
+        "INSERT INTO mr_reviews (
+            project_id, person_id, mr_iid, mr_title, review_round, draft_md_path, status
+         ) VALUES (1, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(person_id)
+    .bind(mr_iid)
+    .bind(title)
+    .bind(review_round)
+    .bind(format!("/tmp/draft-mr-{mr_iid}-r{review_round}.md"))
+    .bind(status)
+    .execute(pool)
+    .await
+    .expect("insert mr_review");
+}
+
+#[tokio::test]
+async fn latest_reports_includes_draft_and_published_pending_observations() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let (person_id, _) = seed_person_with_report(&temp, &pool).await;
+
+    write_pending_snippet(&temp, "mr-4-round-1.md", "## draft observation\n");
+    write_pending_snippet(&temp, "mr-7-round-1.md", "## published observation\n");
+    insert_mr_review(&pool, person_id, 4, 1, "Draft MR", "draft").await;
+    insert_mr_review(&pool, person_id, 7, 1, "Published MR", "published").await;
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/people/{person_id}/reports/latest"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.expect("body").to_bytes();
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    let observations = json["projects"][0]["pending_observations"]
+        .as_array()
+        .expect("pending_observations array");
+    assert_eq!(observations.len(), 2);
+    assert_eq!(observations[0]["mr_iid"], 7);
+    assert_eq!(observations[0]["status"], "published");
+    assert_eq!(observations[0]["mr_title"], "Published MR");
+    assert!(observations[0]["content"]
+        .as_str()
+        .unwrap_or("")
+        .contains("published observation"));
+    assert_eq!(observations[1]["mr_iid"], 4);
+    assert_eq!(observations[1]["status"], "draft");
+    assert!(observations[1]["content"]
+        .as_str()
+        .unwrap_or("")
+        .contains("draft observation"));
+}
+
+#[tokio::test]
+async fn latest_reports_omits_consumed_pending_observation() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let (person_id, _) = seed_person_with_report(&temp, &pool).await;
+    insert_mr_review(&pool, person_id, 4, 1, "Consumed MR", "published").await;
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/people/{person_id}/reports/latest"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.expect("body").to_bytes();
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    let observations = json["projects"][0]["pending_observations"]
+        .as_array()
+        .expect("pending_observations array");
+    assert!(observations.is_empty());
+}
+
+#[tokio::test]
+async fn latest_reports_marks_orphan_pending_observation_unknown() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let (person_id, _) = seed_person_with_report(&temp, &pool).await;
+    write_pending_snippet(&temp, "mr-9-round-1.md", "## orphan observation\n");
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/people/{person_id}/reports/latest"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.expect("body").to_bytes();
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    let observations = json["projects"][0]["pending_observations"]
+        .as_array()
+        .expect("pending_observations array");
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0]["mr_iid"], 9);
+    assert_eq!(observations[0]["status"], "unknown");
+}
+
+#[tokio::test]
+async fn latest_reports_empty_pending_dir_yields_empty_observations() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let (person_id, _) = seed_person_with_report(&temp, &pool).await;
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/people/{person_id}/reports/latest"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.expect("body").to_bytes();
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    let observations = json["projects"][0]["pending_observations"]
+        .as_array()
+        .expect("pending_observations array");
+    assert!(observations.is_empty());
+}
+
+#[tokio::test]
+async fn latest_reports_shows_pending_observations_without_weekly_report() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    sqlx::query(
+        "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('game-backend', ?, 0)",
+    )
+    .bind(temp.path().join("repos/game-backend").display().to_string())
+    .execute(&pool)
+    .await
+    .expect("insert project");
+    let person_id: i64 = sqlx::query("INSERT INTO people (display_name) VALUES ('Alice')")
+        .execute(&pool)
+        .await
+        .expect("insert person")
+        .last_insert_rowid();
+
+    write_pending_snippet(&temp, "mr-4-round-1.md", "## draft observation\n");
+    insert_mr_review(&pool, person_id, 4, 1, "Draft MR", "draft").await;
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/people/{person_id}/reports/latest"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.expect("body").to_bytes();
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    assert!(json["report_date"].is_null());
+    assert_eq!(json["projects"][0]["project_name"], "game-backend");
+    assert!(json["projects"][0]["highlights"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(json["projects"][0]["growth"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let observations = json["projects"][0]["pending_observations"]
+        .as_array()
+        .expect("pending_observations");
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0]["mr_iid"], 4);
+    assert_eq!(observations[0]["status"], "draft");
+}
+
+#[tokio::test]
+async fn latest_reports_includes_pending_project_without_latest_week_report() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let (person_id, _) = seed_person_with_report(&temp, &pool).await;
+
+    sqlx::query("INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('beta', ?, 0)")
+        .bind(temp.path().join("repos/beta").display().to_string())
+        .execute(&pool)
+        .await
+        .expect("insert beta");
+
+    let beta_pending = temp.path().join("reports/beta/Alice/_pending/mr-2-round-1.md");
+    std::fs::create_dir_all(beta_pending.parent().expect("parent")).expect("mkdir");
+    std::fs::write(&beta_pending, "## beta observation\n").expect("write");
+    sqlx::query(
+        "INSERT INTO mr_reviews (
+            project_id, person_id, mr_iid, mr_title, review_round, draft_md_path, status
+         ) VALUES (2, ?, 2, 'Beta MR', 1, ?, 'draft')",
+    )
+    .bind(person_id)
+    .bind("/tmp/draft-beta.md")
+    .execute(&pool)
+    .await
+    .expect("insert beta review");
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/people/{person_id}/reports/latest"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.expect("body").to_bytes();
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    let projects = json["projects"].as_array().expect("projects");
+    assert_eq!(projects.len(), 2);
+    let names: Vec<&str> = projects
+        .iter()
+        .map(|p| p["project_name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"game-backend"));
+    assert!(names.contains(&"beta"));
+    let beta = projects
+        .iter()
+        .find(|p| p["project_name"] == "beta")
+        .expect("beta card");
+    assert_eq!(beta["pending_observations"][0]["mr_iid"], 2);
+}
+
+#[tokio::test]
+async fn latest_reports_survives_missing_summary_md() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let (person_id, _) = seed_person_with_report(&temp, &pool).await;
+
+    // Point DB at a non-existent summary path (stale ingest / moved data root).
+    sqlx::query("UPDATE reports SET summary_md_path = ? WHERE person_id = ?")
+        .bind(
+            temp.path()
+                .join("reports/game-backend/Alice/2026-07-05/missing-summary.md")
+                .display()
+                .to_string(),
+        )
+        .bind(person_id)
+        .execute(&pool)
+        .await
+        .expect("update summary path");
+
+    write_pending_snippet(&temp, "mr-4-round-1.md", "## still visible\n");
+    insert_mr_review(&pool, person_id, 4, 1, "Draft MR", "draft").await;
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/people/{person_id}/reports/latest"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.expect("body").to_bytes();
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(json["projects"][0]["one_line"], "Stable week");
+    assert!(json["projects"][0]["highlights"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(json["projects"][0]["pending_observations"][0]["mr_iid"], 4);
+}

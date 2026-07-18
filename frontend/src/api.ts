@@ -22,6 +22,8 @@ import type {
   ScheduleConfigResponse,
   ScheduleUpdateInput,
   UnmatchedAuthor,
+  PersonReportChatAgentTurnResponse,
+  PersonReportChatResponse,
 } from './types'
 import { apiUrl } from './config'
 
@@ -233,6 +235,21 @@ export function agentTurnMrReview(
   message: string,
 ): Promise<MrReviewAgentTurnResponse> {
   return request(`/api/mr-reviews/${id}/agent-turn`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message }),
+  })
+}
+
+export function fetchPersonReportChat(personId: number): Promise<PersonReportChatResponse> {
+  return request(`/api/people/${personId}/report-chat`)
+}
+
+export function agentTurnPersonReportChat(
+  personId: number,
+  message: string,
+): Promise<PersonReportChatAgentTurnResponse> {
+  return request(`/api/people/${personId}/report-chat/agent-turn`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message }),

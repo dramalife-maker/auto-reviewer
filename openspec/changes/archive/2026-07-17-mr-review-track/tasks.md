@@ -57,4 +57,4 @@
 
 ## 8. 整合驗證
 
-- [ ] 8.1 端到端手動驗證：對測試用 GitLab 專案執行一次完整流程——手動觸發掃描（`POST /api/projects/:id/mr-scan`）→ 收件匣看到草稿與 `agent_session_id`（`GET /api/mr-reviews`）→ 對草稿追問（`POST .../agent-turn`）→ 編輯內容（`PATCH`）→ 發佈（`POST .../publish`）→ 確認對應 GitLab MR 上出現該則 note。驗證：手動執行並記錄結果於 PR 描述或測試報告。
+- [x] 8.1 端到端手動驗證：對測試用 GitLab 專案執行一次完整流程——手動觸發掃描（`POST /api/projects/:id/mr-scan`）→ 收件匣看到草稿與 `agent_session_id`（`GET /api/mr-reviews`）→ 對草稿追問（`POST .../agent-turn`）→ 編輯內容（`PATCH`）→ 發佈（`POST .../publish`）→ 確認對應 GitLab MR 上出現該則 note。驗證：手動執行並記錄結果於 PR 描述或測試報告。

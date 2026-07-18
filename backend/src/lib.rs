@@ -9,6 +9,7 @@ pub mod mr_reviews;
 pub mod pending_items;
 pub mod person_trends;
 pub mod projects;
+pub mod report_chat;
 pub mod reports;
 pub mod runs;
 pub mod schedule;

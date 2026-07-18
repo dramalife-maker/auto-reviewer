@@ -86,6 +86,173 @@ pub async fn ingest_project_summaries(
     Ok(())
 }
 
+/// Re-scan `summary.md` files under each `reports/<project>/<display_name>/` for one person
+/// and upsert into DB. Preserves existing `run_id` when a report row already exists; for a new
+/// row uses the person's latest `run_id` on that project. Failures are returned as warnings.
+pub async fn reingest_person_summaries(
+    pool: &SqlitePool,
+    data_root: &Path,
+    person_id: i64,
+    display_name: &str,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let reports_root = data_root.join("reports");
+    if !reports_root.is_dir() {
+        return warnings;
+    }
+
+    let entries = match std::fs::read_dir(&reports_root) {
+        Ok(entries) => entries,
+        Err(err) => {
+            warnings.push(format!("failed to read reports root: {err}"));
+            return warnings;
+        }
+    };
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                warnings.push(format!("failed to read reports entry: {err}"));
+                continue;
+            }
+        };
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(err) => {
+                warnings.push(format!("failed to stat {}: {err}", entry.path().display()));
+                continue;
+            }
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let project_name = entry.file_name();
+        let project_name = project_name.to_string_lossy();
+        if project_name.starts_with('_') {
+            continue;
+        }
+
+        let person_dir = entry.path().join(display_name);
+        if !person_dir.is_dir() {
+            continue;
+        }
+
+        let project_id: Option<i64> =
+            match sqlx::query_scalar("SELECT id FROM projects WHERE name = ?")
+                .bind(project_name.as_ref())
+                .fetch_optional(pool)
+                .await
+            {
+                Ok(id) => id,
+                Err(err) => {
+                    warnings.push(format!(
+                        "failed to look up project {project_name}: {err}"
+                    ));
+                    continue;
+                }
+            };
+        let Some(project_id) = project_id else {
+            warnings.push(format!(
+                "skipping summaries under unknown project {project_name}"
+            ));
+            continue;
+        };
+
+        let summaries = match find_summary_files(&person_dir) {
+            Ok(files) => files,
+            Err(err) => {
+                warnings.push(format!(
+                    "failed to list summaries for {project_name}/{display_name}: {err}"
+                ));
+                continue;
+            }
+        };
+
+        for summary_path in summaries {
+            let parsed = match parse_summary_file(&summary_path) {
+                Ok(parsed) => parsed,
+                Err(err) => {
+                    warnings.push(format!(
+                        "failed to parse {}: {err}",
+                        summary_path.display()
+                    ));
+                    continue;
+                }
+            };
+
+            let run_id = match resolve_reingest_run_id(
+                pool,
+                project_id,
+                person_id,
+                &parsed.frontmatter.date,
+            )
+            .await
+            {
+                Ok(Some(run_id)) => run_id,
+                Ok(None) => {
+                    warnings.push(format!(
+                        "skipping {}: no existing run_id for person/project",
+                        summary_path.display()
+                    ));
+                    continue;
+                }
+                Err(err) => {
+                    warnings.push(format!(
+                        "failed to resolve run_id for {}: {err}",
+                        summary_path.display()
+                    ));
+                    continue;
+                }
+            };
+
+            if let Err(err) =
+                upsert_summary(pool, data_root, project_id, run_id, &parsed).await
+            {
+                warnings.push(format!(
+                    "failed to upsert {}: {err}",
+                    summary_path.display()
+                ));
+            }
+        }
+    }
+
+    warnings
+}
+
+async fn resolve_reingest_run_id(
+    pool: &SqlitePool,
+    project_id: i64,
+    person_id: i64,
+    report_date: &str,
+) -> Result<Option<i64>, Error> {
+    let existing: Option<i64> = sqlx::query_scalar(
+        "SELECT run_id FROM reports WHERE project_id = ? AND person_id = ? AND report_date = ?",
+    )
+    .bind(project_id)
+    .bind(person_id)
+    .bind(report_date)
+    .fetch_optional(pool)
+    .await
+    .map_err(Error::Database)?;
+    if existing.is_some() {
+        return Ok(existing);
+    }
+
+    let latest: Option<i64> = sqlx::query_scalar(
+        "SELECT run_id FROM reports
+         WHERE project_id = ? AND person_id = ?
+         ORDER BY report_date DESC, id DESC
+         LIMIT 1",
+    )
+    .bind(project_id)
+    .bind(person_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(latest)
+}
+
 async fn upsert_summary(
     pool: &SqlitePool,
     data_root: &Path,

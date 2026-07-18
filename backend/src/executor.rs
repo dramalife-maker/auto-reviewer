@@ -271,6 +271,134 @@ pub async fn execute_agent_turn(
     Ok((reply, new_session))
 }
 
+/// Build a person-scoped report chat agent command.
+///
+/// When `session_id` is `None`, starts a fresh session (no `--resume`).
+/// When `Some`, resumes that session. Never passes `--no-session-persistence`.
+pub fn build_report_chat_command(
+    config: &AppConfig,
+    working_dir: &Path,
+    session_id: Option<&str>,
+    display_name: &str,
+    message: &str,
+    agent: ReviewerAgent,
+) -> Result<Command, Error> {
+    if let Some(program) = config.reviewer_executor() {
+        if cfg!(windows) {
+            let mut command = Command::new("cmd");
+            command.arg("/C").arg(program);
+            return Ok(command);
+        }
+        return Ok(Command::new(program));
+    }
+
+    let prompt = report_chat_prompt(config.data_dir(), display_name, message);
+
+    match agent {
+        ReviewerAgent::Claude => {
+            let mut command = reviewer_command("claude");
+            command
+                .current_dir(working_dir)
+                .arg("--bare")
+                .arg("--permission-mode")
+                .arg("dontAsk")
+                .arg("--allowedTools")
+                .arg("Bash,Read,Glob,Grep,Write")
+                .arg("--add-dir")
+                .arg(config.data_dir())
+                .arg("-p")
+                .arg(&prompt);
+            if let Some(session_id) = session_id {
+                command.arg("--resume").arg(session_id);
+            }
+            command.arg("--output-format").arg("stream-json");
+            append_model_arg(&mut command, config);
+            Ok(command)
+        }
+        ReviewerAgent::Cursor => {
+            let prompt = prepare_prompt_for_cli(&prompt);
+            let mut command = reviewer_command("cursor-agent");
+            command
+                .current_dir(working_dir)
+                .arg("--print")
+                .arg("--output-format")
+                .arg("stream-json")
+                .arg("--trust")
+                .arg("--force");
+            if let Some(session_id) = session_id {
+                command.arg("--resume").arg(session_id);
+            }
+            append_model_arg(&mut command, config);
+            command.arg(prompt);
+            Ok(command)
+        }
+    }
+}
+
+pub async fn execute_report_chat_turn(
+    config: &AppConfig,
+    working_dir: &Path,
+    session_id: Option<&str>,
+    display_name: &str,
+    message: &str,
+    agent: ReviewerAgent,
+    cancel: CancellationToken,
+) -> Result<(String, Option<String>), Error> {
+    let mut command = build_report_chat_command(
+        config,
+        working_dir,
+        session_id,
+        display_name,
+        message,
+        agent,
+    )?;
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let mut child = command.spawn().map_err(Error::Io)?;
+    let stdout_task = spawn_stdout_drain(child.stdout.take());
+    let stderr_task = spawn_stderr_drain(child.stderr.take());
+
+    let status = tokio::select! {
+        _ = cancel.cancelled() => {
+            kill_process_tree(&mut child).await;
+            let _ = join_drain(stdout_task).await;
+            let _ = join_drain(stderr_task).await;
+            return Err(Error::AgentFailed(SHUTDOWN_INTERRUPTED_ERROR.to_string()));
+        }
+        status = child.wait() => status.map_err(Error::Io)?,
+    };
+
+    let stdout_text = join_drain(stdout_task).await;
+    let stderr_text = join_drain(stderr_task).await;
+
+    if !status.success() {
+        return Err(Error::AgentFailed(format_executor_failure(
+            &stderr_text,
+            Some(&status),
+        )));
+    }
+
+    let reply = extract_agent_reply(&stdout_text, agent)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| Error::AgentFailed("agent returned empty reply".into()))?;
+    let new_session = parse_agent_session_id(&stdout_text, agent);
+    Ok((reply, new_session))
+}
+
+fn report_chat_prompt(data_root: &Path, display_name: &str, message: &str) -> String {
+    format!(
+        "You are helping a manager edit engineer report artifacts for \"{display_name}\".\n\
+         Allowed write roots under the data root only:\n\
+         - reports/<project>/{display_name}/\n\
+         - reports/_people/{display_name}/\n\
+         Do not edit MR drafts, runs/, other people, or call GitLab.\n\
+         Do not edit project ADR .notes unless the path is under the allowed roots above.\n\
+         Data root: {}\n\n\
+         Manager message:\n{message}",
+        data_root.display()
+    )
+}
+
 pub fn parse_agent_session_id(stdout: &str, agent: ReviewerAgent) -> Option<String> {
     let mut last_session = None;
     for line in stdout.lines() {
@@ -954,6 +1082,43 @@ mod tests {
         assert!(prompt.contains("change.diff at most once"));
         assert!(prompt.contains("≤8 key source files"));
         assert!(prompt.contains("draft BEFORE observation"));
+    }
+
+    #[test]
+    fn report_chat_claude_new_session_omits_resume_and_no_session_persistence() {
+        let config = test_config();
+        let command = build_report_chat_command(
+            &config,
+            config.data_dir(),
+            None,
+            "Alice",
+            "please edit summary",
+            ReviewerAgent::Claude,
+        )
+        .expect("cmd");
+        let args = command_args(&command);
+        assert!(!args.iter().any(|arg| arg == "--resume"));
+        assert!(!args.iter().any(|arg| arg == "--no-session-persistence"));
+        let joined = args.join(" ");
+        assert!(joined.contains("Alice"));
+        assert!(joined.contains("reports/_people/Alice/"));
+    }
+
+    #[test]
+    fn report_chat_cursor_resume_includes_session_id() {
+        let config = test_config();
+        let command = build_report_chat_command(
+            &config,
+            config.data_dir(),
+            Some("report-sess-1"),
+            "Bob",
+            "tweak growth",
+            ReviewerAgent::Cursor,
+        )
+        .expect("cmd");
+        let args = command_args(&command);
+        assert!(args.windows(2).any(|w| w[0] == "--resume" && w[1] == "report-sess-1"));
+        assert!(!args.iter().any(|arg| arg == "--no-session-persistence"));
     }
 
     #[test]

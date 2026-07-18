@@ -13,6 +13,7 @@ use crate::mr_reviews::{self, AgentTurnResponse, MrReviewListItem, PublishRespon
 use crate::pending_items;
 use crate::person_trends;
 use crate::projects;
+use crate::report_chat::{self, ReportChatAgentTurnResponse, ReportChatResponse};
 use crate::reports;
 use crate::runs;
 use crate::schedule::{self, ScheduleConfigResponse, ScheduleUpdateInput};
@@ -89,6 +90,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/people", get(list_people).post(create_person))
         .route("/api/people/{id}", get(get_person).patch(rename_person))
         .route("/api/people/{id}/reports/latest", get(latest_reports))
+        .route("/api/people/{id}/report-chat", get(get_person_report_chat))
+        .route(
+            "/api/people/{id}/report-chat/agent-turn",
+            post(agent_turn_person_report_chat),
+        )
         .route("/api/people/{id}/trends", get(person_trends))
         .route("/api/people/{id}/pending-items", get(list_pending_items))
         .route("/api/pending-items/{id}", patch(resolve_pending_item))
@@ -528,10 +534,47 @@ async fn latest_reports(
     State(state): State<AppState>,
     Path(person_id): Path<i64>,
 ) -> Result<Json<reports::LatestReportsResponse>, ApiError> {
-    let response = reports::latest_reports_for_person(&state.pool, person_id)
+    let response = reports::latest_reports_for_person(
+        &state.pool,
+        state.config.data_dir(),
+        person_id,
+    )
+    .await
+    .map_err(ApiError::from)?
+    .ok_or(Error::NotFound)?;
+    Ok(Json(response))
+}
+
+async fn get_person_report_chat(
+    State(state): State<AppState>,
+    Path(person_id): Path<i64>,
+) -> Result<Json<ReportChatResponse>, ApiError> {
+    let response = report_chat::get_report_chat(&state.pool, &state.config, person_id)
         .await
-        .map_err(ApiError::from)?
-        .ok_or(Error::NotFound)?;
+        .map_err(ApiError::from)?;
+    Ok(Json(response))
+}
+
+async fn agent_turn_person_report_chat(
+    State(state): State<AppState>,
+    Path(person_id): Path<i64>,
+    Json(body): Json<AgentTurnRequest>,
+) -> Result<Json<ReportChatAgentTurnResponse>, ApiError> {
+    let message = body.message.trim();
+    if message.is_empty() {
+        return Err(ApiError::from(Error::InvalidProjectConfig(
+            "message is required".into(),
+        )));
+    }
+    let response = report_chat::agent_turn(
+        &state.pool,
+        &state.config,
+        person_id,
+        message,
+        state.shutdown.clone(),
+    )
+    .await
+    .map_err(ApiError::from)?;
     Ok(Json(response))
 }
 

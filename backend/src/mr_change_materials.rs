@@ -134,6 +134,36 @@ pub async fn prepare_change_materials(
     })
 }
 
+/// List distinct commit author emails for `origin/<target_branch>...HEAD`.
+/// Assumes `origin/<target_branch>` is already fetched (call after `prepare_change_materials`).
+/// Emails are lowercased/trimmed; empty entries are dropped.
+pub async fn list_commit_authors(
+    worktree: &Path,
+    target_branch: &str,
+) -> Result<Vec<String>, ChangeMaterialsError> {
+    let tb = target_branch.trim();
+    if tb.is_empty() {
+        return Err(ChangeMaterialsError::EmptyTargetBranch);
+    }
+    let range = format!("origin/{tb}...HEAD");
+    let log = run_git(worktree, &["log", "--format=%ae", &range]).await?;
+    if !log.success {
+        return Err(ChangeMaterialsError::Git(
+            "log --format=%ae".into(),
+            log.stderr.trim().to_string(),
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&log.stdout);
+    let mut emails: Vec<String> = stdout
+        .lines()
+        .map(|line| line.trim().to_ascii_lowercase())
+        .filter(|line| !line.is_empty())
+        .collect();
+    emails.sort();
+    emails.dedup();
+    Ok(emails)
+}
+
 struct GitCapture {
     success: bool,
     stdout: Vec<u8>,
@@ -249,6 +279,29 @@ mod tests {
         assert!(stat.contains("feat.txt"), "stat={stat}");
         assert!(diff.contains("feat.txt"), "diff={diff}");
         assert!(!paths.diff_truncated);
+    }
+
+    #[tokio::test]
+    async fn list_commit_authors_dedupes_and_lowercases() {
+        let temp = tempfile::tempdir().expect("temp");
+        let work = fixture_feature_worktree(temp.path());
+        // Second commit on feature branch from a different, mixed-case author.
+        git(&["config", "user.email", "Other@Example.com"], &work);
+        git(&["config", "user.name", "Other"], &work);
+        std::fs::write(work.join("feat2.txt"), "feat2\n").expect("feat2");
+        git(&["add", "-A"], &work);
+        git(&["commit", "-m", "feat2"], &work);
+
+        let authors = list_commit_authors(&work, "main").await.expect("authors");
+        assert_eq!(authors, vec!["other@example.com", "t@e.com"]);
+    }
+
+    #[tokio::test]
+    async fn list_commit_authors_rejects_empty_target_branch() {
+        let temp = tempfile::tempdir().expect("temp");
+        let work = fixture_feature_worktree(temp.path());
+        let err = list_commit_authors(&work, "  ").await.unwrap_err();
+        assert!(matches!(err, ChangeMaterialsError::EmptyTargetBranch));
     }
 
     #[tokio::test]
