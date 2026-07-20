@@ -1,10 +1,12 @@
 import type { ReactNode } from 'react'
 
+import { formatTimestamp } from '../lib/format'
 import { Button } from './ui'
 
 export type AgentChatMessage = {
   role: 'user' | 'assistant'
   text: string
+  timestamp?: string
 }
 
 export function AgentChatPanel({
@@ -66,11 +68,23 @@ export function AgentChatPanel({
             >
               <div
                 className={[
-                  'min-w-0 max-w-[85%] break-words whitespace-pre-wrap rounded-xl px-3 py-2 text-sm leading-6',
-                  message.role === 'user' ? 'bg-mr-soft text-mr-dark' : 'bg-page text-ink-secondary',
+                  'flex min-w-0 max-w-[85%] flex-col gap-1',
+                  message.role === 'user' ? 'items-end' : 'items-start',
                 ].join(' ')}
               >
-                {message.text}
+                <div
+                  className={[
+                    'min-w-0 max-w-full break-words whitespace-pre-wrap rounded-xl px-3 py-2 text-sm leading-6',
+                    message.role === 'user' ? 'bg-mr-soft text-mr-dark' : 'bg-page text-ink-secondary',
+                  ].join(' ')}
+                >
+                  {message.text}
+                </div>
+                {message.timestamp ? (
+                  <span className="px-1 text-xs text-ink-muted">
+                    {formatTimestamp(message.timestamp)}
+                  </span>
+                ) : null}
               </div>
             </div>
           ))

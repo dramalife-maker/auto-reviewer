@@ -26,6 +26,7 @@ import type { MrReviewDraftConflict, MrReviewItem, MrReviewStatus } from '../typ
 type ChatMessage = {
   role: 'user' | 'assistant'
   text: string
+  timestamp?: string
 }
 
 type EditorMode = 'edit' | 'preview'
@@ -40,6 +41,7 @@ function hydrateChat(review: MrReviewItem | null): ChatMessage[] {
   return (review?.chat_messages ?? []).map((message) => ({
     role: message.role,
     text: message.content,
+    timestamp: message.created_at || undefined,
   }))
 }
 
@@ -312,12 +314,17 @@ export function MrInboxPage() {
       return
     }
 
-    setChatMessages((current) => [...current, { role: 'user', text: message }])
+    const sentAt = new Date().toISOString()
+    setChatMessages((current) => [...current, { role: 'user', text: message, timestamp: sentAt }])
     setChatInput('')
     setChatLoading(true)
     try {
       const response = await agentTurnMrReview(selected.id, message)
-      setChatMessages((current) => [...current, { role: 'assistant', text: response.reply }])
+      const repliedAt = new Date().toISOString()
+      setChatMessages((current) => [
+        ...current,
+        { role: 'assistant', text: response.reply, timestamp: repliedAt },
+      ])
       setReviews((current) =>
         current.map((review) =>
           review.id === selected.id
@@ -332,13 +339,13 @@ export function MrInboxPage() {
                     id: Date.now(),
                     role: 'user' as const,
                     content: message,
-                    created_at: '',
+                    created_at: sentAt,
                   },
                   {
                     id: Date.now() + 1,
                     role: 'assistant' as const,
                     content: response.reply,
-                    created_at: '',
+                    created_at: repliedAt,
                   },
                 ],
               }
@@ -483,7 +490,7 @@ export function MrInboxPage() {
           }
           onInputChange={setChatInput}
           onSend={handleAgentTurn}
-          panelClassName="h-full max-h-[min(70vh,560px)]"
+          panelClassName="h-[min(70vh,560px)]"
         />
       ) : null}
 

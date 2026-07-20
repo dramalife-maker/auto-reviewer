@@ -126,12 +126,14 @@ type ReportTab = 'overview' | 'trends' | `project:${string}`
 type ChatBubble = {
   role: 'user' | 'assistant'
   text: string
+  timestamp?: string
 }
 
 function hydrateChat(messages: PersonReportChatMessage[]): ChatBubble[] {
   return messages.map((message) => ({
     role: message.role,
     text: message.content,
+    timestamp: message.created_at || undefined,
   }))
 }
 
@@ -347,12 +349,18 @@ export function ReportsPage() {
       return
     }
 
-    setChatMessages((current) => [...current, { role: 'user', text: message }])
+    setChatMessages((current) => [
+      ...current,
+      { role: 'user', text: message, timestamp: new Date().toISOString() },
+    ])
     setChatInput('')
     setChatLoading(true)
     try {
       const response = await agentTurnPersonReportChat(numericPersonId, message)
-      setChatMessages((current) => [...current, { role: 'assistant', text: response.reply }])
+      setChatMessages((current) => [
+        ...current,
+        { role: 'assistant', text: response.reply, timestamp: new Date().toISOString() },
+      ])
       if (response.ingest_warnings && response.ingest_warnings.length > 0) {
         show(`報告已更新，但有 ${response.ingest_warnings.length} 則 ingest 警告`, true)
       }

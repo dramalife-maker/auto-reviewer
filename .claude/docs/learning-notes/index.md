@@ -12,6 +12,7 @@
 
 | 日期 | 檔案 | 摘要 |
 |------|------|------|
+| 2026-07-20 | 2026-07-20/fixed-position-h-full-height-trap.md | `position: fixed` 元件的 `h-full` 仍需明確高度祖先鏈；祖先只有 `flex flex-col` 無 height 會塌陷成內容高度 |
 | 2026-07-18 | 2026-07-18/tailwind-classname-override.md | Tailwind 衝突看 stylesheet 順序；atom 內 `rounded-md` 不會被呼叫端 `rounded-full` 保證蓋過，需 `!`／merge／改 atom |
 | 2026-07-13 | 2026-07-13/mr-agent-stdout-pipe-deadlock.md | MR agent `piped` stdout 等 wait 才讀 → 寫滿 ~64KiB pipe 死鎖，假 timeout；手動 CLI 卻幾分鐘就結束 |
 | 2026-07-12 | 2026-07-12/sqlite-utc-date-parse.md | SQLite `datetime('now')` 無 zone；前端 Date.parse 當本地 → UTC+8 下 elapsed 從 480 分起跳 |
