@@ -22,6 +22,7 @@ export function AgentChatPanel({
   onSend,
   onClose,
   className = '',
+  headerProps,
 }: {
   messages: AgentChatMessage[]
   input: string
@@ -35,17 +36,21 @@ export function AgentChatPanel({
   onSend: () => void
   onClose: () => void
   className?: string
+  headerProps?: React.HTMLAttributes<HTMLDivElement>
 }): ReactNode {
   const composerDisabled = loading || inputDisabled
   const sendDisabled = composerDisabled || input.trim().length === 0
 
   return (
     <div className={['flex min-h-0 flex-col', className].filter(Boolean).join(' ')}>
-      <div className="flex shrink-0 items-center justify-between gap-2">
+      <div
+        className="flex shrink-0 items-center justify-between gap-2"
+        {...headerProps}
+      >
         <h4 className="text-sm font-semibold">Agent Chat{titleSuffix}</h4>
         <Button
           aria-label="關閉 Agent Chat"
-          className="p-1.5"
+          className="!p-1.5"
           onClick={onClose}
           title="關閉 Agent Chat"
           variant="ghost"

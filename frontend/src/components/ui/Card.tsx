@@ -1,15 +1,16 @@
-import type { ReactNode } from 'react'
+import { forwardRef, type CSSProperties, type ReactNode } from 'react'
 
-export function Card({
-  children,
-  className = '',
-}: {
-  children: ReactNode
-  className?: string
-}) {
+export const Card = forwardRef<
+  HTMLDivElement,
+  {
+    children: ReactNode
+    className?: string
+    style?: CSSProperties
+  }
+>(function Card({ children, className = '', style }, ref) {
   return (
-    <div className={['rounded-xl border border-border bg-surface', className].join(' ')}>
+    <div ref={ref} className={['rounded-xl border border-border bg-surface', className].join(' ')} style={style}>
       {children}
     </div>
   )
-}
+})
