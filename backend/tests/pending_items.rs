@@ -5,6 +5,7 @@ use http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use reviewer_server::build_app;
 use reviewer_server::db::init_pool;
+use reviewer_server::summary::ingest_project_summaries;
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -59,6 +60,61 @@ async fn seed_pending_item(
     .await
     .expect("insert pending item");
     result.last_insert_rowid()
+}
+
+async fn seed_run(pool: &sqlx::SqlitePool) -> i64 {
+    let result = sqlx::query(
+        "INSERT INTO runs (trigger, status, project_total) VALUES ('manual_all', 'running', 1)",
+    )
+    .execute(pool)
+    .await
+    .expect("insert run");
+    result.last_insert_rowid()
+}
+
+/// Writes a `summary.md` at `{report_root}/{person}/{date}/summary.md`, matching the
+/// on-disk layout `find_summary_files` expects (see `skills/reviewer-batch/output-contract.md`).
+fn write_summary(
+    temp: &tempfile::TempDir,
+    project: &str,
+    person: &str,
+    date: &str,
+    pending: Option<&str>,
+    cleared: Option<&str>,
+) {
+    let summary_path = temp
+        .path()
+        .join(format!("reports/{project}/{person}/{date}/summary.md"));
+    std::fs::create_dir_all(summary_path.parent().expect("parent")).expect("mkdir");
+    let pending_body = pending
+        .map(|q| format!("- {q}\n"))
+        .unwrap_or_default();
+    let cleared_body = cleared
+        .map(|q| format!("- {q}\n"))
+        .unwrap_or_default();
+    std::fs::write(
+        &summary_path,
+        format!(
+            r#"---
+person: {person}
+project: {project}
+date: {date}
+one_line: Stable week
+commit_count: 1
+---
+
+## 本週重點
+- Shipped feature X
+
+## 成長面向
+
+## 待確認
+{pending_body}
+## 已釐清
+{cleared_body}"#
+        ),
+    )
+    .expect("write summary");
 }
 
 #[tokio::test]
@@ -611,4 +667,195 @@ async fn backfill_pending_items_seeds_from_existing_summary() {
     .await
     .expect("count");
     assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn reingesting_same_summary_does_not_duplicate_pending_item() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    seed_person(&pool, "Alice Chen").await;
+    let project_id = seed_project(&pool, &temp, "game-backend").await;
+    let run_id = seed_run(&pool).await;
+
+    write_summary(
+        &temp,
+        "game-backend",
+        "Alice Chen",
+        "2026-07-05",
+        Some("Why choose A?"),
+        None,
+    );
+
+    // Ingest the same summary.md twice (e.g. a manual re-run of the same report),
+    // matching issue #3 reproduction "Method A".
+    ingest_project_summaries(&pool, temp.path(), "game-backend", project_id, run_id)
+        .await
+        .expect("first ingest");
+    ingest_project_summaries(&pool, temp.path(), "game-backend", project_id, run_id)
+        .await
+        .expect("second ingest");
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pending_items WHERE question = ? AND status = 'open'",
+    )
+    .bind("Why choose A?")
+    .fetch_one(&pool)
+    .await
+    .expect("count");
+    assert_eq!(
+        count, 1,
+        "re-ingesting the same summary.md must not duplicate the open pending item"
+    );
+}
+
+#[tokio::test]
+async fn carrying_open_question_into_next_week_does_not_duplicate_pending_item() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    seed_person(&pool, "Alice Chen").await;
+    let project_id = seed_project(&pool, &temp, "game-backend").await;
+
+    // Week 1: the question is raised for the first time.
+    let run_id_week1 = seed_run(&pool).await;
+    write_summary(
+        &temp,
+        "game-backend",
+        "Alice Chen",
+        "2026-07-05",
+        Some("Why choose A?"),
+        None,
+    );
+    ingest_project_summaries(&pool, temp.path(), "game-backend", project_id, run_id_week1)
+        .await
+        .expect("week 1 ingest");
+
+    let report_id_week1: i64 = sqlx::query_scalar(
+        "SELECT report_id FROM pending_items WHERE question = ? AND status = 'open'",
+    )
+    .bind("Why choose A?")
+    .fetch_one(&pool)
+    .await
+    .expect("week 1 report_id");
+
+    // Week 2: normal weekly schedule (not a manual re-run). The workflow's
+    // "待確認延續規則" requires the agent to write the same question verbatim
+    // into a *new* summary.md dated one week later, because manifest.open_pending
+    // still lists it as open — matching issue #3 reproduction "Method B".
+    let run_id_week2 = seed_run(&pool).await;
+    write_summary(
+        &temp,
+        "game-backend",
+        "Alice Chen",
+        "2026-07-12",
+        Some("Why choose A?"),
+        None,
+    );
+    ingest_project_summaries(&pool, temp.path(), "game-backend", project_id, run_id_week2)
+        .await
+        .expect("week 2 ingest");
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pending_items WHERE question = ? AND status = 'open'",
+    )
+    .bind("Why choose A?")
+    .fetch_one(&pool)
+    .await
+    .expect("count");
+    assert_eq!(
+        count, 1,
+        "carrying the same open question into next week's summary must not duplicate the pending item"
+    );
+
+    // The existing open row should be re-pointed at the latest report, not left
+    // dangling on the week-1 report_id.
+    let report_id_week2: i64 = sqlx::query_scalar(
+        "SELECT report_id FROM pending_items WHERE question = ? AND status = 'open'",
+    )
+    .bind("Why choose A?")
+    .fetch_one(&pool)
+    .await
+    .expect("week 2 report_id");
+    assert_ne!(report_id_week1, report_id_week2);
+}
+
+#[tokio::test]
+async fn resolved_question_may_be_raised_again_as_new_open_row() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    seed_person(&pool, "Alice Chen").await;
+    let project_id = seed_project(&pool, &temp, "game-backend").await;
+
+    // Week 1: raise, then clear via ## 已釐清 (same ingest pass can do both when
+    // the agent moves the bullet; here we raise first then clear in a follow-up).
+    let run_id_week1 = seed_run(&pool).await;
+    write_summary(
+        &temp,
+        "game-backend",
+        "Alice Chen",
+        "2026-07-05",
+        Some("Why choose A?"),
+        None,
+    );
+    ingest_project_summaries(&pool, temp.path(), "game-backend", project_id, run_id_week1)
+        .await
+        .expect("week 1 raise");
+
+    write_summary(
+        &temp,
+        "game-backend",
+        "Alice Chen",
+        "2026-07-05",
+        None,
+        Some("Why choose A?"),
+    );
+    ingest_project_summaries(&pool, temp.path(), "game-backend", project_id, run_id_week1)
+        .await
+        .expect("week 1 clear");
+
+    let resolved_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pending_items WHERE question = ? AND status = 'resolved'",
+    )
+    .bind("Why choose A?")
+    .fetch_one(&pool)
+    .await
+    .expect("resolved count");
+    assert_eq!(resolved_count, 1);
+
+    // Week 2: the same question text is raised again — must create a new open row
+    // (partial unique index only covers status='open').
+    let run_id_week2 = seed_run(&pool).await;
+    write_summary(
+        &temp,
+        "game-backend",
+        "Alice Chen",
+        "2026-07-12",
+        Some("Why choose A?"),
+        None,
+    );
+    ingest_project_summaries(&pool, temp.path(), "game-backend", project_id, run_id_week2)
+        .await
+        .expect("week 2 re-raise");
+
+    let open_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pending_items WHERE question = ? AND status = 'open'",
+    )
+    .bind("Why choose A?")
+    .fetch_one(&pool)
+    .await
+    .expect("open count");
+    let total_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pending_items WHERE question = ?",
+    )
+    .bind("Why choose A?")
+    .fetch_one(&pool)
+    .await
+    .expect("total count");
+    assert_eq!(open_count, 1, "resolved history must not block a new open row");
+    assert_eq!(total_count, 2, "resolved row must remain alongside the new open row");
 }
