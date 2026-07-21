@@ -587,11 +587,11 @@ async fn process_mr_run_project(
         );
 
         // Gate: every commit author on this MR must already be bound to a person.
-        // Unmapped authors would otherwise fall back to raw git identity as the
-        // observation folder name (see `resolve_observation_person_folder`), so this
-        // MR is skipped (not reviewed) until the author is bound.
+        // Also keep the email list for observation folder naming: triage often
+        // emits a GitLab username as `author_identity`, while bindings are on
+        // `git_email` (see `resolve_observation_person_folder`).
         let stage_started = Instant::now();
-        if config.reviewer_executor().is_none() {
+        let commit_authors: Vec<String> = if config.reviewer_executor().is_none() {
             match crate::mr_change_materials::list_commit_authors(
                 &mr_worktree,
                 &eligible.target_branch,
@@ -647,6 +647,7 @@ async fn process_mr_run_project(
                         had_failure = true;
                         continue;
                     }
+                    authors
                 }
                 Err(err) => {
                     warn!(
@@ -660,7 +661,18 @@ async fn process_mr_run_project(
                     continue;
                 }
             }
-        }
+        } else {
+            // Fixture/mock executor skips the gate; still try for folder naming.
+            match crate::mr_change_materials::list_commit_authors(
+                &mr_worktree,
+                &eligible.target_branch,
+            )
+            .await
+            {
+                Ok(authors) => authors,
+                Err(_) => Vec::new(),
+            }
+        };
         info!(
             run_id = job.run_id,
             project = %job.name,
@@ -671,21 +683,37 @@ async fn process_mr_run_project(
         );
 
         let stage_started = Instant::now();
-        let observation_person =
-            match mr_reviews::resolve_observation_person_folder(pool, &eligible.author_identity)
-                .await
-            {
-                Ok(name) => name,
-                Err(err) => {
-                    warn!(
-                        run_id = job.run_id,
-                        project = %job.name,
-                        mr_iid = eligible.mr_iid,
-                        "resolve observation person failed: {err}; using author_identity"
-                    );
-                    eligible.author_identity.trim().to_string()
-                }
-            };
+        let observation_person = match mr_reviews::resolve_observation_person_folder(
+            pool,
+            &eligible.author_identity,
+            &commit_authors,
+        )
+        .await
+        {
+            Ok(Some(name)) => name,
+            Ok(None) => {
+                warn!(
+                    run_id = job.run_id,
+                    project = %job.name,
+                    mr_iid = eligible.mr_iid,
+                    author_identity = %eligible.author_identity,
+                    commit_authors = %commit_authors.join(", "),
+                    "mr review skipped: observation folder requires people.display_name (refusing author_identity fallback)"
+                );
+                had_failure = true;
+                continue;
+            }
+            Err(err) => {
+                warn!(
+                    run_id = job.run_id,
+                    project = %job.name,
+                    mr_iid = eligible.mr_iid,
+                    "mr review skipped: resolve observation person failed: {err}"
+                );
+                had_failure = true;
+                continue;
+            }
+        };
         let manifest_path = match write_mr_poll_manifest(
             config.data_dir(),
             job.run_id,

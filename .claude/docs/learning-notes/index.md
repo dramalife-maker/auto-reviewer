@@ -23,6 +23,7 @@
 
 | 日期 | 檔案 | 摘要 |
 |------|------|------|
+| 2026-07-21 | 2026-07-21/mr-observation-folder-must-be-display-name.md | MR observation 資料夾只能用 `people.display_name`；解不到就 skip，禁止 fallback gitlab username |
 | 2026-07-07 | 2026-07-07/architecture-defect.md | REVIEWER_* 環境變數不應散落在 executor，應集中至 config.rs 的 AppConfig |
 | 2026-07-07 | 2026-07-07/reviewer-spawn-hang.md | 背景 job 執行失敗用 `?` 直接拋出未 finalize，導致 run 永久卡 running 且錯誤被靜默吞掉 |
 

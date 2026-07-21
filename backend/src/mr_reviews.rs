@@ -536,28 +536,60 @@ async fn resolve_person_id(pool: &SqlitePool, author_identity: &str) -> Result<O
     Ok(None)
 }
 
-/// Folder name under `reports/{project}/` for MR observation snippets.
-/// Prefers `people.display_name`; falls back to trimmed `author_identity`.
+/// Canonical folder name under `reports/{project}/` for MR observation snippets.
+///
+/// Returns `Some(people.display_name)` only — never a raw GitLab username / email
+/// identity string. Callers MUST skip the MR when this returns `None` rather than
+/// inventing a folder from `author_identity` (that bug created orphan username dirs).
+///
+/// Resolution order:
+/// 1. `people.display_name` from `author_identity` (email / gitlab_user / glab_user)
+/// 2. unique `display_name` among bound commit author emails (`git_email`)
+/// 3. `None` (ambiguous authors, unbound identity, or empty input)
 pub async fn resolve_observation_person_folder(
     pool: &SqlitePool,
     author_identity: &str,
-) -> Result<String, Error> {
+    commit_author_emails: &[String],
+) -> Result<Option<String>, Error> {
     let trimmed = author_identity.trim();
-    if trimmed.is_empty() {
-        return Ok("_unmapped".into());
-    }
-    if let Some(person_id) = resolve_person_id(pool, trimmed).await? {
-        let name: Option<String> =
-            sqlx::query_scalar("SELECT display_name FROM people WHERE id = ?")
-                .bind(person_id)
-                .fetch_optional(pool)
-                .await
-                .map_err(Error::Database)?;
-        if let Some(name) = name.filter(|n| !n.trim().is_empty()) {
-            return Ok(name);
+    if !trimmed.is_empty() {
+        if let Some(person_id) = resolve_person_id(pool, trimmed).await? {
+            if let Some(name) = display_name_for_person(pool, person_id).await? {
+                return Ok(Some(name));
+            }
         }
     }
-    Ok(trimmed.to_string())
+
+    let mut unique_names: Vec<String> = Vec::new();
+    for email in commit_author_emails {
+        let Some(person) = identity::resolve_person_by_email(pool, email).await? else {
+            continue;
+        };
+        let name = person.display_name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        if !unique_names.iter().any(|existing| existing == name) {
+            unique_names.push(person.display_name);
+        }
+    }
+    if unique_names.len() == 1 {
+        return Ok(Some(unique_names.remove(0)));
+    }
+
+    Ok(None)
+}
+
+async fn display_name_for_person(
+    pool: &SqlitePool,
+    person_id: i64,
+) -> Result<Option<String>, Error> {
+    let name: Option<String> = sqlx::query_scalar("SELECT display_name FROM people WHERE id = ?")
+        .bind(person_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Error::Database)?;
+    Ok(name.filter(|n| !n.trim().is_empty()))
 }
 
 pub async fn list_mr_reviews(
@@ -1063,6 +1095,104 @@ Body text
             pending_snippet_relative_path("Alice Chen", 42, 1),
             "Alice Chen/_pending/mr-42-round-1.md"
         );
+    }
+
+    #[tokio::test]
+    async fn observation_folder_uses_display_name_from_commit_email_when_username_unbound() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pool = crate::db::init_pool(temp.path()).await.expect("init pool");
+        let person_id = identity::create_person(&pool, "Alice Chen")
+            .await
+            .expect("create person");
+        identity::bind_identity(
+            &pool,
+            person_id,
+            identity::KIND_GIT_EMAIL,
+            "alice@co.com",
+            None,
+        )
+        .await
+        .expect("bind email");
+
+        let folder = resolve_observation_person_folder(
+            &pool,
+            "alice_gitlab",
+            &["alice@co.com".into()],
+        )
+        .await
+        .expect("resolve");
+        assert_eq!(folder.as_deref(), Some("Alice Chen"));
+    }
+
+    #[tokio::test]
+    async fn observation_folder_prefers_author_identity_over_commit_emails() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pool = crate::db::init_pool(temp.path()).await.expect("init pool");
+        let alice = identity::create_person(&pool, "Alice Chen")
+            .await
+            .expect("alice");
+        let bob = identity::create_person(&pool, "Bob Lee")
+            .await
+            .expect("bob");
+        identity::bind_identity(&pool, alice, "gitlab_user", "alice_gitlab", None)
+            .await
+            .expect("bind gitlab");
+        identity::bind_identity(&pool, bob, identity::KIND_GIT_EMAIL, "bob@co.com", None)
+            .await
+            .expect("bind bob email");
+
+        let folder = resolve_observation_person_folder(
+            &pool,
+            "alice_gitlab",
+            &["bob@co.com".into()],
+        )
+        .await
+        .expect("resolve");
+        assert_eq!(folder.as_deref(), Some("Alice Chen"));
+    }
+
+    #[tokio::test]
+    async fn observation_folder_returns_none_when_commit_authors_disagree() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pool = crate::db::init_pool(temp.path()).await.expect("init pool");
+        let alice = identity::create_person(&pool, "Alice Chen")
+            .await
+            .expect("alice");
+        let bob = identity::create_person(&pool, "Bob Lee")
+            .await
+            .expect("bob");
+        identity::bind_identity(
+            &pool,
+            alice,
+            identity::KIND_GIT_EMAIL,
+            "alice@co.com",
+            None,
+        )
+        .await
+        .expect("bind alice");
+        identity::bind_identity(&pool, bob, identity::KIND_GIT_EMAIL, "bob@co.com", None)
+            .await
+            .expect("bind bob");
+
+        let folder = resolve_observation_person_folder(
+            &pool,
+            "unbound_username",
+            &["alice@co.com".into(), "bob@co.com".into()],
+        )
+        .await
+        .expect("resolve");
+        assert_eq!(folder, None, "must not invent a username folder");
+    }
+
+    #[tokio::test]
+    async fn observation_folder_returns_none_for_unbound_username_without_emails() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pool = crate::db::init_pool(temp.path()).await.expect("init pool");
+
+        let folder = resolve_observation_person_folder(&pool, "garytsai", &[])
+            .await
+            .expect("resolve");
+        assert_eq!(folder, None, "must not use gitlab username as folder");
     }
 
     #[test]
