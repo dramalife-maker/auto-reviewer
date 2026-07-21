@@ -94,6 +94,168 @@ async fn fetch_next_queued_run_project_claims_row_once() {
     );
 }
 
+/// Claiming used to run SELECT-then-UPDATE inside one deferred transaction, so
+/// a concurrent commit invalidated the read snapshot and the upgrade failed
+/// with SQLITE_BUSY_SNAPSHOT ("database is locked") — which busy_timeout never
+/// retries. Contract: concurrent claimers alongside a concurrent writer must
+/// all succeed and split the queue with no row claimed twice.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_claims_split_queue_without_lock_errors() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_app_state_env(&temp).await;
+
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    insert_projects(&pool, &temp).await;
+
+    let project_id: i64 = sqlx::query_scalar("SELECT id FROM projects WHERE name = 'alpha'")
+        .fetch_one(&pool)
+        .await
+        .expect("project id");
+
+    // UNIQUE (run_id, project_id) forces one run per queued row.
+    const QUEUED: usize = 12;
+    for _ in 0..QUEUED {
+        let run_id = sqlx::query(
+            "INSERT INTO runs (trigger, status, project_total) VALUES ('manual_all', 'running', 1)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert run")
+        .last_insert_rowid();
+
+        sqlx::query("INSERT INTO run_projects (run_id, project_id, state) VALUES (?, ?, 'queued')")
+            .bind(run_id)
+            .bind(project_id)
+            .execute(&pool)
+            .await
+            .expect("insert run project");
+    }
+
+    // Keep committing writes to run_projects for the whole claim window; these
+    // are what used to poison a claimer's read snapshot.
+    let writer_pool = pool.clone();
+    let writer_stop = CancellationToken::new();
+    let writer_token = writer_stop.clone();
+    let writer = tokio::spawn(async move {
+        while !writer_token.is_cancelled() {
+            sqlx::query("UPDATE run_projects SET error = 'noise' WHERE id = (SELECT MAX(id) FROM run_projects)")
+                .execute(&writer_pool)
+                .await
+                .expect("noise write");
+            tokio::task::yield_now().await;
+        }
+    });
+
+    let mut claimers = Vec::new();
+    for _ in 0..8 {
+        let claim_pool = pool.clone();
+        claimers.push(tokio::spawn(async move {
+            let mut claimed = Vec::new();
+            loop {
+                match runs::fetch_next_queued_run_project(&claim_pool).await {
+                    Ok(Some(job)) => claimed.push(job.id),
+                    Ok(None) => return Ok(claimed),
+                    Err(err) => return Err(err.to_string()),
+                }
+            }
+        }));
+    }
+
+    let mut claimed_ids = Vec::new();
+    for claimer in claimers {
+        let result = claimer.await.expect("claimer task");
+        let ids = result.expect("claiming must not fail under concurrent writes");
+        claimed_ids.extend(ids);
+    }
+
+    writer_stop.cancel();
+    writer.await.expect("writer task");
+
+    claimed_ids.sort_unstable();
+    let total = claimed_ids.len();
+    claimed_ids.dedup();
+    assert_eq!(
+        claimed_ids.len(),
+        total,
+        "no queued row may be claimed more than once"
+    );
+    assert_eq!(total, QUEUED, "every queued row must be claimed exactly once");
+
+    let still_queued: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM run_projects WHERE state = 'queued'")
+            .fetch_one(&pool)
+            .await
+            .expect("queued count");
+    assert_eq!(still_queued, 0, "queue must be fully drained");
+}
+
+/// `wake()` only fires when a run is created, so a drain that aborts mid-way
+/// would strand `queued` rows — and stranded rows keep `has_active_run_projects`
+/// true, rejecting every later run with `RunConflict`. The periodic tick is the
+/// safety net that recovers without any `wake()`.
+#[tokio::test]
+async fn periodic_tick_drains_queue_without_wake() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_app_state_env(&temp).await;
+
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    insert_projects(&pool, &temp).await;
+
+    let run_id = sqlx::query(
+        "INSERT INTO runs (trigger, status, project_total) VALUES ('manual_all', 'running', 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert run")
+    .last_insert_rowid();
+
+    let project_id: i64 = sqlx::query_scalar("SELECT id FROM projects WHERE name = 'alpha'")
+        .fetch_one(&pool)
+        .await
+        .expect("project id");
+
+    let run_project_id = sqlx::query(
+        "INSERT INTO run_projects (run_id, project_id, state) VALUES (?, ?, 'queued')",
+    )
+    .bind(run_id)
+    .bind(project_id)
+    .execute(&pool)
+    .await
+    .expect("insert run project")
+    .last_insert_rowid();
+
+    let config = reviewer_server::config::AppConfig::from_env().expect("config");
+    let cancel = CancellationToken::new();
+    // Deliberately never call wake(): only the tick can drain this row.
+    let _worker = reviewer_server::worker::RunWorker::spawn_with_tick(
+        config,
+        pool.clone(),
+        cancel.clone(),
+        std::time::Duration::from_millis(50),
+    );
+
+    let mut state = String::from("queued");
+    for _ in 0..100 {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        state = sqlx::query_scalar("SELECT state FROM run_projects WHERE id = ?")
+            .bind(run_project_id)
+            .fetch_one(&pool)
+            .await
+            .expect("state");
+        if state != "queued" {
+            break;
+        }
+    }
+    cancel.cancel();
+
+    assert_ne!(
+        state, "queued",
+        "the periodic tick must drain queued rows even when wake() is never called"
+    );
+}
+
 #[tokio::test]
 async fn drain_queue_does_not_dequeue_after_cancel() {
     let _guard = ENV_TEST_LOCK.lock().expect("env test lock");

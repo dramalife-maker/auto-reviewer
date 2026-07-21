@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use serde::Serialize;
 use sqlx::Row;
+use tracing::warn;
 
 use crate::identity::{self, ManifestAuthor};
 
@@ -310,62 +311,59 @@ pub async fn create_batch_run(pool: &sqlx::SqlitePool, trigger: &str) -> crate::
 pub async fn fetch_next_queued_run_project(
     pool: &sqlx::SqlitePool,
 ) -> crate::Result<Option<RunProjectRow>> {
-    // Atomically claim so drain_queue cannot spawn the same queued row twice:
-    // SELECT then UPDATE … WHERE state='queued'; lost races retry.
+    // Claim with a single atomic UPDATE so drain_queue cannot spawn the same
+    // queued row twice. A read-then-write transaction would take a read
+    // snapshot first and fail with SQLITE_BUSY_SNAPSHOT on the upgrade whenever
+    // a concurrent writer committed in between — busy_timeout never retries
+    // that. One write statement has no snapshot to invalidate.
     loop {
-        let mut tx = pool.begin().await.map_err(crate::Error::Database)?;
+        let claimed_id: Option<i64> = sqlx::query_scalar(
+            "UPDATE run_projects
+             SET state = 'running', started_at = datetime('now')
+             WHERE id = (
+                 SELECT rp.id
+                 FROM run_projects rp
+                 INNER JOIN runs r ON r.id = rp.run_id
+                 WHERE r.status = 'running' AND rp.state = 'queued'
+                 ORDER BY rp.id
+                 LIMIT 1
+             )
+             RETURNING id",
+        )
+        .fetch_optional(pool)
+        .await
+        .map_err(crate::Error::Database)?;
 
+        let Some(claimed_id) = claimed_id else {
+            return Ok(None);
+        };
+
+        // RETURNING cannot yield the joined columns, so read them back. The row
+        // is already claimed, so no other claimer can touch it.
         let row = sqlx::query_as::<_, RunProjectRow>(
             "SELECT rp.id, rp.run_id, rp.project_id, p.name, p.repo_path, r.trigger, r.mr_scan_force
              FROM run_projects rp
              INNER JOIN projects p ON p.id = rp.project_id
              INNER JOIN runs r ON r.id = rp.run_id
-             WHERE r.status = 'running' AND rp.state = 'queued'
-             ORDER BY rp.id
-             LIMIT 1",
+             WHERE rp.id = ?",
         )
-        .fetch_optional(&mut *tx)
+        .bind(claimed_id)
+        .fetch_optional(pool)
         .await
         .map_err(crate::Error::Database)?;
 
-        let Some(row) = row else {
-            tx.rollback().await.map_err(crate::Error::Database)?;
-            return Ok(None);
-        };
-
-        let updated = sqlx::query(
-            "UPDATE run_projects
-             SET state = 'running', started_at = datetime('now')
-             WHERE id = ? AND state = 'queued'",
-        )
-        .bind(row.id)
-        .execute(&mut *tx)
-        .await
-        .map_err(crate::Error::Database)?;
-
-        if updated.rows_affected() == 1 {
-            tx.commit().await.map_err(crate::Error::Database)?;
-            return Ok(Some(row));
+        match row {
+            Some(row) => return Ok(Some(row)),
+            // The project (and its run_projects rows) was deleted between the
+            // claim and the read-back; skip it and claim the next queued row.
+            None => {
+                warn!(
+                    run_project_id = claimed_id,
+                    "claimed run project vanished before read-back; skipping"
+                );
+            }
         }
-
-        tx.rollback().await.map_err(crate::Error::Database)?;
     }
-}
-
-pub async fn mark_run_project_running(
-    pool: &sqlx::SqlitePool,
-    run_project_id: i64,
-) -> crate::Result<()> {
-    sqlx::query(
-        "UPDATE run_projects
-         SET state = 'running', started_at = datetime('now')
-         WHERE id = ?",
-    )
-    .bind(run_project_id)
-    .execute(pool)
-    .await
-    .map_err(crate::Error::Database)?;
-    Ok(())
 }
 
 pub async fn finish_run_project(

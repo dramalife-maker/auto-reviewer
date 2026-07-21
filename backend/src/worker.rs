@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use sqlx::SqlitePool;
 use tokio::sync::{Notify, Semaphore};
@@ -20,8 +20,8 @@ use crate::mr_change_materials::{
 use crate::mr_reviews::{self, run_triage_script};
 use crate::runs::{
     self, eligible_mrs_path, fetch_next_queued_run_project, finalize_run_if_complete,
-    finish_run_project, load_mr_poll_project, load_schedule_settings, mark_run_project_running,
-    write_mr_poll_manifest, ManifestChangeMaterials, RunProjectRow, SHUTDOWN_INTERRUPTED_ERROR,
+    finish_run_project, load_mr_poll_project, load_schedule_settings, write_mr_poll_manifest,
+    ManifestChangeMaterials, RunProjectRow, SHUTDOWN_INTERRUPTED_ERROR,
 };
 use crate::summary::ingest_project_summaries;
 use crate::worktree::{provision_mr_worktree, supply_worktree, WorktreeKind};
@@ -37,8 +37,23 @@ pub struct RunWorker {
     cancel: CancellationToken,
 }
 
+/// Safety-net re-drain interval. `wake()` fires only when a run is created, so
+/// a drain that aborts mid-way would otherwise leave `queued` rows stranded —
+/// and those rows keep `has_active_run_projects` true, rejecting every new run
+/// with `RunConflict` until the next scheduled run happens to wake the worker.
+pub const DEFAULT_DRAIN_TICK: Duration = Duration::from_secs(60);
+
 impl RunWorker {
     pub fn spawn(config: AppConfig, pool: SqlitePool, cancel: CancellationToken) -> Arc<Self> {
+        Self::spawn_with_tick(config, pool, cancel, DEFAULT_DRAIN_TICK)
+    }
+
+    pub fn spawn_with_tick(
+        config: AppConfig,
+        pool: SqlitePool,
+        cancel: CancellationToken,
+        drain_tick: Duration,
+    ) -> Arc<Self> {
         let worker = Arc::new(Self {
             pool,
             config,
@@ -47,7 +62,7 @@ impl RunWorker {
         });
         let loop_worker = worker.clone();
         tokio::spawn(async move {
-            loop_worker.run_loop().await;
+            loop_worker.run_loop(drain_tick).await;
         });
         worker
     }
@@ -56,7 +71,13 @@ impl RunWorker {
         self.notify.notify_one();
     }
 
-    async fn run_loop(&self) {
+    async fn run_loop(&self, drain_tick: Duration) {
+        let mut tick = tokio::time::interval(drain_tick);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // The first tick completes immediately; drop it so startup does not
+        // drain before anything has been queued.
+        tick.tick().await;
+
         loop {
             tokio::select! {
                 _ = self.cancel.cancelled() => {
@@ -71,6 +92,14 @@ impl RunWorker {
                         error!("run worker error: {err}");
                     }
                 }
+                _ = tick.tick() => {
+                    if self.cancel.is_cancelled() {
+                        return;
+                    }
+                    if let Err(err) = self.drain_queue().await {
+                        error!("run worker periodic drain error: {err}");
+                    }
+                }
             }
         }
     }
@@ -79,6 +108,12 @@ impl RunWorker {
         let settings = load_schedule_settings(&self.pool).await?;
         let semaphore = Arc::new(Semaphore::new(settings.max_concurrency.max(1) as usize));
         let mut handles = Vec::new();
+
+        // Claim failures must not return early: the spawned handles below would
+        // be dropped (detached, still running) while the next drain builds a
+        // fresh semaphore that cannot see them, breaking max_concurrency. Record
+        // the error, stop claiming, and still await everything in flight.
+        let mut claim_error = None;
 
         loop {
             if self.cancel.is_cancelled() {
@@ -89,9 +124,17 @@ impl RunWorker {
                 drop(permit);
                 break;
             }
-            let Some(job) = fetch_next_queued_run_project(&self.pool).await? else {
-                drop(permit);
-                break;
+            let job = match fetch_next_queued_run_project(&self.pool).await {
+                Ok(Some(job)) => job,
+                Ok(None) => {
+                    drop(permit);
+                    break;
+                }
+                Err(err) => {
+                    drop(permit);
+                    claim_error = Some(err);
+                    break;
+                }
             };
             let pool = self.pool.clone();
             let config = self.config.clone();
@@ -113,7 +156,10 @@ impl RunWorker {
             }
         }
 
-        Ok(())
+        match claim_error {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
     }
 }
 
@@ -156,7 +202,6 @@ pub async fn process_run_project(
         return process_mr_run_project(pool, config, job, timeout_sec, cancel).await;
     }
 
-    mark_run_project_running(pool, job.id).await?;
     let total_started = Instant::now();
 
     let project = crate::runs::ProjectRow {
@@ -263,7 +308,6 @@ async fn process_mr_run_project(
     timeout_sec: u64,
     cancel: CancellationToken,
 ) -> crate::Result<()> {
-    mark_run_project_running(pool, job.id).await?;
     let started = Instant::now();
 
     let mr_project = match load_mr_poll_project(pool, job.project_id).await? {
