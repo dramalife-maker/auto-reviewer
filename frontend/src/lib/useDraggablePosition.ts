@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 export type DragPosition = {
   right: number
@@ -35,12 +35,24 @@ function clamp(position: DragPosition, size: { width: number; height: number }):
   }
 }
 
+function clampIfChanged(
+  current: DragPosition,
+  size: { width: number; height: number },
+): DragPosition {
+  const next = clamp(current, size)
+  if (next.right === current.right && next.bottom === current.bottom) {
+    return current
+  }
+  return next
+}
+
 /**
  * Makes an element draggable via its `right`/`bottom` CSS offsets, persisting
  * the resulting position to localStorage and clamping it to stay within the
  * viewport. Returns the current position (or `null` to fall back to the
- * default CSS position), a ref to attach to the drag handle, and whether a
- * drag just occurred (useful to suppress a trailing click).
+ * default CSS position), drag-handle props, and a one-shot `wasDragged()` that
+ * consumes the drag flag (suppresses the trailing click after a drag without
+ * blocking later keyboard activation).
  */
 export function useDraggablePosition(
   storageKey: string,
@@ -51,18 +63,24 @@ export function useDraggablePosition(
   const movedRef = useRef(false)
   const startRef = useRef({ pointerX: 0, pointerY: 0, right: 0, bottom: 0 })
 
+  const reclamp = useCallback(() => {
+    setPosition((current) => {
+      if (!current || !elementRef.current) return current
+      const rect = elementRef.current.getBoundingClientRect()
+      return clampIfChanged(current, { width: rect.width, height: rect.height })
+    })
+  }, [elementRef])
+
+  // Clamp whenever the element is in the DOM (including first paint after a
+  // stored position restore, and when the panel mounts after the FAB opens).
+  useLayoutEffect(() => {
+    reclamp()
+  })
+
   useEffect(() => {
-    if (!position) return
-    function handleResize() {
-      setPosition((current) => {
-        if (!current || !elementRef.current) return current
-        const rect = elementRef.current.getBoundingClientRect()
-        return clamp(current, { width: rect.width, height: rect.height })
-      })
-    }
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-  }, [position, elementRef])
+    window.addEventListener('resize', reclamp)
+    return () => window.removeEventListener('resize', reclamp)
+  }, [reclamp])
 
   const onPointerDown = useCallback(
     (event: React.PointerEvent) => {
@@ -127,7 +145,13 @@ export function useDraggablePosition(
     }
   }, [storageKey])
 
-  const wasDragged = useCallback(() => movedRef.current, [])
+  const wasDragged = useCallback(() => {
+    const dragged = movedRef.current
+    if (dragged) {
+      movedRef.current = false
+    }
+    return dragged
+  }, [])
 
   return {
     position,

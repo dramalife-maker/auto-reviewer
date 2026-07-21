@@ -113,4 +113,38 @@ describe('AgentChatLauncher', () => {
 
     expect(window.localStorage.getItem('agent-chat-panel-position')).not.toBeNull()
   })
+
+  it('clamps a stored out-of-bounds FAB position on mount', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 800 })
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 600 })
+    window.localStorage.setItem(
+      'agent-chat-fab-position',
+      JSON.stringify({ right: 9999, bottom: 9999 }),
+    )
+
+    render(<AgentChatLauncher {...panelProps} />)
+    const fab = screen.getByRole('button', { name: '展開 Agent Chat' })
+
+    // jsdom getBoundingClientRect is 0×0, so max offset equals the viewport size.
+    expect(fab.style.right).toBe('800px')
+    expect(fab.style.bottom).toBe('600px')
+  })
+
+  it('opens via keyboard after a prior drag suppressed the trailing click', async () => {
+    const user = userEvent.setup()
+    render(<AgentChatLauncher {...panelProps} />)
+    const fab = screen.getByRole('button', { name: '展開 Agent Chat' })
+
+    fireEvent.pointerDown(fab, { clientX: 100, clientY: 100 })
+    fireEvent.pointerMove(fab, { clientX: 40, clientY: 60 })
+    fireEvent.pointerUp(fab, { clientX: 40, clientY: 60 })
+    fireEvent.click(fab)
+
+    expect(screen.queryByText('Agent Chat')).not.toBeInTheDocument()
+
+    fab.focus()
+    await user.keyboard('{Enter}')
+
+    expect(screen.getByText('Agent Chat')).toBeInTheDocument()
+  })
 })
