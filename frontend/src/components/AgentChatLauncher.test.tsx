@@ -89,6 +89,17 @@ describe('AgentChatLauncher', () => {
     expect(screen.getByText('Agent Chat')).toBeInTheDocument()
   })
 
+  it('keeps the header layout classes alongside the drag handle classes', async () => {
+    const user = userEvent.setup()
+    render(<AgentChatLauncher {...panelProps} />)
+
+    await user.click(screen.getByRole('button', { name: '展開 Agent Chat' }))
+    const header = screen.getByText('Agent Chat').parentElement as HTMLElement
+
+    expect(header).toHaveClass('flex', 'shrink-0', 'items-center', 'justify-between')
+    expect(header).toHaveClass('cursor-move', 'touch-none')
+  })
+
   it('drags the expanded panel via its header', async () => {
     const user = userEvent.setup()
     render(<AgentChatLauncher {...panelProps} />)

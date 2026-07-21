@@ -40,12 +40,15 @@ export function AgentChatPanel({
 }): ReactNode {
   const composerDisabled = loading || inputDisabled
   const sendDisabled = composerDisabled || input.trim().length === 0
+  const { className: headerClassName, ...restHeaderProps } = headerProps ?? {}
 
   return (
     <div className={['flex min-h-0 flex-col', className].filter(Boolean).join(' ')}>
       <div
-        className="flex shrink-0 items-center justify-between gap-2"
-        {...headerProps}
+        className={['flex shrink-0 items-center justify-between gap-2', headerClassName]
+          .filter(Boolean)
+          .join(' ')}
+        {...restHeaderProps}
       >
         <h4 className="text-sm font-semibold">Agent Chat{titleSuffix}</h4>
         <Button
