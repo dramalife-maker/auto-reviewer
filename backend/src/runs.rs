@@ -813,8 +813,11 @@ pub async fn list_weekly_report_people(
     run_id: i64,
     project_id: i64,
 ) -> crate::Result<Vec<WeeklyReportPerson>> {
+    // DISTINCT: ingest replay can leave one person with several report rows
+    // (distinct report_date) under a single run; the outputs hint lists people,
+    // so each must appear once.
     sqlx::query_as::<_, WeeklyReportPerson>(
-        "SELECT r.person_id, p.display_name
+        "SELECT DISTINCT r.person_id, p.display_name
          FROM reports r
          INNER JOIN people p ON p.id = r.person_id
          WHERE r.run_id = ? AND r.project_id = ?
@@ -1395,5 +1398,48 @@ mod tests {
         assert_eq!(people.len(), 1);
         assert_eq!(people[0].person_id, person_id);
         assert_eq!(people[0].display_name, "Alice Chen");
+    }
+
+    #[tokio::test]
+    async fn list_weekly_report_people_deduplicates_person_across_report_dates() {
+        // Ingest replay re-stamps historical reports with the current run_id, so
+        // one person can own several report rows (distinct report_date) under one
+        // run. The outputs hint lists people, so each must appear exactly once.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pool = crate::db::init_pool(temp.path()).await.expect("init pool");
+        sqlx::query("INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('alpha', '/r', 0)")
+            .execute(&pool)
+            .await
+            .expect("insert project");
+        let person_id = sqlx::query("INSERT INTO people (display_name) VALUES ('Power')")
+            .execute(&pool)
+            .await
+            .expect("insert person")
+            .last_insert_rowid();
+        let run_id = sqlx::query(
+            "INSERT INTO runs (trigger, status, project_total) VALUES ('schedule', 'success', 1)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert run")
+        .last_insert_rowid();
+        for date in ["2026-07-12", "2026-07-20", "2026-07-21"] {
+            sqlx::query(
+                "INSERT INTO reports (project_id, person_id, run_id, report_date, report_md_path, summary_md_path)
+                 VALUES (1, ?, ?, ?, 'r.md', 's.md')",
+            )
+            .bind(person_id)
+            .bind(run_id)
+            .bind(date)
+            .execute(&pool)
+            .await
+            .expect("insert report");
+        }
+
+        let people = list_weekly_report_people(&pool, run_id, 1)
+            .await
+            .expect("list");
+        assert_eq!(people.len(), 1, "one person must not repeat per report_date");
+        assert_eq!(people[0].person_id, person_id);
     }
 }
