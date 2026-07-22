@@ -117,17 +117,26 @@ mod tests {
     fn loader_reads_fallback_path() {
         let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
         let previous = std::env::var("APP_ENV_TEST_KEY").ok();
+        let original_dir = std::env::current_dir().expect("cwd");
 
         let temp = tempfile::tempdir().expect("tempdir");
         let fallback = temp.path().join("nested.env");
         std::fs::write(&fallback, "APP_ENV_TEST_KEY=from_fallback\n").expect("write env");
+        // CWD is a controlled subdir so both dotenvy::dotenv()'s upward search
+        // and the default `../.env` fallback resolve inside our empty tempdir,
+        // not the ambient environment (e.g. the repo root's real `.env`).
+        let work_dir = temp.path().join("work");
+        std::fs::create_dir(&work_dir).expect("work dir");
 
         std::env::remove_var("APP_ENV_TEST_KEY");
+        std::env::set_current_dir(&work_dir).expect("set cwd");
 
         let loaded = EnvLoader::new()
             .with_fallback(fallback.clone())
             .load()
             .expect("loaded");
+
+        std::env::set_current_dir(&original_dir).expect("restore cwd");
 
         assert_eq!(loaded, fallback);
         assert_eq!(

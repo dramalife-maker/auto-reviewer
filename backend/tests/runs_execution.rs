@@ -677,6 +677,21 @@ async fn mr_scan_timeout_still_ingests_draft_on_disk() {
         .await
         .expect("project id");
 
+    // Bind the triage author to a person so the observation-folder gate lets the
+    // MR reach the executor. Without this, resolve_observation_person_folder
+    // returns None and the loop short-circuits to "failed" before the timeout.
+    sqlx::query("INSERT INTO people (display_name) VALUES ('Alice Chen')")
+        .execute(&pool)
+        .await
+        .expect("insert person");
+    sqlx::query(
+        "INSERT INTO person_identities (person_id, kind, value)
+         VALUES ((SELECT id FROM people WHERE display_name = 'Alice Chen'), 'git_email', 'alice@example.com')",
+    )
+    .execute(&pool)
+    .await
+    .expect("bind author email");
+
     let run_id = runs::create_manual_mr_scan_run(&pool, project_id, false)
         .await
         .expect("create mr scan run");
