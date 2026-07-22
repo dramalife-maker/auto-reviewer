@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use sqlx::SqlitePool;
@@ -35,6 +36,10 @@ pub struct RunWorker {
     /// sequence; once cancelled the worker stops dequeuing new `queued`
     /// `run_projects` rows and in-flight executor calls race against it.
     cancel: CancellationToken,
+    /// Per-run cancellation tokens, each a `child_token()` of `cancel` so
+    /// shutdown still propagates to every run. A user cancels one run by
+    /// cancelling its token here; the entry is removed once the run is terminal.
+    cancels: Arc<Mutex<HashMap<i64, CancellationToken>>>,
 }
 
 /// Safety-net re-drain interval. `wake()` fires only when a run is created, so
@@ -59,6 +64,7 @@ impl RunWorker {
             config,
             notify: Arc::new(Notify::new()),
             cancel,
+            cancels: Arc::new(Mutex::new(HashMap::new())),
         });
         let loop_worker = worker.clone();
         tokio::spawn(async move {
@@ -69,6 +75,54 @@ impl RunWorker {
 
     pub fn wake(&self) {
         self.notify.notify_one();
+    }
+
+    /// Get (or lazily create) the cancellation token for a run. Every project
+    /// of the same run shares one token, derived from the shutdown token, so a
+    /// single user cancel stops the whole run and shutdown still propagates.
+    pub fn run_token(&self, run_id: i64) -> CancellationToken {
+        self.cancels
+            .lock()
+            .expect("cancels registry")
+            .entry(run_id)
+            .or_insert_with(|| self.cancel.child_token())
+            .clone()
+    }
+
+    /// Cancel a run's token if one is registered. Cancelling a run's token does
+    /// not touch the shutdown token or any other run's token. No-op when the run
+    /// has no executing project (nothing was ever claimed for it).
+    pub fn cancel_run_token(&self, run_id: i64) {
+        if let Some(token) = self.cancels.lock().expect("cancels registry").get(&run_id) {
+            token.cancel();
+        }
+    }
+
+    /// Whether a token is currently registered for a run. Test-facing.
+    pub fn run_token_registered(&self, run_id: i64) -> bool {
+        self.cancels
+            .lock()
+            .expect("cancels registry")
+            .contains_key(&run_id)
+    }
+
+    /// Drop a run's token from the registry once the run has reached a terminal
+    /// status, so a long-lived process does not accumulate tokens.
+    async fn release_run_token_if_terminal(&self, run_id: i64) {
+        let terminal = match runs::get_run(&self.pool, run_id).await {
+            Ok(Some(run)) => run.status != "running",
+            Ok(None) => true,
+            Err(err) => {
+                warn!(run_id, "failed to check run status for token release: {err}");
+                return;
+            }
+        };
+        if terminal {
+            self.cancels
+                .lock()
+                .expect("cancels registry")
+                .remove(&run_id);
+        }
     }
 
     async fn run_loop(&self, drain_tick: Duration) {
@@ -139,10 +193,16 @@ impl RunWorker {
             let pool = self.pool.clone();
             let config = self.config.clone();
             let timeout_sec = settings.per_project_timeout_sec.max(1) as u64;
-            let cancel = self.cancel.clone();
+            let shutdown = self.cancel.clone();
+            let run_cancel = self.run_token(job.run_id);
+            let run_id = job.run_id;
+            let worker = self.clone();
 
             handles.push(tokio::spawn(async move {
-                let result = process_run_project(&pool, &config, job, timeout_sec, cancel).await;
+                let result =
+                    process_run_project(&pool, &config, job, timeout_sec, run_cancel, shutdown)
+                        .await;
+                worker.release_run_token_if_terminal(run_id).await;
                 drop(permit);
                 result
             }));
@@ -197,9 +257,10 @@ pub async fn process_run_project(
     job: crate::runs::RunProjectRow,
     timeout_sec: u64,
     cancel: CancellationToken,
+    shutdown: CancellationToken,
 ) -> crate::Result<()> {
     if runs::is_mr_trigger(&job.trigger) {
-        return process_mr_run_project(pool, config, job, timeout_sec, cancel).await;
+        return process_mr_run_project(pool, config, job, timeout_sec, cancel, shutdown).await;
     }
 
     let total_started = Instant::now();
@@ -236,7 +297,7 @@ pub async fn process_run_project(
         &project,
         &working_dir,
         timeout_sec,
-        cancel,
+        cancel.clone(),
     )
     .await
     {
@@ -259,32 +320,43 @@ pub async fn process_run_project(
         "weekly stage"
     );
 
-    let (state, error) = match outcome {
-        ExecuteOutcome::Success => {
-            let stage_started = Instant::now();
-            let result = match ingest_project_summaries(
-                pool,
-                config.data_dir(),
-                &project.name,
-                project.id,
-                job.run_id,
-            )
-            .await
-            {
-                Ok(()) => ("done", error),
-                Err(err) => ("failed", Some(err.to_string())),
-            };
-            info!(
-                run_id = job.run_id,
-                project = %project.name,
-                stage = "ingest_summaries",
-                elapsed_ms = stage_started.elapsed().as_millis() as u64,
-                "weekly stage"
-            );
-            result
+    let (state, error): (&str, Option<String>) = if cancel.is_cancelled() {
+        // The run token fired. Inspect the shutdown token to tell the two
+        // sources apart: shutdown keeps the existing failed+shutdown outcome;
+        // a user cancel yields the terminal `cancelled` state.
+        if shutdown.is_cancelled() {
+            ("failed", Some(SHUTDOWN_INTERRUPTED_ERROR.to_string()))
+        } else {
+            (runs::CANCELLED, None)
         }
-        ExecuteOutcome::SkippedTimeout => ("skipped_timeout", error),
-        ExecuteOutcome::Failed => ("failed", error),
+    } else {
+        match outcome {
+            ExecuteOutcome::Success => {
+                let stage_started = Instant::now();
+                let result = match ingest_project_summaries(
+                    pool,
+                    config.data_dir(),
+                    &project.name,
+                    project.id,
+                    job.run_id,
+                )
+                .await
+                {
+                    Ok(()) => ("done", error),
+                    Err(err) => ("failed", Some(err.to_string())),
+                };
+                info!(
+                    run_id = job.run_id,
+                    project = %project.name,
+                    stage = "ingest_summaries",
+                    elapsed_ms = stage_started.elapsed().as_millis() as u64,
+                    "weekly stage"
+                );
+                result
+            }
+            ExecuteOutcome::SkippedTimeout => ("skipped_timeout", error),
+            ExecuteOutcome::Failed => ("failed", error),
+        }
     };
 
     finish_run_project(pool, job.id, state, duration_sec, error.as_deref()).await?;
@@ -307,6 +379,7 @@ async fn process_mr_run_project(
     job: RunProjectRow,
     timeout_sec: u64,
     cancel: CancellationToken,
+    shutdown: CancellationToken,
 ) -> crate::Result<()> {
     let started = Instant::now();
 
@@ -912,7 +985,13 @@ async fn process_mr_run_project(
 
     let duration_sec = started.elapsed().as_secs() as i64;
     let (state, error): (&str, Option<String>) = if cancel.is_cancelled() {
-        ("failed", Some(SHUTDOWN_INTERRUPTED_ERROR.to_string()))
+        // Distinguish user cancellation from process shutdown by the shutdown
+        // token. Drafts written before the kill were already ingested above.
+        if shutdown.is_cancelled() {
+            ("failed", Some(SHUTDOWN_INTERRUPTED_ERROR.to_string()))
+        } else {
+            (runs::CANCELLED, None)
+        }
     } else if had_timeout {
         ("skipped_timeout", None)
     } else if had_failure {

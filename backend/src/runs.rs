@@ -23,6 +23,12 @@ pub const SHUTDOWN_INTERRUPTED_ERROR: &str = "interrupted by shutdown";
 /// cleanly (e.g. `kill -9`).
 pub const PREVIOUS_SHUTDOWN_INTERRUPTED_ERROR: &str = "interrupted by previous shutdown";
 
+/// Terminal value for `runs.status` and `run_projects.state` when a user
+/// cancels a run. Both columns are unconstrained TEXT, so no migration is
+/// needed to introduce it. The claim query filters `r.status = 'running'`, so
+/// setting a run to this value also closes its claim gate.
+pub const CANCELLED: &str = "cancelled";
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ProjectRow {
     pub id: i64,
@@ -389,6 +395,19 @@ pub async fn finish_run_project(
 }
 
 pub async fn finalize_run_if_complete(pool: &sqlx::SqlitePool, run_id: i64) -> crate::Result<()> {
+    // A cancelled run is terminal. Projects still executing when the run was
+    // cancelled will finish and call this; without the guard their completion
+    // would overwrite `cancelled` with success/partial/failed.
+    let current_status: Option<String> =
+        sqlx::query_scalar("SELECT status FROM runs WHERE id = ?")
+            .bind(run_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(crate::Error::Database)?;
+    if current_status.as_deref() == Some(CANCELLED) {
+        return Ok(());
+    }
+
     let row = sqlx::query(
         "SELECT
             SUM(CASE WHEN state IN ('queued', 'running') THEN 1 ELSE 0 END) AS pending,
@@ -431,6 +450,57 @@ pub async fn finalize_run_if_complete(pool: &sqlx::SqlitePool, run_id: i64) -> c
     .await
     .map_err(crate::Error::Database)?;
 
+    Ok(())
+}
+
+/// Cancel a run: mark the run `cancelled` (closing its claim gate) and set
+/// every still-`queued` project to `cancelled` so none is ever claimed. Running
+/// projects are left for the per-run token-kill path to finalize as `cancelled`.
+///
+/// Returns `NotFound` when no such run exists and `RunConflict` when the run has
+/// already reached a terminal status; in the conflict case no row is modified.
+pub async fn cancel_run(pool: &sqlx::SqlitePool, run_id: i64) -> crate::Result<()> {
+    let status: Option<String> = sqlx::query_scalar("SELECT status FROM runs WHERE id = ?")
+        .bind(run_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(crate::Error::Database)?;
+    let status = status.ok_or(crate::Error::NotFound)?;
+    if status != "running" {
+        return Err(crate::Error::RunConflict);
+    }
+
+    let mut tx = pool.begin().await.map_err(crate::Error::Database)?;
+
+    // Guard against a finalize racing in between the check and the write.
+    let updated = sqlx::query(
+        "UPDATE runs
+         SET status = ?,
+             finished_at = datetime('now'),
+             duration_sec = CAST((julianday(datetime('now')) - julianday(started_at)) * 86400 AS INTEGER)
+         WHERE id = ? AND status = 'running'",
+    )
+    .bind(CANCELLED)
+    .bind(run_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(crate::Error::Database)?;
+    if updated.rows_affected() == 0 {
+        return Err(crate::Error::RunConflict);
+    }
+
+    sqlx::query(
+        "UPDATE run_projects
+         SET state = ?, finished_at = datetime('now')
+         WHERE run_id = ? AND state = 'queued'",
+    )
+    .bind(CANCELLED)
+    .bind(run_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(crate::Error::Database)?;
+
+    tx.commit().await.map_err(crate::Error::Database)?;
     Ok(())
 }
 

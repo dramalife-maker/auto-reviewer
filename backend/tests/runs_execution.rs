@@ -629,7 +629,7 @@ async fn worker_marks_skipped_timeout() {
         mr_scan_force: 0,
     };
 
-    process_run_project(&pool, &config, job, 1, CancellationToken::new())
+    process_run_project(&pool, &config, job, 1, CancellationToken::new(), CancellationToken::new())
         .await
         .expect("process run project");
 
@@ -720,7 +720,7 @@ async fn mr_scan_timeout_still_ingests_draft_on_disk() {
         mr_scan_force: 0,
     };
 
-    process_run_project(&pool, &config, job, 1, CancellationToken::new())
+    process_run_project(&pool, &config, job, 1, CancellationToken::new(), CancellationToken::new())
         .await
         .expect("process mr scan");
 

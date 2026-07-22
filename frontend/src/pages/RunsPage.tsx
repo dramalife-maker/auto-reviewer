@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
-import { fetchRun, fetchRuns } from '../api'
+import { cancelRun, fetchRun, fetchRuns } from '../api'
 import { Card, ListRow, StatusPill } from '../components/ui'
 import { useToast } from '../context/ToastContext.tsx'
 import {
@@ -122,6 +122,22 @@ export function RunsPage() {
     navigate(`/runs/${runId}`)
   }
 
+  const handleCancel = useCallback(
+    async (runId: number) => {
+      try {
+        const updated = await cancelRun(runId)
+        // Reflect the cancelled status in place; refresh the list so the
+        // sidebar pill updates without a manual page reload.
+        if (selectedRunIdRef.current === runId) setSelectedRun(updated)
+        void loadRuns(false)
+        toast.show(`已中止 Run #${runId}`)
+      } catch (error) {
+        toast.show(error instanceof Error ? error.message : '無法中止執行', true)
+      }
+    },
+    [loadRuns, toast],
+  )
+
   return (
     <div className="mx-auto flex max-w-[1280px] flex-col gap-5">
       <header className="flex items-center justify-between gap-3">
@@ -175,7 +191,7 @@ export function RunsPage() {
         </aside>
 
         <main className="min-h-0 overflow-y-auto bg-surface p-5">
-          {selectedRun ? <RunDetail run={selectedRun} /> : <EmptyDetail />}
+          {selectedRun ? <RunDetail run={selectedRun} onCancel={handleCancel} /> : <EmptyDetail />}
         </main>
       </div>
     </div>
@@ -190,14 +206,38 @@ function EmptyDetail() {
   )
 }
 
-function RunDetail({ run }: { run: RunStatus }) {
+function RunDetail({
+  run,
+  onCancel,
+}: {
+  run: RunStatus
+  onCancel: (runId: number) => Promise<void>
+}) {
   const highlight = run.status === 'failed' || run.status === 'partial'
+  const [cancelling, setCancelling] = useState(false)
+  // Only an in-progress run can be cancelled; terminal runs offer no action.
+  const canCancel = run.status === 'running'
   return (
     <div className="flex flex-col gap-5">
       <Card className={['p-5', highlight ? 'border-danger-border bg-danger-tint/40' : ''].join(' ')}>
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-xl font-semibold text-ink">Run #{run.id}</h2>
-          <StatusPill tone={runStatusTone(run.status)}>{run.status}</StatusPill>
+          <div className="flex items-center gap-2">
+            {canCancel ? (
+              <button
+                type="button"
+                className="rounded-md border border-danger-border px-3 py-1.5 text-[13px] font-medium text-danger transition hover:bg-danger-tint disabled:opacity-50"
+                disabled={cancelling}
+                onClick={() => {
+                  setCancelling(true)
+                  void onCancel(run.id).finally(() => setCancelling(false))
+                }}
+              >
+                {cancelling ? '中止中...' : '中止執行'}
+              </button>
+            ) : null}
+            <StatusPill tone={runStatusTone(run.status)}>{run.status}</StatusPill>
+          </div>
         </div>
         <dl className="mt-4 grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-3">
           <MetaItem label="觸發" value={humanizeTrigger(run.trigger)} />

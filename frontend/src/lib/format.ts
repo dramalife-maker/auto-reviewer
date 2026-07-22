@@ -88,6 +88,9 @@ export function runStatusTone(
   if (status === 'failed' || status === 'skipped_timeout') return 'danger'
   if (status === 'success' || status === 'done') return 'success'
   if (status === 'partial' || status === 'running' || status === 'queued') return 'warning'
+  // `cancelled` is neither a failure nor a success — a neutral tone keeps it
+  // visually distinct from `failed`.
+  if (status === 'cancelled') return 'neutral'
   return 'neutral'
 }
 

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -8,6 +8,7 @@ import { RunsPage } from './RunsPage.tsx'
 
 const fetchRuns = vi.fn<() => Promise<{ runs: RunListItem[]; total: number }>>()
 const fetchRun = vi.fn<(id: number) => Promise<RunStatus>>()
+const cancelRun = vi.fn<(id: number) => Promise<RunStatus>>()
 
 vi.mock('../api', async () => {
   const actual = await vi.importActual<typeof import('../api')>('../api')
@@ -15,6 +16,7 @@ vi.mock('../api', async () => {
     ...actual,
     fetchRuns: () => fetchRuns(),
     fetchRun: (id: number) => fetchRun(id),
+    cancelRun: (id: number) => cancelRun(id),
   }
 })
 
@@ -74,10 +76,13 @@ function renderPage(run: RunStatus) {
   )
 }
 
+const CANCEL_LABEL = '中止執行'
+
 describe('RunsPage outputs hints', () => {
   beforeEach(() => {
     fetchRuns.mockReset()
     fetchRun.mockReset()
+    cancelRun.mockReset()
   })
 
   it('shows MR draft count with link to inbox', async () => {
@@ -141,5 +146,98 @@ describe('RunsPage outputs hints', () => {
     })
     expect(screen.queryByText(/已產出/)).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'MR 收件匣' })).not.toBeInTheDocument()
+  })
+})
+
+describe('RunsPage cancelled status (task 5.1)', () => {
+  beforeEach(() => {
+    fetchRuns.mockReset()
+    fetchRun.mockReset()
+    cancelRun.mockReset()
+  })
+
+  it('renders a cancelled run and project distinctly from failed', async () => {
+    renderPage(
+      baseRun({
+        status: 'cancelled',
+        projects: [
+          {
+            name: 'game-backend',
+            state: 'cancelled',
+            error: null,
+            started_at: null,
+            finished_at: null,
+            duration_sec: 3,
+          },
+        ],
+      }),
+    )
+
+    // Both the run header and the project row surface the cancelled status.
+    const pills = await screen.findAllByText('cancelled')
+    expect(pills.length).toBeGreaterThanOrEqual(2)
+    // Distinct from failed: cancelled uses the neutral tone, never the danger tone.
+    for (const pill of pills) {
+      expect(pill.className).toContain('text-ink-muted')
+      expect(pill.className).not.toContain('text-danger')
+    }
+  })
+})
+
+describe('RunsPage cancel action (task 5.2)', () => {
+  beforeEach(() => {
+    fetchRuns.mockReset()
+    fetchRun.mockReset()
+    cancelRun.mockReset()
+  })
+
+  it('offers a cancel action on a running run', async () => {
+    renderPage(baseRun({ status: 'running', finished_at: null }))
+    expect(await screen.findByRole('button', { name: CANCEL_LABEL })).toBeInTheDocument()
+  })
+
+  it('does not offer a cancel action on a terminal run', async () => {
+    renderPage(baseRun({ status: 'success' }))
+    await waitFor(() => {
+      expect(screen.getByText('game-backend')).toBeInTheDocument()
+    })
+    expect(screen.queryByRole('button', { name: CANCEL_LABEL })).not.toBeInTheDocument()
+  })
+
+  it('reflects cancelled status after triggering cancellation without a reload', async () => {
+    const running = baseRun({ status: 'running', finished_at: null })
+    renderPage(running)
+
+    // Wait for the initial (running) detail before flipping to cancelled.
+    const button = await screen.findByRole('button', { name: CANCEL_LABEL })
+
+    const cancelled = baseRun({
+      status: 'cancelled',
+      finished_at: '2026-07-05 09:02:00',
+      projects: [
+        {
+          name: 'game-backend',
+          state: 'cancelled',
+          error: null,
+          started_at: null,
+          finished_at: null,
+          duration_sec: 3,
+        },
+      ],
+    })
+    cancelRun.mockResolvedValue(cancelled)
+    // Once cancelled server-side, subsequent reads also return cancelled.
+    fetchRun.mockResolvedValue(cancelled)
+
+    fireEvent.click(button)
+
+    await waitFor(() => {
+      expect(cancelRun).toHaveBeenCalledWith(7)
+    })
+    // Status updates in place (no manual reload); the cancel action is gone.
+    await screen.findAllByText('cancelled')
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: CANCEL_LABEL })).not.toBeInTheDocument()
+    })
   })
 })

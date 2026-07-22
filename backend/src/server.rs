@@ -84,6 +84,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/api/runs", get(list_runs).post(create_run))
         .route("/api/runs/{id}", get(get_run))
+        .route("/api/runs/{id}/cancel", post(cancel_run))
         .route("/api/dashboard", get(get_dashboard))
         .route("/api/schedule", get(get_schedule).patch(update_schedule))
         .route("/api/schedule/catch-up", post(catch_up_schedule))
@@ -212,6 +213,31 @@ async fn get_run(
     State(state): State<AppState>,
     Path(run_id): Path<i64>,
 ) -> Result<Json<RunStatusResponse>, ApiError> {
+    Ok(Json(run_status_response(&state, run_id).await?))
+}
+
+/// Cancel a run and its projects, then return the same shape as `get_run`.
+async fn cancel_run(
+    State(state): State<AppState>,
+    Path(run_id): Path<i64>,
+) -> Result<Json<RunStatusResponse>, ApiError> {
+    // DB side: 404 if unknown, 409 (no rows touched) if already terminal,
+    // otherwise mark the run and its queued projects `cancelled`.
+    runs::cancel_run(&state.pool, run_id)
+        .await
+        .map_err(ApiError::from)?;
+    // Kill any in-flight project subprocess for this run. The worker maps the
+    // resulting cancellation to `cancelled` because shutdown is not cancelled.
+    if let Some(worker) = &state.worker {
+        worker.cancel_run_token(run_id);
+    }
+    Ok(Json(run_status_response(&state, run_id).await?))
+}
+
+async fn run_status_response(
+    state: &AppState,
+    run_id: i64,
+) -> Result<RunStatusResponse, ApiError> {
     let run = runs::get_run(&state.pool, run_id)
         .await
         .map_err(ApiError::from)?
@@ -267,7 +293,7 @@ async fn get_run(
             outputs,
         });
     }
-    Ok(Json(RunStatusResponse {
+    Ok(RunStatusResponse {
         id: run.id,
         trigger: run.trigger,
         status: run.status,
@@ -278,7 +304,7 @@ async fn get_run(
         project_total: run.project_total,
         project_skipped: run.project_skipped,
         projects,
-    }))
+    })
 }
 
 async fn list_projects(

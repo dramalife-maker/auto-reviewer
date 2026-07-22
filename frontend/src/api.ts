@@ -112,6 +112,10 @@ export function fetchRun(runId: number): Promise<RunStatus> {
   return request(`/api/runs/${runId}`)
 }
 
+export function cancelRun(runId: number): Promise<RunStatus> {
+  return request(`/api/runs/${runId}/cancel`, { method: 'POST' })
+}
+
 export function fetchRuns(params?: {
   limit?: number
   offset?: number
