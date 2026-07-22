@@ -21,7 +21,7 @@
 
 - 不放寬併發模型（不引入單專案閘或 per-person 閘）。
 - 不在 API 端驗證 person 是否屬於專案或窗口內是否有 commit。
-- 不新增前端觸發 UI（僅補 run 歷史的 trigger 中文標籤）。
+- 前端入口只放「人員設定」頁的「參與專案」清單；不在 Dashboard／Projects／Runs 等頁另加人員選擇器或觸發點。
 - 不改動 ingest／finalize／cancel／recovery 邏輯。
 
 ## Decisions
@@ -47,8 +47,11 @@ migration `015_run_projects_person.sql`：`ALTER TABLE run_projects ADD COLUMN p
 **D7 — MR 軌道不受影響。**
 `is_mr_trigger("manual_person")` 為 false，走 weekly 路徑。MR run 的 `run_projects.person_id` 恆 NULL，`process_mr_run_project` 不讀該欄位。
 
-**D8 — 前端僅補標籤。**
+**D8 — 前端補標籤。**
 `humanizeTrigger` 加 `case 'manual_person': return '手動單人'`。`default` 已能容錯，此為顯示品質補強。
+
+**D9 — 前端觸發入口放「人員設定」頁的「參與專案」清單（就地驗證）。**
+情境：管理者在人員設定頁修完某人的 identity 綁定後，想立刻驗證。該頁 `PersonDetail.projects`（`GET /api/people/{id}` 已回傳，型別 `PersonProjectItem { id, name }`）正好同時具備 `person_id`（選中人員）與 `project_name`，是唯一天然同時握有兩者的位置。作法：`api.ts` 加 `startPersonRun(projectName, personId)`；「參與專案」每個 project 後加「重跑週報」按鈕 → 呼叫後成功／失敗都走既有 `useToast`。409（全系統閘擋下）照實把後端訊息 toast 出來，不另做前端併發判斷。替代方案：Dashboard 或 Projects 頁加人員選擇器——否決，那些頁沒有現成的「人＋專案」配對，需額外拉清單與選擇器，範圍與 UX 都更重，且偏離「修完歸戶就地驗證」情境。
 
 ## Implementation Contract
 
@@ -75,8 +78,8 @@ migration `015_run_projects_person.sql`：`ALTER TABLE run_projects ADD COLUMN p
 - 既有整批測試（`person_id = None` 路徑）全綠，證明零回歸。
 
 **Scope boundaries：**
-- In scope：上述 backend 5 檔 + migration + 前端 `humanizeTrigger` 一行 + 測試。
-- Out of scope：前端觸發按鈕、併發模型放寬、歸屬驗證、ingest／cancel／recovery 邏輯改動。
+- In scope：上述 backend 5 檔 + migration + 前端 `humanizeTrigger` 一行 + 前端單人觸發入口（`api.ts` 的 `startPersonRun` + `PeoplePage` 「參與專案」重跑按鈕與 handler）+ 測試。
+- Out of scope：Dashboard／Projects／Runs 等頁的人員選擇器或觸發點、併發模型放寬、歸屬驗證、ingest／cancel／recovery 邏輯改動。
 
 ## Risks / Trade-offs
 

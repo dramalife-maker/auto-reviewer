@@ -305,6 +305,8 @@ cargo test -p reviewer-server
 cd frontend && npm run build
 ```
 
+> 本機若有 `reviewer-server` 正在執行，`cargo test` 會因 `target\debug\reviewer-server.exe` 被鎖而 build 失敗（`os error 5 存取被拒`）。改用獨立 target dir 分流：`$env:CARGO_TARGET_DIR="target-test"; cargo test -p reviewer-server`（`target-test/` 已 git 忽略）。
+
 ## 文件
 
 - 產品規格：`docs/idea/spec.md`

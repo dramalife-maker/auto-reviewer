@@ -7,6 +7,7 @@ import {
   fetchPersonDetail,
   fetchUnmatchedAuthors,
   renamePerson,
+  startPersonRun,
   unbindIdentity,
 } from '../api'
 import { useToast } from '../context/ToastContext'
@@ -200,6 +201,19 @@ export function PeoplePage({
       show('已移除 identity')
     } catch (error) {
       show(error instanceof Error ? error.message : '移除失敗', true)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleRerunPerson(projectName: string) {
+    if (personDetail === null || saving) return
+    setSaving(true)
+    try {
+      const response = await startPersonRun(projectName, personDetail.id)
+      show(`已建立單人週報 run #${response.run_id}`)
+    } catch (error) {
+      show(error instanceof Error ? error.message : '重跑失敗', true)
     } finally {
       setSaving(false)
     }
@@ -406,9 +420,22 @@ export function PeoplePage({
 
               <Field label="參與專案">
                 {personDetail.projects.length > 0 ? (
-                  <ul className="list-disc space-y-1 pl-5 text-[13.5px]">
+                  <ul className="space-y-1.5 text-[13.5px]">
                     {personDetail.projects.map((project) => (
-                      <li key={project.id}>{project.name}</li>
+                      <li
+                        key={project.id}
+                        className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2"
+                      >
+                        <span className="min-w-0 truncate">{project.name}</span>
+                        <button
+                          type="button"
+                          className="shrink-0 text-primary hover:underline disabled:opacity-50"
+                          disabled={saving}
+                          onClick={() => void handleRerunPerson(project.name)}
+                        >
+                          重跑週報
+                        </button>
+                      </li>
                     ))}
                   </ul>
                 ) : (

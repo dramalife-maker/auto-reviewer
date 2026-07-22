@@ -108,6 +108,21 @@ export function startProjectRun(projectName: string): Promise<CreateRunResponse>
   })
 }
 
+export function startPersonRun(
+  projectName: string,
+  personId: number,
+): Promise<CreateRunResponse> {
+  return request('/api/runs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      trigger: 'manual_person',
+      project_name: projectName,
+      person_id: personId,
+    }),
+  })
+}
+
 export function fetchRun(runId: number): Promise<RunStatus> {
   return request(`/api/runs/${runId}`)
 }

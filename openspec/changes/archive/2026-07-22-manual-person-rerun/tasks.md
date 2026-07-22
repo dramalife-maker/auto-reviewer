@@ -26,3 +26,9 @@
 ## 7. 驗證與回歸
 
 - [x] 7.1 執行 `cargo test`（backend）確認：新測試（2.1、2.2、3.1、5.1）全綠、既有 `backend/tests/runs_execution.rs` 整批路徑測試全綠。行為：整批行為零回歸、單人路徑符合契約。驗證：測試全數通過。
+
+## 8. 前端單人觸發入口（人員設定頁）
+
+- [x] 8.1 在 `frontend/src/api.ts` 新增 `startPersonRun(projectName: string, personId: number): Promise<CreateRunResponse>`，比照 `startProjectRun` 打 `POST /api/runs`，body `{ trigger: 'manual_person', project_name: projectName, person_id: personId }`（實作 Design D9 的 API client 部分）。行為：前端可發出單人 run 請求並取得 `run_id`。驗證：`npm run build`（tsc）通過；型別回傳 `CreateRunResponse`。
+- [x] 8.2 在 `frontend/src/pages/PeoplePage.tsx` 的「參與專案」清單，每個 `project` 後加一顆「重跑週報」按鈕，點擊呼叫 `handleRerunPerson(project.name)`：以 `saving` 去抖、呼叫 `startPersonRun(project.name, personDetail.id)`，成功 `show('已建立單人週報 run #<run_id>')`、失敗 `show(error.message, true)`（尤其後端 409「已有 run 在跑」）（實作 Design D9 的 UI 觸發與錯誤處理）。行為：管理者在人員頁就地對單一專案重跑該人週報；併發衝突以 toast 呈現後端訊息。驗證：`npm run build` 通過；手動確認按鈕出現在每個參與專案列。
+- [x] 8.3 在 `frontend/src/pages/PeoplePage.rerun.test.tsx`（比照既有 `PeoplePage.unmatched.test.tsx` 命名）新增用例：mock `startPersonRun`，渲染含至少一個參與專案的人員詳情（`renderPage` 需同時掛 `<Toast />` 才能斷言 toast 文字），點「重跑週報」後斷言 `startPersonRun` 以 `(project.name, person.id)` 被呼叫，成功走 toast、失敗（409 訊息）也走 toast（實作 Design D9 的行為驗證）。行為：入口行為有回歸保護。驗證：`npm run test` 該用例通過。
