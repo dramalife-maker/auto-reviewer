@@ -319,15 +319,63 @@ async fn upsert_summary(
 
     let raised_date = report_date.get(0..7).unwrap_or(&report_date).to_string();
     for question in &parsed.pending_questions {
+        // A row whose originating report is gone (`report_id` is NULL, the column
+        // is ON DELETE SET NULL) has no date to compare, so the guard below cannot
+        // see it and insertion proceeds. Failing open is deliberate: dropping a
+        // genuinely new question is worse than an extra row.
+        let unanchored: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pending_items
+             WHERE person_id = ? AND project_id = ? AND question = ? AND report_id IS NULL",
+        )
+        .bind(person_id)
+        .bind(project_id)
+        .bind(question)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(Error::Database)?;
+        if unanchored > 0 {
+            warn!(
+                person_id,
+                project_id,
+                question,
+                "existing pending item has no originating report; replay guard cannot compare dates"
+            );
+        }
+
+        // Ingest re-reads every historical summary.md, so an already-processed
+        // one reappears on each later run. Skip the insert when this question was
+        // already recorded from a report dated at or after the incoming summary —
+        // an older mention is history, not news. `>=` rather than `=` because
+        // carrying an open question forward rewrites its report_id to the newer
+        // report, which would otherwise let the original summary's replay through.
+        //
+        // `INSERT OR IGNORE` still guards the separate rule that one question may
+        // not hold two open rows (idx_pending_open_unique, a partial index over
+        // status='open'); that index is what this guard complements, not replaces.
+        //
+        // report_date is compared lexicographically, matching how it is already
+        // ordered elsewhere in this module.
         let insert_result = sqlx::query(
             "INSERT OR IGNORE INTO pending_items (person_id, project_id, report_id, question, raised_date)
-             VALUES (?, ?, ?, ?, ?)",
+             SELECT ?, ?, ?, ?, ?
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM pending_items existing
+                 INNER JOIN reports source ON source.id = existing.report_id
+                 WHERE existing.person_id = ?
+                   AND existing.project_id = ?
+                   AND existing.question = ?
+                   AND source.report_date >= ?
+             )",
         )
         .bind(person_id)
         .bind(project_id)
         .bind(report_id)
         .bind(question)
         .bind(&raised_date)
+        .bind(person_id)
+        .bind(project_id)
+        .bind(question)
+        .bind(&report_date)
         .execute(&mut *tx)
         .await
         .map_err(Error::Database)?;

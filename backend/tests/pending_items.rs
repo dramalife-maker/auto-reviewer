@@ -859,3 +859,175 @@ async fn resolved_question_may_be_raised_again_as_new_open_row() {
     assert_eq!(open_count, 1, "resolved history must not block a new open row");
     assert_eq!(total_count, 2, "resolved row must remain alongside the new open row");
 }
+
+/// Replay guard: ingest scans every historical `summary.md` under the project's
+/// report root, so an already-processed summary is re-read on every later run.
+/// Once the question is `resolved` it falls outside `idx_pending_open_unique`
+/// (partial index, `WHERE status='open'`), so the insert is no longer ignored.
+#[tokio::test]
+async fn reingesting_processed_summary_after_resolve_does_not_duplicate() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    seed_person(&pool, "Alice Chen").await;
+    let project_id = seed_project(&pool, &temp, "game-backend").await;
+    let run_id = seed_run(&pool).await;
+
+    // Raise, then clear, both from the report dated 2026-07-05.
+    write_summary(&temp, "game-backend", "Alice Chen", "2026-07-05", Some("Why choose A?"), None);
+    ingest_project_summaries(&pool, temp.path(), "game-backend", project_id, run_id)
+        .await
+        .expect("raise");
+
+    write_summary(&temp, "game-backend", "Alice Chen", "2026-07-05", None, Some("Why choose A?"));
+    ingest_project_summaries(&pool, temp.path(), "game-backend", project_id, run_id)
+        .await
+        .expect("clear");
+
+    // A later run re-reads the same 2026-07-05 summary that still lists the question.
+    write_summary(&temp, "game-backend", "Alice Chen", "2026-07-05", Some("Why choose A?"), None);
+    ingest_project_summaries(&pool, temp.path(), "game-backend", project_id, run_id)
+        .await
+        .expect("replay");
+
+    let total_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM pending_items WHERE question = ?")
+            .bind("Why choose A?")
+            .fetch_one(&pool)
+            .await
+            .expect("total count");
+    assert_eq!(
+        total_count, 1,
+        "re-reading an already-processed summary must not create a second row"
+    );
+}
+
+/// A summary older than the row's originating report is history, not news.
+#[tokio::test]
+async fn reingesting_older_summary_does_not_reopen_resolved_question() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    seed_person(&pool, "Alice Chen").await;
+    let project_id = seed_project(&pool, &temp, "game-backend").await;
+    let run_id = seed_run(&pool).await;
+
+    write_summary(&temp, "game-backend", "Alice Chen", "2026-07-12", Some("Why choose A?"), None);
+    ingest_project_summaries(&pool, temp.path(), "game-backend", project_id, run_id)
+        .await
+        .expect("raise");
+
+    write_summary(&temp, "game-backend", "Alice Chen", "2026-07-12", None, Some("Why choose A?"));
+    ingest_project_summaries(&pool, temp.path(), "game-backend", project_id, run_id)
+        .await
+        .expect("clear");
+
+    // An older summary still lists the question under 待確認.
+    write_summary(&temp, "game-backend", "Alice Chen", "2026-07-05", Some("Why choose A?"), None);
+    ingest_project_summaries(&pool, temp.path(), "game-backend", project_id, run_id)
+        .await
+        .expect("replay older");
+
+    let total_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM pending_items WHERE question = ?")
+            .bind("Why choose A?")
+            .fetch_one(&pool)
+            .await
+            .expect("total count");
+    let open_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pending_items WHERE question = ? AND status = 'open'",
+    )
+    .bind("Why choose A?")
+    .fetch_one(&pool)
+    .await
+    .expect("open count");
+    assert_eq!(total_count, 1, "an older summary must not create a second row");
+    assert_eq!(open_count, 0, "an older summary must not reopen a resolved question");
+}
+
+/// Carrying an open question forward rewrites its `report_id` to the newer report.
+/// Comparing the incoming report date for equality alone would therefore miss the
+/// replay of the *original* summary — hence the `>=` comparison.
+#[tokio::test]
+async fn replaying_original_summary_after_carry_forward_and_resolve_does_not_duplicate() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    seed_person(&pool, "Alice Chen").await;
+    let project_id = seed_project(&pool, &temp, "game-backend").await;
+    let run_id = seed_run(&pool).await;
+
+    // Week 1: raised from 2026-07-05.
+    write_summary(&temp, "game-backend", "Alice Chen", "2026-07-05", Some("Why choose A?"), None);
+    ingest_project_summaries(&pool, temp.path(), "game-backend", project_id, run_id)
+        .await
+        .expect("week 1 raise");
+
+    // Week 2 carries the still-open question forward, moving report_id to 2026-07-12.
+    // Remove the week 1 directory so the carry-forward target is unambiguous.
+    std::fs::remove_dir_all(temp.path().join("reports/game-backend/Alice Chen/2026-07-05"))
+        .expect("remove week 1 report dir");
+    write_summary(&temp, "game-backend", "Alice Chen", "2026-07-12", Some("Why choose A?"), None);
+    ingest_project_summaries(&pool, temp.path(), "game-backend", project_id, run_id)
+        .await
+        .expect("week 2 carry forward");
+
+    write_summary(&temp, "game-backend", "Alice Chen", "2026-07-12", None, Some("Why choose A?"));
+    ingest_project_summaries(&pool, temp.path(), "game-backend", project_id, run_id)
+        .await
+        .expect("week 2 clear");
+
+    // The original 2026-07-05 summary reappears on a later scan.
+    write_summary(&temp, "game-backend", "Alice Chen", "2026-07-05", Some("Why choose A?"), None);
+    ingest_project_summaries(&pool, temp.path(), "game-backend", project_id, run_id)
+        .await
+        .expect("replay original");
+
+    let total_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM pending_items WHERE question = ?")
+            .bind("Why choose A?")
+            .fetch_one(&pool)
+            .await
+            .expect("total count");
+    assert_eq!(
+        total_count, 1,
+        "replaying the original summary after carry-forward must not create a second row"
+    );
+}
+
+/// The replay guard needs the originating report's date. When the report
+/// reference is `NULL` the date is unknowable, and the guard must fail open so a
+/// genuinely new question is never silently dropped.
+#[tokio::test]
+async fn pending_row_without_report_reference_does_not_block_insertion() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let person_id = seed_person(&pool, "Alice Chen").await;
+    let project_id = seed_project(&pool, &temp, "game-backend").await;
+    let run_id = seed_run(&pool).await;
+
+    // seed_pending_item leaves report_id NULL.
+    seed_pending_item(&pool, person_id, project_id, "Why choose A?", "resolved", "2026-07").await;
+
+    write_summary(&temp, "game-backend", "Alice Chen", "2026-07-05", Some("Why choose A?"), None);
+    ingest_project_summaries(&pool, temp.path(), "game-backend", project_id, run_id)
+        .await
+        .expect("ingest");
+
+    let open_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pending_items WHERE question = ? AND status = 'open'",
+    )
+    .bind("Why choose A?")
+    .fetch_one(&pool)
+    .await
+    .expect("open count");
+    assert_eq!(
+        open_count, 1,
+        "a row with no originating report must not block a new open row"
+    );
+}
