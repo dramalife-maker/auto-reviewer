@@ -275,15 +275,13 @@ async fn run_weekly_with_cancel(cancel_shutdown: bool) -> (String, Duration) {
     let rp_id = seed_run_project(&pool, run_id, project_id, "running").await;
 
     let config = test_config();
-    let job = RunProjectRow {
-        id: rp_id,
-        run_id,
-        project_id,
-        name: "alpha".into(),
-        repo_path: repo.display().to_string(),
-        trigger: "manual_all".into(),
-        mr_scan_force: 0,
-    };
+    let job = RunProjectRow { id: rp_id,
+    run_id,
+    project_id,
+    name: "alpha".into(),
+    repo_path: repo.display().to_string(),
+    trigger: "manual_all".into(),
+    mr_scan_force: 0, person_id: None };
 
     // run_token is a child of shutdown, mirroring the worker registry.
     let shutdown = CancellationToken::new();
@@ -551,15 +549,13 @@ async fn setup_mr_cancel(
 }
 
 fn mr_job(rp_id: i64, run_id: i64, project_id: i64, temp: &tempfile::TempDir) -> RunProjectRow {
-    RunProjectRow {
-        id: rp_id,
-        run_id,
-        project_id,
-        name: "alpha".into(),
-        repo_path: temp.path().join("repos/alpha").display().to_string(),
-        trigger: "manual_mr_poll".into(),
-        mr_scan_force: 0,
-    }
+    RunProjectRow { id: rp_id,
+    run_id,
+    project_id,
+    name: "alpha".into(),
+    repo_path: temp.path().join("repos/alpha").display().to_string(),
+    trigger: "manual_mr_poll".into(),
+    mr_scan_force: 0, person_id: None }
 }
 
 fn clear_mr_env() {

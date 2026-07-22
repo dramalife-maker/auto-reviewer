@@ -30,6 +30,7 @@ pub struct HealthResponse {
 pub struct CreateRunRequest {
     pub trigger: String,
     pub project_name: Option<String>,
+    pub person_id: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -174,6 +175,20 @@ async fn create_run(
                     "manual_project requires project_name".into(),
                 ))?;
             runs::create_manual_project_run(&state.pool, project_name).await?
+        }
+        "manual_person" => {
+            let project_name = body
+                .project_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .ok_or(Error::InvalidProjectConfig(
+                    "manual_person requires project_name".into(),
+                ))?;
+            let person_id = body.person_id.ok_or(Error::InvalidProjectConfig(
+                "manual_person requires person_id".into(),
+            ))?;
+            runs::create_manual_person_run(&state.pool, project_name, person_id).await?
         }
         other => return Err(ApiError::from(Error::UnsupportedRunTrigger(other.to_string()))),
     };

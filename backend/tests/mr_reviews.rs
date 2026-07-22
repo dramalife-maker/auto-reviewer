@@ -857,6 +857,7 @@ async fn weekly_manifest_lists_published_pending_snippets() {
         99,
         &project,
         "/tmp/repo",
+        None,
     )
     .await
     .expect("manifest");

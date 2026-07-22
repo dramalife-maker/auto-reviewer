@@ -71,6 +71,8 @@ export function humanizeTrigger(trigger: string): string {
       return '手動全部'
     case 'manual_project':
       return '手動專案'
+    case 'manual_person':
+      return '手動單人'
     case 'schedule':
       return '週排程'
     case 'mr_poll':

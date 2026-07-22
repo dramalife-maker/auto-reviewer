@@ -619,15 +619,13 @@ async fn worker_marks_skipped_timeout() {
     let run_project_id = run_project_result.last_insert_rowid();
 
     let config = reviewer_server::config::AppConfig::from_env().expect("config");
-    let job = runs::RunProjectRow {
-        id: run_project_id,
-        run_id,
-        project_id,
-        name: "alpha".into(),
-        repo_path: temp.path().join("repos/alpha").display().to_string(),
-        trigger: "manual_project".into(),
-        mr_scan_force: 0,
-    };
+    let job = runs::RunProjectRow { id: run_project_id,
+    run_id,
+    project_id,
+    name: "alpha".into(),
+    repo_path: temp.path().join("repos/alpha").display().to_string(),
+    trigger: "manual_project".into(),
+    mr_scan_force: 0, person_id: None };
 
     process_run_project(&pool, &config, job, 1, CancellationToken::new(), CancellationToken::new())
         .await
@@ -710,15 +708,13 @@ async fn mr_scan_timeout_still_ingests_draft_on_disk() {
 
     // Rebuild config after env vars are set (executor + triage).
     let config = reviewer_server::config::AppConfig::from_env().expect("config");
-    let job = runs::RunProjectRow {
-        id: run_project_id,
-        run_id,
-        project_id,
-        name: "alpha".into(),
-        repo_path: temp.path().join("repos/alpha").display().to_string(),
-        trigger: "manual_mr_poll".into(),
-        mr_scan_force: 0,
-    };
+    let job = runs::RunProjectRow { id: run_project_id,
+    run_id,
+    project_id,
+    name: "alpha".into(),
+    repo_path: temp.path().join("repos/alpha").display().to_string(),
+    trigger: "manual_mr_poll".into(),
+    mr_scan_force: 0, person_id: None };
 
     process_run_project(&pool, &config, job, 1, CancellationToken::new(), CancellationToken::new())
         .await
@@ -791,15 +787,13 @@ async fn resolve_working_dir_returns_resident_worktree() {
         .fetch_one(&pool)
         .await
         .expect("project id");
-    let job = runs::RunProjectRow {
-        id: 1,
-        run_id: 1,
-        project_id,
-        name: "svc".into(),
-        repo_path: container.display().to_string(),
-        trigger: "manual_project".into(),
-        mr_scan_force: 0,
-    };
+    let job = runs::RunProjectRow { id: 1,
+    run_id: 1,
+    project_id,
+    name: "svc".into(),
+    repo_path: container.display().to_string(),
+    trigger: "manual_project".into(),
+    mr_scan_force: 0, person_id: None };
 
     std::env::set_var("DATA_ROOT_DIR", temp.path());
     let config = reviewer_server::config::AppConfig::from_env().expect("config");
@@ -810,15 +804,13 @@ async fn resolve_working_dir_returns_resident_worktree() {
     assert_eq!(dir, container.join("main"), "resident worktree path");
 
     // An unhealthy / unprovisioned project cannot supply a worktree.
-    let bad_job = runs::RunProjectRow {
-        id: 2,
-        run_id: 1,
-        project_id: 999,
-        name: "missing".into(),
-        repo_path: container.display().to_string(),
-        trigger: "manual_project".into(),
-        mr_scan_force: 0,
-    };
+    let bad_job = runs::RunProjectRow { id: 2,
+    run_id: 1,
+    project_id: 999,
+    name: "missing".into(),
+    repo_path: container.display().to_string(),
+    trigger: "manual_project".into(),
+    mr_scan_force: 0, person_id: None };
     assert!(resolve_working_dir(&pool, &config, &bad_job).await.is_err());
 }
 
@@ -2138,4 +2130,232 @@ async fn get_run_missing_drafts_dir_omits_mr_drafts() {
     let body = response.into_body().collect().await.expect("body").to_bytes();
     let json: Value = serde_json::from_slice(&body).expect("json");
     assert!(json["projects"][0]["outputs"].is_null());
+}
+
+async fn insert_person(pool: &sqlx::SqlitePool, display_name: &str) -> i64 {
+    sqlx::query("INSERT INTO people (display_name) VALUES (?)")
+        .bind(display_name)
+        .execute(pool)
+        .await
+        .expect("insert person")
+        .last_insert_rowid()
+}
+
+#[tokio::test]
+async fn create_manual_person_run_enqueues_scoped_project() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_app_state_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    insert_projects(&pool, &temp).await;
+    let person_id = insert_person(&pool, "Alice Chen").await;
+
+    let run_id = runs::create_manual_person_run(&pool, "alpha", person_id)
+        .await
+        .expect("create manual person run");
+
+    let trigger: String = sqlx::query_scalar("SELECT trigger FROM runs WHERE id = ?")
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("trigger");
+    assert_eq!(trigger, "manual_person");
+
+    let (rp_person_id, state): (Option<i64>, String) = sqlx::query_as(
+        "SELECT rp.person_id, rp.state FROM run_projects rp
+         INNER JOIN projects p ON p.id = rp.project_id
+         WHERE rp.run_id = ? AND p.name = 'alpha'",
+    )
+    .bind(run_id)
+    .fetch_one(&pool)
+    .await
+    .expect("run project row");
+    assert_eq!(rp_person_id, Some(person_id));
+    assert_eq!(state, "queued");
+}
+
+#[tokio::test]
+async fn create_manual_person_run_conflict_returns_run_conflict() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_app_state_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    insert_projects(&pool, &temp).await;
+    let person_id = insert_person(&pool, "Alice Chen").await;
+
+    // An active run already occupies the whole-system gate.
+    let run_id = sqlx::query(
+        "INSERT INTO runs (trigger, status, project_total) VALUES ('manual_all', 'running', 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert run")
+    .last_insert_rowid();
+    let project_id: i64 = sqlx::query_scalar("SELECT id FROM projects WHERE name = 'alpha'")
+        .fetch_one(&pool)
+        .await
+        .expect("project id");
+    sqlx::query("INSERT INTO run_projects (run_id, project_id, state) VALUES (?, ?, 'running')")
+        .bind(run_id)
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("insert run project");
+
+    let err = runs::create_manual_person_run(&pool, "alpha", person_id)
+        .await
+        .expect_err("should conflict");
+    assert!(matches!(err, reviewer_server::Error::RunConflict));
+}
+
+#[tokio::test]
+async fn create_manual_person_run_unknown_project_is_not_found() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_app_state_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    insert_projects(&pool, &temp).await;
+    let person_id = insert_person(&pool, "Alice Chen").await;
+
+    let err = runs::create_manual_person_run(&pool, "does-not-exist", person_id)
+        .await
+        .expect_err("unknown project");
+    assert!(matches!(err, reviewer_server::Error::NotFound));
+}
+
+#[tokio::test]
+async fn create_manual_person_run_unknown_person_is_not_found() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_app_state_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    insert_projects(&pool, &temp).await;
+
+    let err = runs::create_manual_person_run(&pool, "alpha", 999)
+        .await
+        .expect_err("unknown person");
+    assert!(matches!(err, reviewer_server::Error::NotFound));
+}
+
+#[tokio::test]
+async fn claimed_run_project_exposes_person_scope() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_app_state_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    insert_projects(&pool, &temp).await;
+    let person_id = insert_person(&pool, "Alice Chen").await;
+
+    runs::create_manual_person_run(&pool, "alpha", person_id)
+        .await
+        .expect("create manual person run");
+
+    let job = runs::fetch_next_queued_run_project(&pool)
+        .await
+        .expect("claim")
+        .expect("one job");
+    assert_eq!(job.name, "alpha");
+    assert_eq!(job.person_id, Some(person_id));
+    assert_eq!(job.trigger, "manual_person");
+}
+
+#[tokio::test]
+async fn manual_person_missing_project_name_returns_400() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_app_state_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    insert_projects(&pool, &temp).await;
+    let person_id = insert_person(&pool, "Alice Chen").await;
+
+    let app = build_app().await.expect("build app");
+    let body = format!(r#"{{"trigger":"manual_person","person_id":{person_id}}}"#);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/runs")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE trigger = 'manual_person'")
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert_eq!(count, 0, "no run created on 400");
+}
+
+#[tokio::test]
+async fn manual_person_missing_person_id_returns_400() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_app_state_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    insert_projects(&pool, &temp).await;
+
+    let app = build_app().await.expect("build app");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/runs")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"trigger":"manual_person","project_name":"alpha"}"#))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE trigger = 'manual_person'")
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert_eq!(count, 0, "no run created on 400");
+}
+
+#[tokio::test]
+async fn manual_person_happy_path_returns_201() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    setup_app_state_env(&temp).await;
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    insert_projects(&pool, &temp).await;
+    let person_id = insert_person(&pool, "Alice Chen").await;
+
+    let app = build_app().await.expect("build app");
+    let body = format!(
+        r#"{{"trigger":"manual_person","project_name":"alpha","person_id":{person_id}}}"#
+    );
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/runs")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let bytes = response.into_body().collect().await.expect("body").to_bytes();
+    let json: Value = serde_json::from_slice(&bytes).expect("json");
+    assert!(json["run_id"].as_i64().is_some(), "run_id in response");
+
+    let scoped: Option<i64> = sqlx::query_scalar(
+        "SELECT rp.person_id FROM run_projects rp
+         INNER JOIN runs r ON r.id = rp.run_id
+         WHERE r.trigger = 'manual_person'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("scoped person");
+    assert_eq!(scoped, Some(person_id));
 }

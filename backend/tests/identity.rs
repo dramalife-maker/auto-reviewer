@@ -5,11 +5,13 @@ use axum::body::Body;
 use http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use reviewer_server::build_app;
+use reviewer_server::config::ReviewerAgent;
 use reviewer_server::db::init_pool;
 use reviewer_server::identity::{
     self, bind_identity, create_person, list_unmatched_authors, normalize_git_email,
     prepare_manifest_authors, resolve_person_by_email, KIND_GIT_EMAIL,
 };
+use reviewer_server::mr_reviews::ingest_mr_draft;
 use reviewer_server::runs::{write_weekly_manifest, ProjectRow};
 use reviewer_server::summary::ingest_project_summaries;
 use serde_json::Value;
@@ -135,7 +137,7 @@ async fn weekly_manifest_includes_resolved_authors() {
         repo_path: repo.display().to_string(),
     };
     let manifest_path =
-        write_weekly_manifest(&pool, temp.path(), 42, &project, &project.repo_path)
+        write_weekly_manifest(&pool, temp.path(), 42, &project, &project.repo_path, None)
             .await
             .expect("write manifest");
 
@@ -185,7 +187,7 @@ async fn manifest_includes_person_report_root() {
         repo_path: repo.display().to_string(),
     };
     let manifest_path =
-        write_weekly_manifest(&pool, temp.path(), 42, &project, &project.repo_path)
+        write_weekly_manifest(&pool, temp.path(), 42, &project, &project.repo_path, None)
             .await
             .expect("write manifest");
 
@@ -265,7 +267,7 @@ async fn weekly_manifest_includes_open_pending_items() {
         repo_path: repo.display().to_string(),
     };
     let manifest_path =
-        write_weekly_manifest(&pool, temp.path(), 42, &project, &project.repo_path)
+        write_weekly_manifest(&pool, temp.path(), 42, &project, &project.repo_path, None)
             .await
             .expect("write manifest");
 
@@ -278,6 +280,160 @@ async fn weekly_manifest_includes_open_pending_items() {
     assert_eq!(open_pending[0]["person_id"], person_id);
     assert_eq!(open_pending[0]["display_name"], "Alice Chen");
     assert_eq!(open_pending[0]["question"], "Why choose A?");
+}
+
+#[tokio::test]
+async fn weekly_manifest_person_scope_filters_all_blocks() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::env::set_var("DATA_ROOT_DIR", temp.path());
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let repo = temp.path().join("repo");
+    init_repo_with_commits(
+        &repo,
+        &[
+            ("alice@co.com", "Alice", "alice work"),
+            ("bob@co.com", "Bob", "bob work"),
+        ],
+    );
+
+    sqlx::query(
+        "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('alpha', ?, 1)",
+    )
+    .bind(repo.display().to_string())
+    .execute(&pool)
+    .await
+    .expect("insert project");
+    let project_id: i64 = sqlx::query_scalar("SELECT id FROM projects WHERE name = 'alpha'")
+        .fetch_one(&pool)
+        .await
+        .expect("project id");
+
+    let alice_id = create_person(&pool, "Alice Chen")
+        .await
+        .expect("create alice");
+    bind_identity(&pool, alice_id, KIND_GIT_EMAIL, "alice@co.com", None)
+        .await
+        .expect("bind alice");
+    let bob_id = create_person(&pool, "Bob")
+        .await
+        .expect("create bob");
+    bind_identity(&pool, bob_id, KIND_GIT_EMAIL, "bob@co.com", None)
+        .await
+        .expect("bind bob");
+
+    sqlx::query(
+        "INSERT INTO pending_items (person_id, project_id, question, status, raised_date)
+         VALUES (?, ?, 'Alice q?', 'open', '2026-07')",
+    )
+    .bind(alice_id)
+    .bind(project_id)
+    .execute(&pool)
+    .await
+    .expect("insert alice pending");
+    sqlx::query(
+        "INSERT INTO pending_items (person_id, project_id, question, status, raised_date)
+         VALUES (?, ?, 'Bob q?', 'open', '2026-07')",
+    )
+    .bind(bob_id)
+    .bind(project_id)
+    .execute(&pool)
+    .await
+    .expect("insert bob pending");
+
+    let draft_dir = temp.path().join("drafts");
+    std::fs::create_dir_all(&draft_dir).expect("draft dir");
+
+    let alice_draft = draft_dir.join("mr-42.md");
+    std::fs::write(
+        &alice_draft,
+        "---\nmr_iid: 42\nmr_title: t\nreview_round: 1\nauthor_identity: alice@co.com\n---\nbody\n",
+    )
+    .expect("write alice draft");
+    ingest_mr_draft(
+        &pool,
+        project_id,
+        &alice_draft,
+        None,
+        ReviewerAgent::Cursor,
+        false,
+    )
+    .await
+    .expect("ingest alice draft");
+    sqlx::query("UPDATE mr_reviews SET person_id = ?, status = 'published' WHERE mr_iid = 42")
+        .bind(alice_id)
+        .execute(&pool)
+        .await
+        .expect("publish alice mr");
+    let alice_snippet_dir = temp
+        .path()
+        .join("reports/alpha/Alice Chen/_pending");
+    std::fs::create_dir_all(&alice_snippet_dir).expect("alice snippet dir");
+    std::fs::write(alice_snippet_dir.join("mr-42-round-1.md"), "obs\n").expect("alice snippet");
+
+    let bob_draft = draft_dir.join("mr-43.md");
+    std::fs::write(
+        &bob_draft,
+        "---\nmr_iid: 43\nmr_title: t\nreview_round: 1\nauthor_identity: bob@co.com\n---\nbody\n",
+    )
+    .expect("write bob draft");
+    ingest_mr_draft(
+        &pool,
+        project_id,
+        &bob_draft,
+        None,
+        ReviewerAgent::Cursor,
+        false,
+    )
+    .await
+    .expect("ingest bob draft");
+    sqlx::query("UPDATE mr_reviews SET person_id = ?, status = 'published' WHERE mr_iid = 43")
+        .bind(bob_id)
+        .execute(&pool)
+        .await
+        .expect("publish bob mr");
+    let bob_snippet_dir = temp.path().join("reports/alpha/Bob/_pending");
+    std::fs::create_dir_all(&bob_snippet_dir).expect("bob snippet dir");
+    std::fs::write(bob_snippet_dir.join("mr-43-round-1.md"), "obs\n").expect("bob snippet");
+
+    let project = ProjectRow {
+        id: project_id,
+        name: "alpha".into(),
+        repo_path: repo.display().to_string(),
+    };
+    let manifest_path = write_weekly_manifest(
+        &pool,
+        temp.path(),
+        42,
+        &project,
+        &project.repo_path,
+        Some(alice_id),
+    )
+    .await
+    .expect("write manifest");
+
+    let json: Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).expect("read manifest"))
+            .expect("parse manifest");
+
+    let authors = json["authors"].as_array().expect("authors array");
+    assert_eq!(authors.len(), 1);
+    assert_eq!(authors[0]["person_id"], alice_id);
+    assert_eq!(authors[0]["display_name"], "Alice Chen");
+
+    let open_pending = json["open_pending"].as_array().expect("open_pending array");
+    assert_eq!(open_pending.len(), 1);
+    assert_eq!(open_pending[0]["person_id"], alice_id);
+    assert_eq!(open_pending[0]["question"], "Alice q?");
+
+    let snippets = json["published_pending_snippets"]
+        .as_array()
+        .expect("snippets array");
+    assert_eq!(snippets.len(), 1);
+    assert_eq!(
+        snippets[0].as_str().expect("snippet path"),
+        "Alice Chen/_pending/mr-42-round-1.md"
+    );
 }
 
 #[tokio::test]

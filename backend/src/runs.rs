@@ -54,6 +54,9 @@ pub struct RunProjectRow {
     pub repo_path: String,
     pub trigger: String,
     pub mr_scan_force: i64,
+    /// NULL = process all resolved authors (batch semantics). Non-NULL = scope
+    /// the weekly manifest to this single person (manual_person runs).
+    pub person_id: Option<i64>,
 }
 
 pub fn parse_mr_scan_force(value: Option<&str>) -> bool {
@@ -135,6 +138,62 @@ pub async fn create_manual_project_run(
     )
     .bind(run_id)
     .bind(project.id)
+    .execute(&mut *tx)
+    .await
+    .map_err(crate::Error::Database)?;
+
+    tx.commit().await.map_err(crate::Error::Database)?;
+    Ok(run_id)
+}
+
+/// Enqueue a single project scoped to one person. Validates existence only
+/// (project by name, person by id); whether the person has any activity in the
+/// window is left to the worker — an empty window yields a no-op run, not an
+/// error. Uses the same whole-system concurrency gate as the batch runs.
+pub async fn create_manual_person_run(
+    pool: &sqlx::SqlitePool,
+    project_name: &str,
+    person_id: i64,
+) -> crate::Result<i64> {
+    if has_active_run_projects(pool).await? {
+        return Err(crate::Error::RunConflict);
+    }
+
+    let project = sqlx::query_as::<_, ProjectRow>(
+        "SELECT id, name, repo_path FROM projects WHERE name = ?",
+    )
+    .bind(project_name)
+    .fetch_optional(pool)
+    .await
+    .map_err(crate::Error::Database)?
+    .ok_or(crate::Error::NotFound)?;
+
+    let person_exists: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM people WHERE id = ?")
+            .bind(person_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(crate::Error::Database)?;
+    if person_exists.is_none() {
+        return Err(crate::Error::NotFound);
+    }
+
+    let mut tx = pool.begin().await.map_err(crate::Error::Database)?;
+
+    let result = sqlx::query(
+        "INSERT INTO runs (trigger, status, project_total) VALUES ('manual_person', 'running', 1)",
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(crate::Error::Database)?;
+    let run_id = result.last_insert_rowid();
+
+    sqlx::query(
+        "INSERT INTO run_projects (run_id, project_id, person_id, state) VALUES (?, ?, ?, 'queued')",
+    )
+    .bind(run_id)
+    .bind(project.id)
+    .bind(person_id)
     .execute(&mut *tx)
     .await
     .map_err(crate::Error::Database)?;
@@ -347,7 +406,7 @@ pub async fn fetch_next_queued_run_project(
         // RETURNING cannot yield the joined columns, so read them back. The row
         // is already claimed, so no other claimer can touch it.
         let row = sqlx::query_as::<_, RunProjectRow>(
-            "SELECT rp.id, rp.run_id, rp.project_id, p.name, p.repo_path, r.trigger, r.mr_scan_force
+            "SELECT rp.id, rp.run_id, rp.project_id, p.name, p.repo_path, r.trigger, r.mr_scan_force, rp.person_id
              FROM run_projects rp
              INNER JOIN projects p ON p.id = rp.project_id
              INNER JOIN runs r ON r.id = rp.run_id
@@ -926,12 +985,37 @@ fn path_display_normalized(path: &Path) -> String {
     path.display().to_string().replace('\\', "/")
 }
 
+/// Filter the three person-bearing manifest blocks down to a single person.
+/// `authors` and `open_pending` match by `person_id`; snippet paths match by
+/// leading path segment equal to `display_name` (snippet paths are produced as
+/// `{person_folder}/_pending/...`). Pure so the scope contract is unit-testable
+/// without git or a live manifest write.
+fn retain_person_scope(
+    authors: &mut Vec<ManifestAuthor>,
+    open_pending: &mut Vec<ManifestOpenPending>,
+    published_pending_snippets: &mut Vec<String>,
+    person_id: i64,
+    display_name: &str,
+) {
+    authors.retain(|a| a.person_id == person_id);
+    open_pending.retain(|p| p.person_id == person_id);
+    published_pending_snippets.retain(|snippet| {
+        snippet
+            .replace('\\', "/")
+            .split('/')
+            .next()
+            .map(|segment| segment == display_name)
+            .unwrap_or(false)
+    });
+}
+
 pub async fn write_weekly_manifest(
     pool: &sqlx::SqlitePool,
     data_root: &Path,
     run_id: i64,
     project: &ProjectRow,
     repo_path: &str,
+    person_id: Option<i64>,
 ) -> crate::Result<PathBuf> {
     let path = manifest_path(data_root, run_id, project.id);
     if let Some(parent) = path.parent() {
@@ -967,6 +1051,25 @@ pub async fn write_weekly_manifest(
     )
     .await?;
     let open_pending = load_open_pending_for_project(pool, project.id).await?;
+
+    let (mut authors, mut open_pending, mut published_pending_snippets) =
+        (authors, open_pending, published_pending_snippets);
+    if let Some(pid) = person_id {
+        let display_name: String =
+            sqlx::query_scalar("SELECT display_name FROM people WHERE id = ?")
+                .bind(pid)
+                .fetch_optional(pool)
+                .await
+                .map_err(crate::Error::Database)?
+                .unwrap_or_default();
+        retain_person_scope(
+            &mut authors,
+            &mut open_pending,
+            &mut published_pending_snippets,
+            pid,
+            &display_name,
+        );
+    }
 
     let manifest = RunManifest {
         mode: "weekly_batch",
@@ -1441,5 +1544,58 @@ mod tests {
             .expect("list");
         assert_eq!(people.len(), 1, "one person must not repeat per report_date");
         assert_eq!(people[0].person_id, person_id);
+    }
+
+    fn author(person_id: i64, display_name: &str) -> ManifestAuthor {
+        ManifestAuthor {
+            email: format!("{display_name}@example.com"),
+            git_name: display_name.to_string(),
+            person_id,
+            display_name: display_name.to_string(),
+        }
+    }
+
+    fn open_pending(id: i64, person_id: i64, display_name: &str) -> ManifestOpenPending {
+        ManifestOpenPending {
+            id,
+            person_id,
+            display_name: display_name.to_string(),
+            question: format!("q{id}"),
+        }
+    }
+
+    #[test]
+    fn retain_person_scope_keeps_only_target_person() {
+        let mut authors = vec![author(1, "Alice Chen"), author(2, "Bob")];
+        let mut open = vec![
+            open_pending(10, 1, "Alice Chen"),
+            open_pending(11, 2, "Bob"),
+        ];
+        let mut snippets = vec![
+            "Alice Chen/_pending/mr-1-round-1.md".to_string(),
+            "Bob/_pending/mr-2-round-1.md".to_string(),
+        ];
+
+        retain_person_scope(&mut authors, &mut open, &mut snippets, 1, "Alice Chen");
+
+        assert_eq!(authors.len(), 1);
+        assert_eq!(authors[0].person_id, 1);
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].person_id, 1);
+        assert_eq!(snippets, vec!["Alice Chen/_pending/mr-1-round-1.md".to_string()]);
+    }
+
+    #[test]
+    fn retain_person_scope_no_match_yields_empty() {
+        let mut authors = vec![author(1, "Alice Chen"), author(2, "Bob")];
+        let mut open = vec![open_pending(10, 1, "Alice Chen")];
+        let mut snippets = vec!["Alice Chen/_pending/mr-1-round-1.md".to_string()];
+
+        // person 3 has no window activity: every block filters to empty, no panic.
+        retain_person_scope(&mut authors, &mut open, &mut snippets, 3, "Carol");
+
+        assert!(authors.is_empty());
+        assert!(open.is_empty());
+        assert!(snippets.is_empty());
     }
 }

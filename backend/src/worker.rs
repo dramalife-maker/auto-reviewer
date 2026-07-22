@@ -298,6 +298,7 @@ pub async fn process_run_project(
         &working_dir,
         timeout_sec,
         cancel.clone(),
+        job.person_id,
     )
     .await
     {

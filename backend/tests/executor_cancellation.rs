@@ -70,6 +70,7 @@ async fn execute_weekly_batch_fails_on_cancel_not_timeout() {
         &working_dir,
         30,
         token,
+        None,
     )
     .await
     .expect("execute weekly batch");
@@ -212,7 +213,7 @@ async fn execute_weekly_batch_still_reports_timeout_when_cancel_not_fired() {
     let token = CancellationToken::new();
 
     let (outcome, _duration_sec, error) =
-        execute_weekly_batch(&pool, &config, run_id, &project, &working_dir, 1, token)
+        execute_weekly_batch(&pool, &config, run_id, &project, &working_dir, 1, token, None)
             .await
             .expect("execute weekly batch");
 
