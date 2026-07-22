@@ -934,58 +934,77 @@ pub fn pending_snippet_relative_path(
     format!("{person_folder}/_pending/mr-{mr_iid}-round-{review_round}.md")
 }
 
-/// Paths (relative to `report_root`) for published MR observation snippets the weekly
-/// batch may fold into `summary.md`. When multiple rounds are published for one MR,
-/// only the latest round is included. Snippets already consumed (file deleted from
-/// `_pending/`) are omitted so they are not re-listed every week.
+/// Parse a `_pending` observation snippet filename. Strict by design: only
+/// `mr-<digits>-round-<digits>.md` matches (no slug, no other shapes), so stray
+/// files never fold into the weekly report.
+fn parse_pending_snippet_name(name: &str) -> Option<(i64, i64)> {
+    let stem = name.strip_suffix(".md")?;
+    let rest = stem.strip_prefix("mr-")?;
+    let (iid, round) = rest.split_once("-round-")?;
+    Some((iid.parse().ok()?, round.parse().ok()?))
+}
+
+/// Paths (relative to `report_root`) for published MR observation snippets the
+/// weekly batch may fold into `summary.md`.
+///
+/// Disk-first: the on-disk `_pending/` layout is the source of truth for which
+/// snippets are unconsumed (a consumed snippet is a deleted file), while the DB
+/// only decides which `(mr_iid, review_round)` pairs are `published`. Every
+/// published snippet file still present is listed — including several rounds of
+/// the same MR — so nothing is orphaned. `draft`/`ignored` snippets on disk are
+/// gated out because their round is not in the published set.
 pub async fn load_published_pending_snippets(
     pool: &SqlitePool,
     project_id: i64,
     report_root: &Path,
 ) -> Result<Vec<String>, Error> {
-    #[derive(sqlx::FromRow)]
-    struct Row {
-        mr_iid: i64,
-        review_round: i64,
-        person_folder: Option<String>,
-    }
+    let published: std::collections::HashSet<(i64, i64)> =
+        sqlx::query_as::<_, (i64, i64)>(
+            "SELECT mr_iid, review_round FROM mr_reviews
+             WHERE project_id = ? AND status = 'published'",
+        )
+        .bind(project_id)
+        .fetch_all(pool)
+        .await
+        .map_err(Error::Database)?
+        .into_iter()
+        .collect();
 
-    let rows = sqlx::query_as::<_, Row>(
-        "SELECT mr.mr_iid, mr.review_round, p.display_name AS person_folder
-         FROM mr_reviews mr
-         LEFT JOIN people p ON p.id = mr.person_id
-         WHERE mr.project_id = ? AND mr.status = 'published'
-         ORDER BY mr.mr_iid ASC, mr.review_round DESC",
-    )
-    .bind(project_id)
-    .fetch_all(pool)
-    .await
-    .map_err(Error::Database)?;
+    // Missing report_root (nothing produced yet) is not an error.
+    let Ok(entries) = std::fs::read_dir(report_root) else {
+        return Ok(Vec::new());
+    };
 
-    let mut snippets = Vec::new();
-    let mut seen_mr = std::collections::HashSet::new();
-    for row in rows {
-        if !seen_mr.insert(row.mr_iid) {
+    let mut found: Vec<(String, i64, i64)> = Vec::new();
+    for entry in entries.flatten() {
+        let person_folder = entry.file_name().to_string_lossy().into_owned();
+        // Person folders are display names; skip dotfiles like the project `.notes`.
+        if person_folder.starts_with('.') || !entry.path().is_dir() {
             continue;
         }
-        let Some(person_folder) = row.person_folder else {
-            warn!(
-                mr_iid = row.mr_iid,
-                "skipping published snippet without resolved person folder"
-            );
+        let pending_dir = entry.path().join("_pending");
+        let Ok(files) = std::fs::read_dir(&pending_dir) else {
             continue;
         };
-        let relative = pending_snippet_relative_path(
-            &person_folder,
-            row.mr_iid,
-            row.review_round,
-        );
-        if !report_root.join(&relative).is_file() {
-            continue;
+        for file in files.flatten() {
+            if !file.path().is_file() {
+                continue;
+            }
+            let name = file.file_name().to_string_lossy().into_owned();
+            let Some((mr_iid, round)) = parse_pending_snippet_name(&name) else {
+                continue;
+            };
+            if published.contains(&(mr_iid, round)) {
+                found.push((person_folder.clone(), mr_iid, round));
+            }
         }
-        snippets.push(relative);
     }
-    Ok(snippets)
+
+    found.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    Ok(found
+        .into_iter()
+        .map(|(person, mr_iid, round)| pending_snippet_relative_path(&person, mr_iid, round))
+        .collect())
 }
 
 async fn glab_mr_note(cwd: &Path, mr_iid: i64, message: &str) -> Result<(), Error> {
@@ -1095,6 +1114,18 @@ Body text
             pending_snippet_relative_path("Alice Chen", 42, 1),
             "Alice Chen/_pending/mr-42-round-1.md"
         );
+    }
+
+    #[test]
+    fn parse_pending_snippet_name_is_strict() {
+        assert_eq!(parse_pending_snippet_name("mr-6-round-3.md"), Some((6, 3)));
+        assert_eq!(parse_pending_snippet_name("mr-42-round-1.md"), Some((42, 1)));
+        // Rejected: slug, non-numeric, wrong shape, wrong extension.
+        assert_eq!(parse_pending_snippet_name("mr-6-round-3-slug.md"), None);
+        assert_eq!(parse_pending_snippet_name("mr-abc-round-1.md"), None);
+        assert_eq!(parse_pending_snippet_name("notes.md"), None);
+        assert_eq!(parse_pending_snippet_name("mr-6-round-3.txt"), None);
+        assert_eq!(parse_pending_snippet_name("mr-6.md"), None);
     }
 
     #[tokio::test]

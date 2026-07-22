@@ -630,6 +630,164 @@ async fn published_pending_snippets_only_include_published_reviews() {
     assert!(after.is_empty());
 }
 
+async fn seed_project_and_person(
+    pool: &sqlx::SqlitePool,
+    repo_root: &std::path::Path,
+    display_name: &str,
+) -> (i64, i64) {
+    sqlx::query("INSERT INTO people (display_name) VALUES (?)")
+        .bind(display_name)
+        .execute(pool)
+        .await
+        .expect("insert person");
+    let person_id: i64 = sqlx::query_scalar("SELECT id FROM people WHERE display_name = ?")
+        .bind(display_name)
+        .fetch_one(pool)
+        .await
+        .expect("person id");
+    sqlx::query("INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('alpha', ?, 1)")
+        .bind(repo_root.join("repos/alpha").display().to_string())
+        .execute(pool)
+        .await
+        .expect("insert project");
+    let project_id: i64 = sqlx::query_scalar("SELECT id FROM projects WHERE name = 'alpha'")
+        .fetch_one(pool)
+        .await
+        .expect("project id");
+    (project_id, person_id)
+}
+
+async fn seed_review(
+    pool: &sqlx::SqlitePool,
+    project_id: i64,
+    person_id: i64,
+    mr_iid: i64,
+    round: i64,
+    status: &str,
+) {
+    sqlx::query(
+        "INSERT INTO mr_reviews
+           (project_id, person_id, mr_iid, mr_title, review_round, draft_md_path, status, reviewer_agent, created_at, updated_at)
+         VALUES (?, ?, ?, 't', ?, 'd.md', ?, 'cursor', datetime('now'), datetime('now'))",
+    )
+    .bind(project_id)
+    .bind(person_id)
+    .bind(mr_iid)
+    .bind(round)
+    .bind(status)
+    .execute(pool)
+    .await
+    .expect("seed review");
+}
+
+fn write_snippet(report_root: &std::path::Path, person_folder: &str, mr_iid: i64, round: i64) {
+    let dir = report_root.join(person_folder).join("_pending");
+    std::fs::create_dir_all(&dir).expect("pending dir");
+    std::fs::write(dir.join(format!("mr-{mr_iid}-round-{round}.md")), "obs\n").expect("snippet");
+}
+
+#[tokio::test]
+async fn pending_snippets_lists_all_published_rounds_of_one_mr() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let (project_id, person_id) = seed_project_and_person(&pool, temp.path(), "Gary").await;
+    let report_root = temp.path().join("reports/alpha");
+
+    for round in [1, 2, 3] {
+        seed_review(&pool, project_id, person_id, 6, round, "published").await;
+        write_snippet(&report_root, "Gary", 6, round);
+    }
+
+    let snippets = mr_reviews::load_published_pending_snippets(&pool, project_id, &report_root)
+        .await
+        .expect("snippets");
+    assert_eq!(
+        snippets,
+        vec![
+            "Gary/_pending/mr-6-round-1.md".to_string(),
+            "Gary/_pending/mr-6-round-2.md".to_string(),
+            "Gary/_pending/mr-6-round-3.md".to_string(),
+        ],
+    );
+}
+
+#[tokio::test]
+async fn pending_snippets_lists_earlier_round_when_latest_round_file_absent() {
+    // The exact bug: latest published round (2) has no file on disk, but the
+    // earlier round-1 snippet is present and unconsumed. It must still be listed.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let (project_id, person_id) = seed_project_and_person(&pool, temp.path(), "Gary").await;
+    let report_root = temp.path().join("reports/alpha");
+
+    seed_review(&pool, project_id, person_id, 5, 1, "published").await;
+    seed_review(&pool, project_id, person_id, 5, 2, "published").await;
+    write_snippet(&report_root, "Gary", 5, 1); // round-2 file intentionally absent
+
+    let snippets = mr_reviews::load_published_pending_snippets(&pool, project_id, &report_root)
+        .await
+        .expect("snippets");
+    assert_eq!(snippets, vec!["Gary/_pending/mr-5-round-1.md".to_string()]);
+}
+
+#[tokio::test]
+async fn pending_snippets_exclude_on_disk_file_whose_round_is_not_published() {
+    // A snippet for an ignored/draft round sitting in _pending must not fold.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let (project_id, person_id) = seed_project_and_person(&pool, temp.path(), "Gary").await;
+    let report_root = temp.path().join("reports/alpha");
+
+    seed_review(&pool, project_id, person_id, 74, 1, "ignored").await;
+    seed_review(&pool, project_id, person_id, 75, 1, "published").await;
+    write_snippet(&report_root, "Gary", 74, 1);
+    write_snippet(&report_root, "Gary", 75, 1);
+
+    let snippets = mr_reviews::load_published_pending_snippets(&pool, project_id, &report_root)
+        .await
+        .expect("snippets");
+    assert_eq!(snippets, vec!["Gary/_pending/mr-75-round-1.md".to_string()]);
+}
+
+#[tokio::test]
+async fn pending_snippets_span_multiple_person_folders_and_skip_noise() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pool = init_pool(temp.path()).await.expect("init pool");
+    let (project_id, alice) = seed_project_and_person(&pool, temp.path(), "Alice Chen").await;
+    sqlx::query("INSERT INTO people (display_name) VALUES ('Gary')")
+        .execute(&pool)
+        .await
+        .expect("insert bob");
+    let gary: i64 = sqlx::query_scalar("SELECT id FROM people WHERE display_name = 'Gary'")
+        .fetch_one(&pool)
+        .await
+        .expect("gary id");
+    let report_root = temp.path().join("reports/alpha");
+
+    seed_review(&pool, project_id, alice, 10, 1, "published").await;
+    seed_review(&pool, project_id, gary, 20, 1, "published").await;
+    write_snippet(&report_root, "Alice Chen", 10, 1);
+    write_snippet(&report_root, "Gary", 20, 1);
+
+    // Noise that must be skipped even though its round is published: a
+    // project-level .notes dir (not a person), a non-matching file, a slugged name.
+    seed_review(&pool, project_id, gary, 99, 1, "published").await;
+    write_snippet(&report_root, ".notes", 99, 1);
+    std::fs::write(report_root.join("Gary/_pending/notes.md"), "x").expect("stray");
+    std::fs::write(report_root.join("Gary/_pending/mr-20-round-1-slug.md"), "x").expect("slug");
+
+    let snippets = mr_reviews::load_published_pending_snippets(&pool, project_id, &report_root)
+        .await
+        .expect("snippets");
+    assert_eq!(
+        snippets,
+        vec![
+            "Alice Chen/_pending/mr-10-round-1.md".to_string(),
+            "Gary/_pending/mr-20-round-1.md".to_string(),
+        ],
+    );
+}
+
 #[tokio::test]
 async fn weekly_manifest_lists_published_pending_snippets() {
     let temp = tempfile::tempdir().expect("tempdir");

@@ -74,7 +74,7 @@
 
 對每位 `{person}`：
 
-1. 從 `published_pending_snippets` 篩出以 `{person}/_pending/` 開頭的 `.md` 路徑（相對於 `report_root`）。
+1. 從 `published_pending_snippets` 篩出以 `{person}/_pending/` 開頭的 `.md` 路徑（相對於 `report_root`）。同一 MR 可能列出多輪片段（`mr-{iid}-round-1/2/3`）——視為該 MR 的觀察迭代，合併成**一組**思維模式，並將列出的各輪全部消費刪除。
 2. Read 這些片段。依區塊消費（**改寫濃縮，禁止整段貼上**）：
 
 | 觀察片段區塊 | 週報去向 |
