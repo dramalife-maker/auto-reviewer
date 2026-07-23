@@ -73,14 +73,16 @@ pub async fn latest_reports_for_person(
     data_root: &Path,
     person_id: i64,
 ) -> Result<Option<LatestReportsResponse>, Error> {
-    let display_name: Option<String> =
-        sqlx::query_scalar("SELECT display_name FROM people WHERE id = ?")
+    // folder_name is the immutable on-disk path key for this person's report
+    // directories; used for all filesystem lookups below.
+    let folder_name: Option<String> =
+        sqlx::query_scalar("SELECT folder_name FROM people WHERE id = ?")
             .bind(person_id)
             .fetch_optional(pool)
             .await
             .map_err(Error::Database)?;
 
-    let Some(display_name) = display_name else {
+    let Some(folder_name) = folder_name else {
         return Ok(None);
     };
 
@@ -156,7 +158,7 @@ pub async fn latest_reports_for_person(
                 data_root,
                 row.project_id,
                 &row.project_name,
-                &display_name,
+                &folder_name,
             )
             .await?;
 
@@ -185,7 +187,7 @@ pub async fn latest_reports_for_person(
         }
     }
     for (project_id, project_name) in
-        discover_pending_observation_projects(pool, data_root, &display_name).await?
+        discover_pending_observation_projects(pool, data_root, &folder_name).await?
     {
         if covered_project_ids.contains(&project_id) {
             continue;
@@ -204,7 +206,7 @@ pub async fn latest_reports_for_person(
             data_root,
             project_id,
             &project_name,
-            &display_name,
+            &folder_name,
         )
         .await?;
         if pending_items.is_empty() && pending_observations.is_empty() {
@@ -236,7 +238,7 @@ pub async fn latest_reports_for_person(
 async fn discover_pending_observation_projects(
     pool: &SqlitePool,
     data_root: &Path,
-    person_display_name: &str,
+    folder_name: &str,
 ) -> Result<Vec<(i64, String)>, Error> {
     let reports_root = data_root.join("reports");
     let Ok(entries) = std::fs::read_dir(&reports_root) else {
@@ -258,7 +260,7 @@ async fn discover_pending_observation_projects(
         if crate::person_trends::is_person_level_report_name(project_name) {
             continue;
         }
-        let pending = pending_dir(data_root, project_name, person_display_name);
+        let pending = pending_dir(data_root, project_name, folder_name);
         if !pending_dir_has_parseable_snippet(&pending) {
             continue;
         }
@@ -321,9 +323,9 @@ async fn load_pending_observations_for_project(
     data_root: &Path,
     project_id: i64,
     project_name: &str,
-    person_display_name: &str,
+    folder_name: &str,
 ) -> Result<Vec<PendingObservation>, Error> {
-    let pending_dir = pending_dir(data_root, project_name, person_display_name);
+    let pending_dir = pending_dir(data_root, project_name, folder_name);
     let Ok(entries) = std::fs::read_dir(&pending_dir) else {
         return Ok(Vec::new());
     };
@@ -402,11 +404,11 @@ async fn load_pending_observations_for_project(
     Ok(observations)
 }
 
-fn pending_dir(data_root: &Path, project_name: &str, person_display_name: &str) -> PathBuf {
+fn pending_dir(data_root: &Path, project_name: &str, folder_name: &str) -> PathBuf {
     data_root
         .join("reports")
         .join(project_name)
-        .join(person_display_name)
+        .join(folder_name)
         .join("_pending")
 }
 

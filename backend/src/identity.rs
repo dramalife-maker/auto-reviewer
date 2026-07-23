@@ -15,12 +15,16 @@ pub struct ManifestAuthor {
     pub email: String,
     pub git_name: String,
     pub person_id: i64,
+    /// Immutable on-disk directory segment and summary `person` key.
+    pub folder_name: String,
+    /// Current human-readable label; for report prose only, never a path.
     pub display_name: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct ResolvedPerson {
     pub person_id: i64,
+    pub folder_name: String,
     pub display_name: String,
 }
 
@@ -60,8 +64,8 @@ pub async fn resolve_person_by_email(
     email: &str,
 ) -> Result<Option<ResolvedPerson>, Error> {
     let normalized = normalize_git_email(email);
-    let row = sqlx::query_as::<_, (i64, String)>(
-        "SELECT p.id, p.display_name
+    let row = sqlx::query_as::<_, (i64, String, String)>(
+        "SELECT p.id, p.folder_name, p.display_name
          FROM person_identities pi
          INNER JOIN people p ON p.id = pi.person_id
          WHERE pi.kind = ? AND pi.value = ?",
@@ -72,8 +76,9 @@ pub async fn resolve_person_by_email(
     .await
     .map_err(Error::Database)?;
 
-    Ok(row.map(|(person_id, display_name)| ResolvedPerson {
+    Ok(row.map(|(person_id, folder_name, display_name)| ResolvedPerson {
         person_id,
+        folder_name,
         display_name,
     }))
 }
@@ -129,6 +134,7 @@ pub async fn prepare_manifest_authors(
                         email: normalized_email,
                         git_name: author.git_name,
                         person_id: resolved.person_id,
+                        folder_name: resolved.folder_name,
                         display_name: resolved.display_name,
                     });
             }
@@ -239,7 +245,10 @@ pub async fn create_person(pool: &SqlitePool, display_name: &str) -> Result<i64,
         return Err(Error::DuplicateDisplayName);
     }
 
-    let result = sqlx::query("INSERT INTO people (display_name) VALUES (?)")
+    // folder_name is the immutable path key; set once at creation to the
+    // initial display_name and never changed by any later API.
+    let result = sqlx::query("INSERT INTO people (display_name, folder_name) VALUES (?, ?)")
+        .bind(display_name)
         .bind(display_name)
         .execute(pool)
         .await
@@ -374,7 +383,7 @@ pub async fn get_person_detail(pool: &SqlitePool, person_id: i64) -> Result<Pers
 
 pub async fn rename_person(
     pool: &SqlitePool,
-    data_root: &Path,
+    _data_root: &Path,
     person_id: i64,
     new_display_name: &str,
 ) -> Result<PersonDetail, Error> {
@@ -409,13 +418,9 @@ pub async fn rename_person(
         return Err(Error::DuplicateDisplayName);
     }
 
-    let old_dir = crate::person_trends::person_trends_dir(data_root, &old_display_name);
-    let new_dir = crate::person_trends::person_trends_dir(data_root, new_display_name);
-
-    if new_dir.exists() {
-        return Err(Error::PeopleDirectoryConflict);
-    }
-
+    // Report paths are keyed by the immutable `folder_name`, so a rename only
+    // updates the human-readable label. No directory is moved and no stored
+    // `reports` path is rewritten — every existing path stays valid.
     sqlx::query(
         "UPDATE people SET display_name = ?, updated_at = datetime('now') WHERE id = ?",
     )
@@ -424,19 +429,6 @@ pub async fn rename_person(
     .execute(pool)
     .await
     .map_err(Error::Database)?;
-
-    if old_dir.exists() {
-        if let Err(err) = std::fs::rename(&old_dir, &new_dir) {
-            let _ = sqlx::query(
-                "UPDATE people SET display_name = ?, updated_at = datetime('now') WHERE id = ?",
-            )
-            .bind(&old_display_name)
-            .bind(person_id)
-            .execute(pool)
-            .await;
-            return Err(Error::Io(err));
-        }
-    }
 
     get_person_detail(pool, person_id).await
 }
@@ -481,12 +473,12 @@ fn normalize_identity_value(kind: &str, value: &str) -> Result<String, Error> {
     Ok(trimmed.to_string())
 }
 
-pub async fn resolve_person_id_by_display_name(
+pub async fn resolve_person_id_by_folder_name(
     pool: &SqlitePool,
-    display_name: &str,
+    folder_name: &str,
 ) -> Result<Option<i64>, Error> {
-    sqlx::query_scalar("SELECT id FROM people WHERE display_name = ?")
-        .bind(display_name)
+    sqlx::query_scalar("SELECT id FROM people WHERE folder_name = ?")
+        .bind(folder_name)
         .fetch_optional(pool)
         .await
         .map_err(Error::Database)

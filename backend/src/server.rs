@@ -15,6 +15,7 @@ use crate::person_trends;
 use crate::projects;
 use crate::report_chat::{self, ReportChatAgentTurnResponse, ReportChatResponse};
 use crate::reports;
+use crate::review_settings::{self, ReviewSettings};
 use crate::runs;
 use crate::schedule::{self, ScheduleConfigResponse, ScheduleUpdateInput};
 use crate::state::AppState;
@@ -89,6 +90,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/dashboard", get(get_dashboard))
         .route("/api/schedule", get(get_schedule).patch(update_schedule))
         .route("/api/schedule/catch-up", post(catch_up_schedule))
+        .route(
+            "/api/review-settings",
+            get(get_review_settings).put(update_review_settings),
+        )
         .route("/api/people", get(list_people).post(create_person))
         .route("/api/people/{id}", get(get_person).patch(rename_person))
         .route("/api/people/{id}/reports/latest", get(latest_reports))
@@ -436,6 +441,27 @@ async fn update_schedule(
         .await
         .map_err(ApiError::from)?;
     Ok(Json(response))
+}
+
+async fn get_review_settings(
+    State(state): State<AppState>,
+) -> Result<Json<ReviewSettings>, ApiError> {
+    let settings = review_settings::load(&state.pool)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(settings))
+}
+
+/// Full replacement: the submitted list wholly replaces the stored one, and the
+/// response carries the normalized result that was actually stored.
+async fn update_review_settings(
+    State(state): State<AppState>,
+    Json(body): Json<ReviewSettings>,
+) -> Result<Json<ReviewSettings>, ApiError> {
+    let settings = review_settings::replace(&state.pool, &body.ignore_globs)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(settings))
 }
 
 async fn catch_up_schedule(
@@ -825,7 +851,6 @@ impl IntoResponse for ApiError {
         let status = match &self.0 {
             Error::RunConflict
             | Error::DuplicateDisplayName
-            | Error::PeopleDirectoryConflict
             | Error::DuplicateProjectName
             | Error::IdentityConflict
             | Error::MrReviewConflict
@@ -839,7 +864,8 @@ impl IntoResponse for ApiError {
             | Error::InvalidPendingItemStatus
             | Error::InvalidPendingItemListStatus
             | Error::InvalidRunsListQuery(_)
-            | Error::InvalidScheduleConfig(_) => StatusCode::BAD_REQUEST,
+            | Error::InvalidScheduleConfig(_)
+            | Error::InvalidReviewSettings(_) => StatusCode::BAD_REQUEST,
             Error::NotFound => StatusCode::NOT_FOUND,
             Error::AgentFailed(_) | Error::NotesSyncFailed(_) => StatusCode::BAD_GATEWAY,
             _ => StatusCode::INTERNAL_SERVER_ERROR,

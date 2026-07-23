@@ -20,8 +20,6 @@ pub enum Error {
     NotFound,
     #[error("person display_name already exists")]
     DuplicateDisplayName,
-    #[error("people directory already exists for the new display name")]
-    PeopleDirectoryConflict,
     #[error("identity is already bound to another person")]
     IdentityConflict,
     #[error("invalid person display_name")]
@@ -55,6 +53,8 @@ pub enum Error {
     InvalidRunsListQuery(String),
     #[error("invalid schedule configuration: {0}")]
     InvalidScheduleConfig(String),
+    #[error("invalid review settings: {0}")]
+    InvalidReviewSettings(String),
     #[error("failed to sync notes file: {0}")]
     NotesSyncFailed(String),
     #[error(transparent)]

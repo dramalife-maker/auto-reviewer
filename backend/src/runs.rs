@@ -922,6 +922,9 @@ pub async fn load_project_outputs(
 pub struct ManifestOpenPending {
     pub id: i64,
     pub person_id: i64,
+    /// Immutable on-disk directory segment and summary `person` key.
+    pub folder_name: String,
+    /// Current human-readable label; for report prose only, never a path.
     pub display_name: String,
     pub question: String,
 }
@@ -945,6 +948,10 @@ pub struct RunManifest<'a> {
     /// Populated from `mr_reviews` rows with `status='published'`; draft/ignored snippets stay out.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub published_pending_snippets: Vec<String>,
+    /// Global review ignore list. The weekly agent runs its own git commands,
+    /// so the workflow instructs it to append these as exclude pathspecs.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub ignore_globs: Vec<String>,
 }
 
 pub async fn load_open_pending_for_project(
@@ -952,7 +959,7 @@ pub async fn load_open_pending_for_project(
     project_id: i64,
 ) -> crate::Result<Vec<ManifestOpenPending>> {
     sqlx::query_as::<_, ManifestOpenPending>(
-        "SELECT pi.id, pi.person_id, p.display_name, pi.question
+        "SELECT pi.id, pi.person_id, p.folder_name, p.display_name, pi.question
          FROM pending_items pi
          INNER JOIN people p ON p.id = pi.person_id
          WHERE pi.project_id = ? AND pi.status = 'open'
@@ -1084,6 +1091,7 @@ pub async fn write_weekly_manifest(
         authors,
         open_pending,
         published_pending_snippets,
+        ignore_globs: crate::review_settings::load(pool).await?.ignore_globs,
     };
 
     let json = serde_json::to_string_pretty(&manifest).map_err(|err| {
@@ -1203,6 +1211,11 @@ pub struct MrPollManifest<'a> {
     pub change_stat_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub change_diff_path: Option<String>,
+    /// Global review ignore list. The precomputed diff already excludes these,
+    /// but the agent has its own shell — the workflow instructs it to append
+    /// the same exclusions to any git command it runs itself.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub ignore_globs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -1222,9 +1235,11 @@ pub async fn write_mr_poll_manifest(
     mr_iid: Option<i64>,
     prior_published_reviews: Vec<PriorPublishedReview>,
     change_materials: Option<&ManifestChangeMaterials>,
-    // MR author folder under reports/{project}/ (usually people.display_name).
-    // When set, pending_dir becomes reports/{project}/{person}/_pending.
+    // MR author folder under reports/{project}/ (people.folder_name, the
+    // immutable path key). When set, pending_dir becomes
+    // reports/{project}/{folder_name}/_pending.
     observation_person: Option<&str>,
+    ignore_globs: &[String],
 ) -> crate::Result<PathBuf> {
     let path = manifest_path(data_root, run_id, project.id);
     if let Some(parent) = path.parent() {
@@ -1282,6 +1297,7 @@ pub async fn write_mr_poll_manifest(
         change_log_path: change_materials.map(|m| m.change_log_path.clone()),
         change_stat_path: change_materials.map(|m| m.change_stat_path.clone()),
         change_diff_path: change_materials.map(|m| m.change_diff_path.clone()),
+        ignore_globs: ignore_globs.to_vec(),
     };
 
     let json = serde_json::to_string_pretty(&manifest).map_err(|err| {
@@ -1355,6 +1371,40 @@ mod tests {
     }
 
     #[test]
+    fn write_mr_poll_manifest_carries_ignore_globs() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project = MrPollProjectRow {
+            id: 4,
+            name: "beta".into(),
+            repo_path: "/repos/beta".into(),
+            mr_review_skip_labels: "[]".into(),
+            mr_review_require_label: None,
+        };
+        let globs = vec!["*.lock".to_string(), "vendor/**".to_string()];
+
+        let path = tokio::runtime::Runtime::new()
+            .expect("rt")
+            .block_on(write_mr_poll_manifest(
+                temp.path(),
+                11,
+                &project,
+                "/repos/beta/feat",
+                None,
+                Some(7),
+                Vec::new(),
+                None,
+                None,
+                &globs,
+            ))
+            .expect("write manifest");
+
+        let raw = std::fs::read_to_string(&path).expect("read");
+        let json: serde_json::Value = serde_json::from_str(&raw).expect("json");
+        assert_eq!(json["ignore_globs"][0], "*.lock");
+        assert_eq!(json["ignore_globs"][1], "vendor/**");
+    }
+
+    #[test]
     fn write_mr_poll_manifest_includes_prior_published_reviews() {
         let temp = tempfile::tempdir().expect("tempdir");
         let project = MrPollProjectRow {
@@ -1387,6 +1437,7 @@ mod tests {
                 prior,
                 Some(&materials),
                 Some("Alice Chen"),
+                &[],
             ))
             .expect("write manifest");
 
@@ -1401,6 +1452,10 @@ mod tests {
         assert_eq!(json["change_log_path"], "/data/mr-68/change_log.txt");
         assert_eq!(json["change_stat_path"], "/data/mr-68/change_stat.txt");
         assert_eq!(json["change_diff_path"], "/data/mr-68/change.diff");
+        assert!(
+            json.get("ignore_globs").is_none(),
+            "empty ignore list must be omitted from the manifest"
+        );
         let pending = json["pending_dir"].as_str().expect("pending_dir");
         assert!(
             pending.ends_with("reports/alpha/Alice Chen/_pending")
@@ -1551,6 +1606,7 @@ mod tests {
             email: format!("{display_name}@example.com"),
             git_name: display_name.to_string(),
             person_id,
+            folder_name: display_name.to_string(),
             display_name: display_name.to_string(),
         }
     }
@@ -1559,6 +1615,7 @@ mod tests {
         ManifestOpenPending {
             id,
             person_id,
+            folder_name: display_name.to_string(),
             display_name: display_name.to_string(),
             question: format!("q{id}"),
         }

@@ -20,6 +20,7 @@
    - `person_month_md_path`（專案層月檔，例 `reports/<project>/<person>/2026-07.md`；與 `_pending` **一起**追加本場觀察）
    - `notes_dir`（本專案 ADR 目錄，例 `reports/<project>/.notes`；**必讀**，見下方「專案 ADR」）
    - `change_log_path` / `change_stat_path` / `change_diff_path`（後端預寫的變更素材；**必讀**）
+   - `ignore_globs`（選填；全域忽略清單，自行執行 git 時必須附為排除 pathspec，見 §1.0）
    - `reviewer_username`（GitLab 視角，可選）
    - `since`（可選；分析窗口起日）
    - `eligible_mrs_path`（triage 輸出 JSON；若未指定，預設與 manifest 同目錄的 `eligible_mrs.json`）
@@ -75,9 +76,15 @@
 - 預算檔本身可能已含 `TRUNCATED`；視為概覽即可。
 - **禁止**為了「看完 diff」反覆 Read 同一檔。
 
+**忽略清單（`manifest.ignore_globs`，硬性）**：
+
+- 若 manifest 有 `ignore_globs`，你自行執行的**每一個** git 指令都必須附上對應的排除 pathspec：`git diff origin/<TB>...HEAD -- . ':(exclude)<glob1>' ':(exclude)<glob2>'`。
+- `change.diff` 的內容後端已先排除這些檔案；`change_stat` 則**刻意保留**它們，讓你仍看得見檔名與規模。
+- 這是軟約束：你有自由 shell，後端無法強制。清單代表操作者明確表示這些檔案不值得逐行看，請據此配置注意力。
+
 **深入方式（取代翻完整 diff）**：
 
-1. 從 `change_stat` 挑 **最多 8 個**關鍵 path（優先新增／大改的業務邏輯；略過 `go.sum`、lockfile、純 generate）。
+1. 從 `change_stat` 挑 **最多 8 個**關鍵 path（優先新增／大改的業務邏輯；略過 `go.sum`、lockfile、純 generate、以及符合 `ignore_globs` 的檔案）。
 2. 對每個 path：**直接 Read worktree 原始檔**（或必要時單次 `git diff origin/<TB>...HEAD -- <path>`）。
 3. 夠寫 round-1 草稿（偏 ❓）即可停；不要追求讀完所有變更檔。
 

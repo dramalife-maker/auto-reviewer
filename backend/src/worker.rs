@@ -411,6 +411,10 @@ async fn process_mr_run_project(
         "mr scan stage"
     );
 
+    // Read once per run, not per MR: every MR in this run sees the same list,
+    // and a list edited mid-run takes effect on the next one.
+    let ignore_globs = crate::review_settings::load(pool).await?.ignore_globs;
+
     let resident_str = resident_dir.display().to_string();
     let stage_started = Instant::now();
     let manifest_path = match write_mr_poll_manifest(
@@ -423,6 +427,7 @@ async fn process_mr_run_project(
         Vec::new(),
         None,
         None,
+        &ignore_globs,
     )
     .await
     {
@@ -675,6 +680,7 @@ async fn process_mr_run_project(
                 &eligible.target_branch,
                 &materials_dir,
                 DEFAULT_DIFF_MAX_BYTES,
+                &ignore_globs,
             )
             .await
             {
@@ -816,7 +822,7 @@ async fn process_mr_run_project(
                     mr_iid = eligible.mr_iid,
                     author_identity = %eligible.author_identity,
                     commit_authors = %commit_authors.join(", "),
-                    "mr review skipped: observation folder requires people.display_name (refusing author_identity fallback)"
+                    "mr review skipped: observation folder requires people.folder_name (refusing author_identity fallback)"
                 );
                 had_failure = true;
                 continue;
@@ -842,6 +848,7 @@ async fn process_mr_run_project(
             prior_published_reviews,
             Some(&change_materials),
             Some(observation_person.as_str()),
+            &ignore_globs,
         )
         .await
         {

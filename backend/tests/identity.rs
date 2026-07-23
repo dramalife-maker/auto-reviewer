@@ -148,10 +148,55 @@ async fn weekly_manifest_includes_resolved_authors() {
     assert_eq!(authors.len(), 1);
     assert_eq!(authors[0]["email"], "alice@co.com");
     assert_eq!(authors[0]["display_name"], "Alice Chen");
+    assert_eq!(authors[0]["folder_name"], "Alice Chen");
 
     let unmatched = list_unmatched_authors(&pool).await.expect("list unmatched");
     assert_eq!(unmatched.len(), 1);
     assert_eq!(unmatched[0].value, "bob@other.com");
+}
+
+#[tokio::test]
+async fn create_person_sets_folder_name_equal_to_initial_display_name() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let pool = init_pool(tempfile::tempdir().unwrap().path())
+        .await
+        .expect("init pool");
+
+    let person_id = create_person(&pool, "  Alice Chen  ")
+        .await
+        .expect("create person");
+
+    let (display_name, folder_name): (String, String) =
+        sqlx::query_as("SELECT display_name, folder_name FROM people WHERE id = ?")
+            .bind(person_id)
+            .fetch_one(&pool)
+            .await
+            .expect("stored row");
+    assert_eq!(display_name, "Alice Chen");
+    assert_eq!(folder_name, "Alice Chen", "folder_name == initial display_name");
+}
+
+#[tokio::test]
+async fn raw_person_insert_backfills_folder_name_from_display_name() {
+    // Test helpers and legacy rows insert display_name only; the migration
+    // trigger backfills folder_name so path lookups keep working.
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let pool = init_pool(tempfile::tempdir().unwrap().path())
+        .await
+        .expect("init pool");
+
+    let person_id = sqlx::query("INSERT INTO people (display_name) VALUES ('Legacy Person')")
+        .execute(&pool)
+        .await
+        .expect("insert person")
+        .last_insert_rowid();
+
+    let folder_name: String = sqlx::query_scalar("SELECT folder_name FROM people WHERE id = ?")
+        .bind(person_id)
+        .fetch_one(&pool)
+        .await
+        .expect("folder_name");
+    assert_eq!(folder_name, "Legacy Person");
 }
 
 #[tokio::test]
@@ -279,6 +324,7 @@ async fn weekly_manifest_includes_open_pending_items() {
     assert_eq!(open_pending[0]["id"], open_id);
     assert_eq!(open_pending[0]["person_id"], person_id);
     assert_eq!(open_pending[0]["display_name"], "Alice Chen");
+    assert_eq!(open_pending[0]["folder_name"], "Alice Chen");
     assert_eq!(open_pending[0]["question"], "Why choose A?");
 }
 
@@ -906,16 +952,19 @@ async fn person_detail_api_unknown_returns_404() {
 }
 
 #[tokio::test]
-async fn rename_person_updates_database_and_people_directory() {
+async fn rename_person_updates_display_name_without_moving_directories() {
     let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
     let temp = tempfile::tempdir().expect("tempdir");
     setup_env(&temp).await;
     let pool = init_pool(temp.path()).await.expect("init pool");
     let person_id = create_person(&pool, "Alice").await.expect("create");
 
-    let old_dir = temp.path().join("reports").join("_people").join("Alice");
-    std::fs::create_dir_all(&old_dir).expect("mkdir");
-    std::fs::write(old_dir.join("index.md"), "notes").expect("write");
+    // Directories are keyed by the immutable folder_name ("Alice").
+    let people_dir = temp.path().join("reports").join("_people").join("Alice");
+    std::fs::create_dir_all(&people_dir).expect("mkdir people");
+    std::fs::write(people_dir.join("index.md"), "notes").expect("write");
+    let project_dir = temp.path().join("reports").join("crm").join("Alice");
+    std::fs::create_dir_all(&project_dir).expect("mkdir project");
 
     let app = build_app().await.expect("build app");
     let response = app
@@ -934,30 +983,43 @@ async fn rename_person_updates_database_and_people_directory() {
     let json: Value = serde_json::from_slice(&body).expect("json");
     assert_eq!(json["display_name"], "Alice Chen");
 
-    let stored: String = sqlx::query_scalar("SELECT display_name FROM people WHERE id = ?")
-        .bind(person_id)
-        .fetch_one(&pool)
-        .await
-        .expect("stored name");
-    assert_eq!(stored, "Alice Chen");
+    let (display_name, folder_name): (String, String) =
+        sqlx::query_as("SELECT display_name, folder_name FROM people WHERE id = ?")
+            .bind(person_id)
+            .fetch_one(&pool)
+            .await
+            .expect("stored row");
+    assert_eq!(display_name, "Alice Chen");
+    assert_eq!(folder_name, "Alice", "folder_name is immutable");
 
-    let new_dir = temp.path().join("reports").join("_people").join("Alice Chen");
-    assert!(new_dir.is_dir(), "renamed directory should exist");
-    assert!(!old_dir.exists(), "old directory should be gone");
-    assert!(new_dir.join("index.md").is_file());
+    // No directory was moved; folder_name-keyed dirs remain, no new dirs created.
+    assert!(people_dir.is_dir(), "person-layer dir must be unchanged");
+    assert!(people_dir.join("index.md").is_file());
+    assert!(project_dir.is_dir(), "project-layer dir must be unchanged");
+    assert!(
+        !temp
+            .path()
+            .join("reports")
+            .join("_people")
+            .join("Alice Chen")
+            .exists(),
+        "no directory should be created for the new display name"
+    );
 }
 
 #[tokio::test]
-async fn rename_person_rejects_colliding_destination_directory() {
+async fn rename_person_succeeds_even_if_directory_named_like_new_display_name_exists() {
     let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
     let temp = tempfile::tempdir().expect("tempdir");
     setup_env(&temp).await;
     let pool = init_pool(temp.path()).await.expect("init pool");
     let person_id = create_person(&pool, "Alice").await.expect("create");
 
+    // A stray directory matching the new display name must NOT block the rename,
+    // because rename no longer performs any filesystem operation.
     let people_root = temp.path().join("reports").join("_people");
     std::fs::create_dir_all(people_root.join("Alice")).expect("mkdir alice");
-    std::fs::create_dir_all(people_root.join("Alice Chen")).expect("mkdir collision");
+    std::fs::create_dir_all(people_root.join("Alice Chen")).expect("mkdir stray");
 
     let app = build_app().await.expect("build app");
     let response = app
@@ -971,14 +1033,16 @@ async fn rename_person_rejects_colliding_destination_directory() {
         )
         .await
         .expect("response");
-    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(response.status(), StatusCode::OK);
 
-    let stored: String = sqlx::query_scalar("SELECT display_name FROM people WHERE id = ?")
-        .bind(person_id)
-        .fetch_one(&pool)
-        .await
-        .expect("stored name");
-    assert_eq!(stored, "Alice");
+    let (display_name, folder_name): (String, String) =
+        sqlx::query_as("SELECT display_name, folder_name FROM people WHERE id = ?")
+            .bind(person_id)
+            .fetch_one(&pool)
+            .await
+            .expect("stored row");
+    assert_eq!(display_name, "Alice Chen");
+    assert_eq!(folder_name, "Alice");
 }
 
 #[tokio::test]
@@ -1206,6 +1270,72 @@ async fn same_person_rebind_is_noop() {
     .await
     .expect("count");
     assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn renamed_person_summary_still_resolves_by_folder_name() {
+    let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pool = init_pool(temp.path()).await.expect("init pool");
+
+    sqlx::query(
+        "INSERT INTO projects (name, repo_path, is_git_repo) VALUES ('game-backend', ?, 0)",
+    )
+    .bind(temp.path().join("repos/game-backend").display().to_string())
+    .execute(&pool)
+    .await
+    .expect("insert project");
+
+    // Person created as "Alice" → folder_name "Alice"; later display renamed.
+    let person_id = create_person(&pool, "Alice").await.expect("create");
+    identity::rename_person(&pool, temp.path(), person_id, "Alice Chen")
+        .await
+        .expect("rename");
+
+    // Summary written under the immutable folder_name with frontmatter person = folder_name.
+    let summary_path = temp
+        .path()
+        .join("reports/game-backend/Alice/2026-07-05/summary.md");
+    std::fs::create_dir_all(summary_path.parent().expect("parent")).expect("mkdir");
+    std::fs::write(
+        &summary_path,
+        r#"---
+person: Alice
+project: game-backend
+date: 2026-07-05
+one_line: Stable week
+commit_count: 1
+---
+
+## 待確認
+- Question?
+"#,
+    )
+    .expect("write summary");
+
+    let run_id = sqlx::query(
+        "INSERT INTO runs (trigger, status, project_total) VALUES ('manual_all', 'running', 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert run")
+    .last_insert_rowid();
+
+    ingest_project_summaries(&pool, temp.path(), "game-backend", 1, run_id)
+        .await
+        .expect("ingest");
+
+    let stored_person: Option<i64> =
+        sqlx::query_scalar("SELECT person_id FROM reports WHERE run_id = ?")
+            .bind(run_id)
+            .fetch_optional(&pool)
+            .await
+            .expect("query");
+    assert_eq!(
+        stored_person,
+        Some(person_id),
+        "summary resolves to the renamed person via folder_name"
+    );
 }
 
 async fn setup_env(temp: &tempfile::TempDir) {

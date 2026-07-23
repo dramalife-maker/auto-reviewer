@@ -13,11 +13,11 @@
    - `project_name`
    - `repo_path`（應與目前 cwd 一致）
    - `report_root`（本專案報告根目錄，例 `$DATA_ROOT_DIR/reports/game-backend`）
-   - `person_report_root`（人物層報告根目錄，例 `$DATA_ROOT_DIR/reports/_people`；每位 author 的跨專案長期檔寫入 `{person_report_root}/{display_name}/`）
+   - `person_report_root`（人物層報告根目錄，例 `$DATA_ROOT_DIR/reports/_people`；每位 author 的跨專案長期檔寫入 `{person_report_root}/{folder_name}/`）
    - `run_date`（本次報告日期，`YYYY-MM-DD`）
    - `since`（分析窗口起日，`YYYY-MM-DD`，含當日）
-   - `authors`（已歸戶工程師陣列：`email`, `git_name`, `person_id`, `display_name`）
-   - `open_pending`（本專案目前 `status='open'` 的待確認；元素含 `id`, `person_id`, `display_name`, `question`。寫 `## 待確認` 時必須遵守下方「待確認延續規則」）
+   - `authors`（已歸戶工程師陣列：`email`, `git_name`, `person_id`, `folder_name`, `display_name`。`folder_name` 為不可變路徑鍵＝目錄名與 frontmatter `person`；`display_name` 為現行顯示名，僅供正文稱呼，可能已與 `folder_name` 不同）
+   - `open_pending`（本專案目前 `status='open'` 的待確認；元素含 `id`, `person_id`, `folder_name`, `display_name`, `question`。寫 `## 待確認` 時必須遵守下方「待確認延續規則」）
    - `notes_dir`（本專案 ADR 目錄，例 `$DATA_ROOT_DIR/reports/game-backend/.notes`；內含 `index.md` 與 `adr-*.md`。**必讀**，見下方「專案 ADR」）
    - `published_pending_snippets`（可選陣列；相對於 `report_root` 的路徑，例如 `Alice Chen/_pending/mr-42-round-1.md`。後端依 `mr_reviews.status='published'` 預先篩選；未列於此陣列的 `_pending/` 片段**不得**折入週報）
    - `output_contract`（固定為 `output-contract.md`，格式見同目錄 appended 規格）
@@ -29,12 +29,12 @@
 2. 寫新的技術選擇類 `## 待確認` 或盤點是否延續此類議題前，對 index 所列決策按需 Read 對應 `adr-*.md` 的 **`<tl;dr>`**（TL;DR 足夠即可，不必全文）。
 3. **禁止**把已在 ADR `<tl;dr>` 結案的主題寫成**新的** `## 待確認` 問句（例：ADR 已定「Session 用 Redis」→ 不得再問「為何選 Redis」）。
 4. Headless **本行程不寫** ADR（不新增 `adr-*.md`、不改 `index.md`）。ADR 寫入僅經 MR agent chat 顯式指令。
-5. `.notes` 是專案保留目錄，**不是**工程師 `display_name` 資料夾；人物待確認歷史仍只在 `{person_report_root}/{display_name}/_notes.md`。
+5. `.notes` 是專案保留目錄，**不是**工程師資料夾；人物待確認歷史仍只在 `{person_report_root}/{folder_name}/_notes.md`。
 
 **寫入限制（硬性）**：
 
-- 允許寫入：`{report_root}/**` 底下所有檔案，以及 `{person_report_root}/{display_name}/**`（跨專案長期檔）。**例外**：不要寫入 `{report_root}/.notes/`（headless 只讀 ADR）。
-- 允許讀取：`repo_path` 下 git 歷史、`report_root`（含 `.notes/`）、與 `{person_report_root}/{display_name}/` 既有檔案（含 `_pending/`）。
+- 允許寫入：`{report_root}/**` 底下所有檔案，以及 `{person_report_root}/{folder_name}/**`（跨專案長期檔）。**例外**：不要寫入 `{report_root}/.notes/`（headless 只讀 ADR）。
+- 允許讀取：`repo_path` 下 git 歷史、`report_root`（含 `.notes/`）、與 `{person_report_root}/{folder_name}/` 既有檔案（含 `_pending/`）。
 - **禁止**寫入 manifest 路徑以外的新根目錄、禁止修改 `repos/` 原始碼（除 Read 外不 Write repo 內容）。
 
 ---
@@ -45,14 +45,14 @@
 
 ```json
 "authors": [
-  { "email": "alice@co.com", "git_name": "Alice", "person_id": 1, "display_name": "Alice Chen" }
+  { "email": "alice@co.com", "git_name": "Alice", "person_id": 1, "folder_name": "Alice", "display_name": "Alice Chen" }
 ]
 ```
 
 規則：
 
 - 僅為 `authors` 中每位已歸戶工程師產出報告（後端已過濾未歸戶 email）。
-- 目錄名與 summary frontmatter 的 `person` 欄位 **必須** 使用 `authors[].display_name`（canonical 名稱），**不可** 使用 `%an` 或 email。
+- 目錄名與 summary frontmatter 的 `person` 欄位 **必須** 使用 `authors[].folder_name`（不可變路徑鍵），**不可** 使用 `display_name`、`%an` 或 email。`display_name` 僅可在 `report.md` 正文當人類稱呼。
 - 若 `authors` 為空陣列，寫完 manifest 後正常結束（不視為錯誤）。
 - 統計每位作者的 `commit_count`：在 `repo_path` 對該 author 的 email 執行 `git log`（`since`～`run_date`，`--no-merges`）。`mr_count` 若無法從 git 可靠取得，填 `0` 或省略（後端接受 null）。
 
@@ -60,11 +60,12 @@
 
 ## 2. 每位工程師：收集素材
 
-對每位 active author（以下稱 `{person}`）：
+對每位 active author（以下稱 `{person}`，其值＝`authors[].folder_name`）：
 
 ### 2.1 Git 活動
 
 - `git log` / `git show` / `git diff` 理解本週變更主題、技術深度、review 互動（若 log 可見）。
+- **忽略清單（硬性）**：若 manifest 有 `ignore_globs`，上述每一個 git 指令都必須附上對應的排除 pathspec，例如 `git diff <range> -- . ':(exclude)<glob1>' ':(exclude)<glob2>'`。清單代表操作者已判定這些檔案（lockfile、產生碼、vendor 等）不值得逐行看；把注意力留給其餘變更。此為軟約束，後端無法強制，請自覺遵守。
 - 聚焦 **行為與成長**，非產量排名；避免「commit 多＝表現好」這類結論。
 - 若 repo 有 `CLAUDE.md`／`AGENTS.md`／`.claude/docs`，優先對照專案標準；否則可以通用框架當補充鏡片（scalability、SPOF／retry、idempotency、index／N+1、transaction 邊界、observability、決策理由是否充分）——**用來判斷交付品質，不是用來開長 checklist 塞進 summary**。
 
@@ -91,9 +92,9 @@
 
 Read 若已存在：
 
-- `{person_report_root}/{display_name}/index.md` — **跨專案**長期觀察／思維模式（趨勢 Tab 主資料源；**稀疏**，見 §4.2）
-- `{person_report_root}/{display_name}/YYYY-MM.md`（`run_date` 所在月份）— 跨專案月度成長
-- `{person_report_root}/{display_name}/_notes.md` — **僅**歷史待確認（待確認清單用；**不是**長期思維模式檔）
+- `{person_report_root}/{folder_name}/index.md` — **跨專案**長期觀察／思維模式（趨勢 Tab 主資料源；**稀疏**，見 §4.2）
+- `{person_report_root}/{folder_name}/YYYY-MM.md`（`run_date` 所在月份）— 跨專案月度成長
+- `{person_report_root}/{folder_name}/_notes.md` — **僅**歷史待確認（待確認清單用；**不是**長期思維模式檔）
 - `{report_root}/{person}/index.md` —（可選）本專案技術脈絡補充
 - `{report_root}/{person}/YYYY-MM.md`（`run_date` 所在月份）— **本專案**月度成長素材
 - 同人專案層 `YYYY-MM.md`、`_pending/` 尚存片段 — 判斷「是否構成重複模式」時參考
@@ -169,7 +170,7 @@ Read 若已存在：
 
 ### 4.2 人物層（跨專案綜合；趨勢 Tab 主資料源）
 
-路徑：`{person_report_root}/{display_name}/`
+路徑：`{person_report_root}/{folder_name}/`
 
 | 檔案 | 動作 |
 |------|------|
@@ -210,7 +211,7 @@ Read 若已存在：
 
 ### 待確認延續規則（硬性）
 
-寫每位 `{person}` 的 `## 待確認` / `## 已釐清` 前，從 `manifest.open_pending` 篩出 `display_name`（或 `person_id`）對應此人的條目。對每一條 open 議題，**三選一**：
+寫每位 `{person}` 的 `## 待確認` / `## 已釐清` 前，從 `manifest.open_pending` 篩出 `person_id`（或 `folder_name`）對應此人的條目。對每一條 open 議題，**三選一**：
 
 1. **延續中**：本週仍相關 → 原文寫入 `## 待確認`（**禁止**同義改寫）。
 2. **已釐清**：本週確認已解決 → 原文寫入 `## 已釐清`，且**不得**再出現在 `## 待確認`。後端 ingest 會將匹配的 open 列標為 resolved（workflow 本身仍不寫 SQLite）。

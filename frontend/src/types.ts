@@ -312,6 +312,10 @@ export interface ScheduleUpdateInput {
   cadence?: string
 }
 
+export interface ReviewSettings {
+  ignore_globs: string[]
+}
+
 export interface DashboardResponse {
   last_run: DashboardLastRun | null
   stats: DashboardStats

@@ -66,6 +66,7 @@ pub async fn agent_turn(
     cancel: CancellationToken,
 ) -> Result<ReportChatAgentTurnResponse> {
     let display_name = load_display_name(pool, person_id).await?;
+    let folder_name = load_folder_name(pool, person_id).await?;
 
     let existing = sqlx::query_as::<_, ChatRow>(
         "SELECT agent_session_id, reviewer_agent FROM person_report_chats WHERE person_id = ?",
@@ -85,6 +86,7 @@ pub async fn agent_turn(
         config,
         config.data_dir(),
         prior_session,
+        &folder_name,
         &display_name,
         message,
         agent,
@@ -106,7 +108,7 @@ pub async fn agent_turn(
     insert_chat_turn(pool, person_id, message, &reply).await?;
 
     let ingest_warnings =
-        reingest_person_summaries(pool, config.data_dir(), person_id, &display_name).await;
+        reingest_person_summaries(pool, config.data_dir(), person_id, &folder_name).await;
     for warning in &ingest_warnings {
         warn!(person_id, %warning, "report chat summary reingest warning");
     }
@@ -132,6 +134,15 @@ async fn ensure_person_exists(pool: &SqlitePool, person_id: i64) -> Result<()> {
 
 async fn load_display_name(pool: &SqlitePool, person_id: i64) -> Result<String> {
     sqlx::query_scalar("SELECT display_name FROM people WHERE id = ?")
+        .bind(person_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Error::Database)?
+        .ok_or(Error::NotFound)
+}
+
+async fn load_folder_name(pool: &SqlitePool, person_id: i64) -> Result<String> {
+    sqlx::query_scalar("SELECT folder_name FROM people WHERE id = ?")
         .bind(person_id)
         .fetch_optional(pool)
         .await

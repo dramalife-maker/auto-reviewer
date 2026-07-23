@@ -40,8 +40,8 @@ pub fn is_person_level_report_name(name: &str) -> bool {
     name == PERSON_REPORT_DIR
 }
 
-pub fn person_trends_dir(data_root: &Path, display_name: &str) -> PathBuf {
-    person_report_root(data_root).join(display_name)
+pub fn person_trends_dir(data_root: &Path, folder_name: &str) -> PathBuf {
+    person_report_root(data_root).join(folder_name)
 }
 
 pub async fn load_trends(
@@ -49,21 +49,23 @@ pub async fn load_trends(
     data_root: &Path,
     person_id: i64,
 ) -> Result<Option<PersonTrendsResponse>, Error> {
-    let display_name: Option<String> =
-        sqlx::query_scalar("SELECT display_name FROM people WHERE id = ?")
+    // display_name is the human label returned to the UI; folder_name is the
+    // immutable on-disk path key. They are equal until a rename.
+    let row: Option<(String, String)> =
+        sqlx::query_as("SELECT display_name, folder_name FROM people WHERE id = ?")
             .bind(person_id)
             .fetch_optional(pool)
             .await
             .map_err(Error::Database)?;
 
-    let Some(display_name) = display_name else {
+    let Some((display_name, folder_name)) = row else {
         return Ok(None);
     };
 
-    let person_dir = person_trends_dir(data_root, &display_name);
+    let person_dir = person_trends_dir(data_root, &folder_name);
     Ok(Some(PersonTrendsResponse {
         person_id,
-        display_name: display_name.clone(),
+        display_name,
         long_term_observation: read_file_or_empty(&person_dir.join("index.md")),
         growth_timeline: read_growth_timeline(&person_dir),
         historical_pending: read_historical_pending(&person_dir.join("_notes.md")),

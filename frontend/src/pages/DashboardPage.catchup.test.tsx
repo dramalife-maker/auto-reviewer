@@ -11,7 +11,9 @@ vi.mock('../api', () => ({
   catchUpSchedule: vi.fn(),
   fetchDashboard: vi.fn(),
   fetchRun: vi.fn(),
+  getReviewSettings: vi.fn(),
   startManualRun: vi.fn(),
+  updateReviewSettings: vi.fn(),
   updateSchedule: vi.fn(),
 }))
 
@@ -62,6 +64,7 @@ describe('DashboardPage catch-up banner', () => {
   beforeEach(() => {
     sessionStorage.clear()
     vi.mocked(api.fetchDashboard).mockResolvedValue(dashboardWithMissed('2026-07-06T01:00:00Z'))
+    vi.mocked(api.getReviewSettings).mockResolvedValue({ ignore_globs: [] })
   })
 
   afterEach(() => {

@@ -155,78 +155,72 @@ tests:
 ---
 ### Requirement: Summary files are parsed into reports and pending items
 
-After a successful project run, the backend SHALL scan `$DATA_ROOT_DIR/reports/<name>/<person>/<YYYY-MM-DD>/summary.md` files produced by the skill.
+After a successful project run, the backend SHALL scan `$DATA_ROOT_DIR/reports/<name>/<folder_name>/<YYYY-MM-DD>/summary.md` files produced by the skill.
 
-For each summary file, the parser MUST read YAML frontmatter fields `person`, `project`, `date`, `one_line`, `mr_count`, `commit_count`, resolve `person_id` by matching `people.display_name` to frontmatter `person`, upsert `reports` for `(project_id, person_id, report_date)`, and insert `pending_items` for each bullet under heading `## 待確認`.
+For each summary file, the parser MUST read YAML frontmatter fields `person`, `project`, `date`, `one_line`, `mr_count`, `commit_count`, resolve `person_id` by matching `people.folder_name` to frontmatter `person`, upsert `reports` for `(project_id, person_id, report_date)`, and insert `pending_items` for each bullet under heading `## 待確認`.
 
-If frontmatter `person` does not match any existing `people.display_name`, the parser MUST skip that summary file and MUST NOT create a new `people` row.
+If frontmatter `person` does not match any existing `people.folder_name`, the parser MUST skip that summary file and MUST NOT create a new `people` row.
 
 #### Scenario: Parse summary with two pending questions
 
-- **WHEN** a summary file contains frontmatter and two bullets under `## 待確認` and `person` matches an existing person
+- **WHEN** a summary file contains frontmatter and two bullets under `## 待確認` and `person` matches an existing person's folder_name
 - **THEN** one `reports` row exists and two `pending_items` rows exist with `status='open'`
 
 ##### Example: frontmatter and pending bullets
 
-- **GIVEN** summary frontmatter `person: Alice`, `date: 2026-07-05`, `one_line: Stable week` and a `people` row with `display_name='Alice'`
+- **GIVEN** summary frontmatter `person: Alice`, `date: 2026-07-05`, `one_line: Stable week` and a `people` row with `folder_name='Alice'`
 - **WHEN** the parser processes the file with two `-` lines under `## 待確認`
 - **THEN** `reports.one_line` is `Stable week` and `pending_items` count for that person is 2
 
+#### Scenario: Renamed person still resolves by folder_name
+
+- **GIVEN** a `people` row with `folder_name='Alice'` whose `display_name` was later changed to "Alice Chen"
+- **WHEN** the parser processes a summary file with frontmatter `person: Alice`
+- **THEN** the summary resolves to that person and a `reports` row is upserted
+
 #### Scenario: Unknown person in summary is skipped
 
-- **WHEN** summary frontmatter `person` is `Ghost` and no `people` row has that display name
+- **WHEN** summary frontmatter `person` is `Ghost` and no `people` row has that folder_name
 - **THEN** no `reports` row is created for that file
 
 
 <!-- @trace
-source: person-identity-resolution
-updated: 2026-07-09
+source: people-folder-name
+updated: 2026-07-23
 code:
-  - frontend/src/app.ts
+  - frontend/src/pages/PeoplePage.tsx
+  - frontend/src/lib/format.ts
+  - backend/src/executor.rs
   - backend/src/reports.rs
-  - docs/idea/migration-person-observations.md
-  - backend/src/config.rs
-  - backend/src/person_trends.rs
-  - frontend/src/types.ts
-  - frontend/src/api.ts
-  - docs/idea/reviewer_project_list_with_run.html
+  - skills/reviewer-batch/WORKFLOW.md
+  - backend/migrations/016_people_folder_name.sql
+  - backend/src/identity.rs
+  - README.md
   - backend/src/runs.rs
   - skills/reviewer-batch/output-contract.md
-  - backend/migrations/005_drop_gitlab_project_id.sql
-  - docs/idea/schema.md
-  - backend/migrations/004_project_settings.sql
-  - backend/src/executor.rs
-  - docs/idea/reviewer_project_settings.html
   - backend/src/worker.rs
-  - frontend/index.html
-  - README.md
-  - backend/src/schedule.rs
+  - backend/src/pending_items.rs
   - backend/src/server.rs
-  - backend/src/summary.rs
-  - backend/src/identity.rs
-  - backend/Cargo.toml
-  - .env.example
+  - backend/src/report_chat.rs
   - backend/src/error.rs
-  - backend/src/lib.rs
-  - frontend/src/style.css
-  - backend/src/dashboard.rs
-  - docs/idea/spec.md
-  - skills/reviewer-batch/WORKFLOW.md
-  - docs/idea/reviewer_app_dashboard_home.html
-  - backend/src/projects.rs
+  - backend/migrations/015_run_projects_person.sql
+  - frontend/src/api.ts
+  - backend/src/mr_reviews.rs
+  - backend/src/person_trends.rs
+  - backend/src/summary.rs
 tests:
-  - backend/tests/report_reader.rs
-  - backend/tests/dashboard.rs
+  - backend/tests/executor_cancellation.rs
   - backend/tests/runs_execution.rs
-  - backend/tests/person_trends.rs
-  - backend/tests/project_config.rs
+  - frontend/src/pages/PeoplePage.rerun.test.tsx
   - backend/tests/identity.rs
+  - backend/tests/mr_reviews.rs
+  - backend/tests/run_cancellation.rs
 -->
 
 ---
 ### Requirement: Weekly manifest includes resolved authors
 
-Before spawning the reviewer-batch subprocess, the backend SHALL write `manifest.json` including an `authors` array. Each element MUST contain `email` (normalized git author email), `git_name` (raw `%an`), `person_id` (integer), and `display_name` (canonical `people.display_name`).
+Before spawning the reviewer-batch subprocess, the backend SHALL write `manifest.json` including an `authors` array. Each element MUST contain `email` (normalized git author email), `git_name` (raw `%an`), `person_id` (integer), `folder_name` (immutable `people.folder_name`, used as the on-disk directory segment and summary `person` key), and `display_name` (current `people.display_name`, for human-readable prose only).
 
 Only authors with a resolved `person_id` MUST appear in `authors`. Unresolved authors MUST NOT appear in the array.
 
@@ -237,54 +231,42 @@ Only authors with a resolved `person_id` MUST appear in `authors`. Unresolved au
 
 ##### Example: manifest authors shape
 
-- **GIVEN** person id 1 with `display_name` "Alice Chen" bound to `git_email: alice@co.com`
+- **GIVEN** person id 1 with `folder_name` "Alice", `display_name` "Alice Chen", bound to `git_email: alice@co.com`
 - **WHEN** the weekly manifest is written for that project
-- **THEN** `authors` contains `{ "email": "alice@co.com", "git_name": "Alice", "person_id": 1, "display_name": "Alice Chen" }`
+- **THEN** `authors` contains `{ "email": "alice@co.com", "git_name": "Alice", "person_id": 1, "folder_name": "Alice", "display_name": "Alice Chen" }`
 
 
 <!-- @trace
-source: person-identity-resolution
-updated: 2026-07-09
+source: people-folder-name
+updated: 2026-07-23
 code:
-  - frontend/src/app.ts
+  - frontend/src/pages/PeoplePage.tsx
+  - frontend/src/lib/format.ts
+  - backend/src/executor.rs
   - backend/src/reports.rs
-  - docs/idea/migration-person-observations.md
-  - backend/src/config.rs
-  - backend/src/person_trends.rs
-  - frontend/src/types.ts
-  - frontend/src/api.ts
-  - docs/idea/reviewer_project_list_with_run.html
+  - skills/reviewer-batch/WORKFLOW.md
+  - backend/migrations/016_people_folder_name.sql
+  - backend/src/identity.rs
+  - README.md
   - backend/src/runs.rs
   - skills/reviewer-batch/output-contract.md
-  - backend/migrations/005_drop_gitlab_project_id.sql
-  - docs/idea/schema.md
-  - backend/migrations/004_project_settings.sql
-  - backend/src/executor.rs
-  - docs/idea/reviewer_project_settings.html
   - backend/src/worker.rs
-  - frontend/index.html
-  - README.md
-  - backend/src/schedule.rs
+  - backend/src/pending_items.rs
   - backend/src/server.rs
-  - backend/src/summary.rs
-  - backend/src/identity.rs
-  - backend/Cargo.toml
-  - .env.example
+  - backend/src/report_chat.rs
   - backend/src/error.rs
-  - backend/src/lib.rs
-  - frontend/src/style.css
-  - backend/src/dashboard.rs
-  - docs/idea/spec.md
-  - skills/reviewer-batch/WORKFLOW.md
-  - docs/idea/reviewer_app_dashboard_home.html
-  - backend/src/projects.rs
+  - backend/migrations/015_run_projects_person.sql
+  - frontend/src/api.ts
+  - backend/src/mr_reviews.rs
+  - backend/src/person_trends.rs
+  - backend/src/summary.rs
 tests:
-  - backend/tests/report_reader.rs
-  - backend/tests/dashboard.rs
+  - backend/tests/executor_cancellation.rs
   - backend/tests/runs_execution.rs
-  - backend/tests/person_trends.rs
-  - backend/tests/project_config.rs
+  - frontend/src/pages/PeoplePage.rerun.test.tsx
   - backend/tests/identity.rs
+  - backend/tests/mr_reviews.rs
+  - backend/tests/run_cancellation.rs
 -->
 
 ---
@@ -292,56 +274,45 @@ tests:
 
 The reviewer-batch workflow SHALL determine the set of engineers to report on exclusively from `manifest.authors`. It MUST NOT enumerate git authors independently to decide person groupings.
 
-For each `authors[]` entry, report files MUST be written under `{report_root}/{display_name}/{run_date}/`.
+For each `authors[]` entry, report files MUST be written under `{report_root}/{folder_name}/{run_date}/`, and the `summary.md` frontmatter `person` field MUST equal `authors[].folder_name`. `display_name` MUST be used only as a human-readable label inside report prose, never as a directory segment or the frontmatter `person` value.
 
-#### Scenario: Workflow skips git log person discovery
+#### Scenario: Workflow uses folder_name for directories and person key
 
-- **WHEN** manifest `authors` contains one entry with `display_name` "Alice Chen"
-- **THEN** the workflow produces reports only under `Alice Chen/` and does not create directories for other git display names
+- **WHEN** manifest `authors` contains one entry with `folder_name` "Alice" and `display_name` "Alice Chen"
+- **THEN** the workflow produces reports only under `Alice/` with `summary.md` frontmatter `person: Alice`, and does not create directories for other git display names
+
 
 <!-- @trace
-source: person-identity-resolution
-updated: 2026-07-09
+source: people-folder-name
+updated: 2026-07-23
 code:
-  - frontend/src/app.ts
+  - frontend/src/pages/PeoplePage.tsx
+  - frontend/src/lib/format.ts
+  - backend/src/executor.rs
   - backend/src/reports.rs
-  - docs/idea/migration-person-observations.md
-  - backend/src/config.rs
-  - backend/src/person_trends.rs
-  - frontend/src/types.ts
-  - frontend/src/api.ts
-  - docs/idea/reviewer_project_list_with_run.html
+  - skills/reviewer-batch/WORKFLOW.md
+  - backend/migrations/016_people_folder_name.sql
+  - backend/src/identity.rs
+  - README.md
   - backend/src/runs.rs
   - skills/reviewer-batch/output-contract.md
-  - backend/migrations/005_drop_gitlab_project_id.sql
-  - docs/idea/schema.md
-  - backend/migrations/004_project_settings.sql
-  - backend/src/executor.rs
-  - docs/idea/reviewer_project_settings.html
   - backend/src/worker.rs
-  - frontend/index.html
-  - README.md
-  - backend/src/schedule.rs
+  - backend/src/pending_items.rs
   - backend/src/server.rs
-  - backend/src/summary.rs
-  - backend/src/identity.rs
-  - backend/Cargo.toml
-  - .env.example
+  - backend/src/report_chat.rs
   - backend/src/error.rs
-  - backend/src/lib.rs
-  - frontend/src/style.css
-  - backend/src/dashboard.rs
-  - docs/idea/spec.md
-  - skills/reviewer-batch/WORKFLOW.md
-  - docs/idea/reviewer_app_dashboard_home.html
-  - backend/src/projects.rs
+  - backend/migrations/015_run_projects_person.sql
+  - frontend/src/api.ts
+  - backend/src/mr_reviews.rs
+  - backend/src/person_trends.rs
+  - backend/src/summary.rs
 tests:
-  - backend/tests/report_reader.rs
-  - backend/tests/dashboard.rs
+  - backend/tests/executor_cancellation.rs
   - backend/tests/runs_execution.rs
-  - backend/tests/person_trends.rs
-  - backend/tests/project_config.rs
+  - frontend/src/pages/PeoplePage.rerun.test.tsx
   - backend/tests/identity.rs
+  - backend/tests/mr_reviews.rs
+  - backend/tests/run_cancellation.rs
 -->
 
 ---
@@ -1398,4 +1369,122 @@ tests:
   - backend/tests/identity.rs
   - backend/tests/executor_cancellation.rs
   - backend/tests/run_cancellation.rs
+-->
+
+---
+### Requirement: MR change materials exclude ignored files from diff content only
+
+When precomputing MR change materials, the worker SHALL apply the global review ignore list by appending exclusion pathspecs to the size-capped `git diff` that produces `change.diff`. The exclusion SHALL NOT be applied to the `git diff --stat` that produces `change_stat.txt`, nor to the `git log --oneline` that produces `change_log.txt`, so that an ignored file remains visible by name and change size to the reviewing agent.
+
+The worker SHALL build each exclusion pathspec by prefixing a stored pattern with git's exclude pathspec magic, and SHALL NOT add glob pathspec magic, so that a wildcard matches across directory levels. When the stored list is empty, the produced materials SHALL be byte-identical to those produced without this feature.
+
+The worker SHALL load the ignore list once per MR scan run before iterating merge requests, rather than once per merge request. A change saved through the settings API therefore takes effect on the next run without restarting the service.
+
+The stub materials path used by the test executor SHALL remain unaffected by the ignore list.
+
+#### Scenario: Ignored file is absent from diff but present in stat
+
+- **WHEN** an MR changes both a source file and a file matching a configured ignore pattern
+- **THEN** `change.diff` contains no diff hunk for the matching file, while `change_stat.txt` still lists that file with its insertion and deletion counts
+
+##### Example: lock file alongside source
+
+- **GIVEN** the ignore list is `["*.lock"]` and the MR changes `src/main.rs` and `deps/foo.lock`
+- **WHEN** the worker precomputes change materials
+- **THEN** `change.diff` contains a hunk for `src/main.rs` and none for `deps/foo.lock`, and `change_stat.txt` lists both files
+
+#### Scenario: Empty list leaves materials unchanged
+
+- **WHEN** the ignore list is empty and the worker precomputes change materials
+- **THEN** the produced `change.diff` is identical to the diff produced with no pathspec applied
+
+#### Scenario: List is read once per run
+
+- **WHEN** a single MR scan run reviews multiple eligible merge requests
+- **THEN** the ignore list is loaded once for that run and the same list is applied to every merge request in it
+
+
+<!-- @trace
+source: review-ignore-globs
+updated: 2026-07-23
+code:
+  - backend/src/summary.rs
+  - frontend/src/api.ts
+  - skills/scan-mrs-headless/WORKFLOW.md
+  - backend/src/server.rs
+  - skills/reviewer-batch/WORKFLOW.md
+  - backend/src/review_settings.rs
+  - backend/src/error.rs
+  - backend/src/report_chat.rs
+  - backend/migrations/017_review_settings.sql
+  - backend/src/executor.rs
+  - backend/migrations/016_people_folder_name.sql
+  - backend/src/person_trends.rs
+  - backend/src/mr_reviews.rs
+  - backend/src/lib.rs
+  - backend/src/reports.rs
+  - skills/reviewer-batch/output-contract.md
+  - frontend/src/types.ts
+  - backend/src/pending_items.rs
+  - frontend/src/pages/DashboardPage.tsx
+  - backend/src/identity.rs
+  - backend/src/runs.rs
+  - backend/src/mr_change_materials.rs
+  - backend/src/worker.rs
+tests:
+  - backend/tests/identity.rs
+  - frontend/src/pages/DashboardPage.reviewSettings.test.tsx
+  - backend/tests/review_settings.rs
+  - frontend/src/pages/DashboardPage.catchup.test.tsx
+-->
+
+---
+### Requirement: Pathspec failure degrades to an unfiltered diff
+
+When the `git diff` invocation carrying exclusion pathspecs fails, the worker SHALL log a warning identifying the failure and SHALL retry the same diff without any pathspec. Only if the retry also fails SHALL the worker report the git error to its caller and let the existing skip handling apply.
+
+A malformed entry in the ignore list SHALL NOT cause merge requests to be skipped while the underlying diff is otherwise obtainable. Failures of the `--stat` and `log` invocations SHALL keep their existing behavior.
+
+#### Scenario: Malformed pattern falls back instead of skipping the MR
+
+- **WHEN** the configured ignore list causes the pathspec-bearing diff to fail
+- **THEN** the worker logs a warning, produces `change.diff` from an unfiltered diff, and the merge request is reviewed rather than skipped
+
+#### Scenario: Genuine git failure still propagates
+
+- **WHEN** the diff fails both with and without pathspecs
+- **THEN** the worker reports the git error and the existing skip handling for failed change materials applies
+
+<!-- @trace
+source: review-ignore-globs
+updated: 2026-07-23
+code:
+  - backend/src/summary.rs
+  - frontend/src/api.ts
+  - skills/scan-mrs-headless/WORKFLOW.md
+  - backend/src/server.rs
+  - skills/reviewer-batch/WORKFLOW.md
+  - backend/src/review_settings.rs
+  - backend/src/error.rs
+  - backend/src/report_chat.rs
+  - backend/migrations/017_review_settings.sql
+  - backend/src/executor.rs
+  - backend/migrations/016_people_folder_name.sql
+  - backend/src/person_trends.rs
+  - backend/src/mr_reviews.rs
+  - backend/src/lib.rs
+  - backend/src/reports.rs
+  - skills/reviewer-batch/output-contract.md
+  - frontend/src/types.ts
+  - backend/src/pending_items.rs
+  - frontend/src/pages/DashboardPage.tsx
+  - backend/src/identity.rs
+  - backend/src/runs.rs
+  - backend/src/mr_change_materials.rs
+  - backend/src/worker.rs
+tests:
+  - backend/tests/identity.rs
+  - frontend/src/pages/DashboardPage.reviewSettings.test.tsx
+  - backend/tests/review_settings.rs
+  - frontend/src/pages/DashboardPage.catchup.test.tsx
 -->

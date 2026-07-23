@@ -89,81 +89,61 @@ The backend SHALL expose `PATCH /api/people/{id}` accepting JSON `{ "display_nam
 
 The new `display_name` MUST be trimmed and non-empty. Empty names MUST return HTTP 400. Duplicate names belonging to another person MUST return HTTP 409.
 
-On success the backend MUST update `people.display_name`. If `{DATA_ROOT_DIR}/reports/_people/{old_display_name}/` exists, the backend MUST rename that directory to `{DATA_ROOT_DIR}/reports/_people/{new_display_name}/`. If the destination directory already exists, the backend MUST return HTTP 409 and MUST NOT change the database row.
+On success the backend MUST update `people.display_name` only. The backend MUST NOT change `people.folder_name`, MUST NOT rename any directory under `reports/_people/` or `reports/{project_name}/`, and MUST NOT rewrite stored `reports.summary_md_path` or `reports.report_md_path` values. Because report paths are keyed by the immutable `folder_name`, a rename MUST leave every existing report path valid without any filesystem operation.
 
-If the directory rename fails after a database update, the backend MUST roll back `people.display_name` to the previous value and return an error status.
+The backend MUST NOT delete people via this change.
 
-The backend MUST NOT delete people via this change. The backend MUST NOT rename project-level report directories under `reports/{project_name}/{display_name}/`.
+#### Scenario: Rename updates display name without moving directories
 
-#### Scenario: Rename updates database and people directory
+- **GIVEN** person "Alice" with `folder_name` "Alice", `reports/_people/Alice/` and `reports/crm/Alice/` present
+- **WHEN** a client patches display_name to "Alice Chen"
+- **THEN** `people.display_name` is "Alice Chen" and `people.folder_name` remains "Alice"
+- **AND** the directories `reports/_people/Alice/` and `reports/crm/Alice/` are unchanged and not renamed
 
-- **GIVEN** person "Alice" with `reports/_people/Alice/` present
-- **WHEN** a client patches display_name to `Alice Chen`
-- **THEN** `people.display_name` is `Alice Chen`
-- **AND** the directory is renamed to `reports/_people/Alice Chen/`
+#### Scenario: Renamed person still resolves for existing reports
 
-#### Scenario: Rename rejects colliding destination directory
-
-- **GIVEN** person "Alice" and an existing directory `reports/_people/Alice Chen/`
-- **WHEN** a client patches Alice's display_name to `Alice Chen`
-- **THEN** the response status is 409
-- **AND** `people.display_name` remains `Alice`
+- **GIVEN** person "Alice" (folder_name "Alice") with a stored report under `reports/crm/Alice/`
+- **WHEN** the client renames display_name to "Alice Chen"
+- **THEN** the stored `reports.summary_md_path` remains valid and the report is still readable
 
 #### Scenario: Rename rejects duplicate display name
 
 - **GIVEN** people "Alice" and "Bob"
-- **WHEN** a client patches Bob's display_name to `Alice`
+- **WHEN** a client patches Bob's display_name to "Alice"
 - **THEN** the response status is 409
 
 
 <!-- @trace
-source: people-settings-ui
-updated: 2026-07-11
+source: people-folder-name
+updated: 2026-07-23
 code:
-  - .kiro/prompts/spectra-commit.prompt.md
-  - backend/migrations/010_pending_items_indexes.sql
-  - .spectra.yaml
-  - .kiro/skills/spectra-discuss/SKILL.md
-  - docs/idea/schema.md
-  - .kiro/skills/spectra-commit/SKILL.md
-  - backend/src/dashboard.rs
-  - frontend/src/style.css
-  - .kiro/skills/spectra-drift/SKILL.md
-  - backend/src/error.rs
-  - backend/src/lib.rs
-  - .kiro/skills/spectra-audit/SKILL.md
-  - .kiro/prompts/spectra-ingest.prompt.md
-  - frontend/src/api.ts
+  - frontend/src/pages/PeoplePage.tsx
+  - frontend/src/lib/format.ts
+  - backend/src/executor.rs
   - backend/src/reports.rs
-  - .kiro/skills/spectra-apply/SKILL.md
-  - .kiro/prompts/spectra-debug.prompt.md
-  - backend/src/pending_items.rs
-  - .kiro/prompts/spectra-propose.prompt.md
-  - .kiro/skills/spectra-archive/SKILL.md
-  - .kiro/prompts/spectra-archive.prompt.md
-  - README.md
-  - .kiro/skills/spectra-propose/SKILL.md
-  - backend/src/server.rs
-  - frontend/src/types.ts
-  - .kiro/prompts/spectra-drift.prompt.md
-  - .kiro/skills/spectra-ingest/SKILL.md
-  - .kiro/prompts/spectra-discuss.prompt.md
+  - skills/reviewer-batch/WORKFLOW.md
+  - backend/migrations/016_people_folder_name.sql
   - backend/src/identity.rs
-  - .kiro/skills/spectra-debug/SKILL.md
-  - backend/src/summary.rs
-  - docs/idea/roadmap-workflow-growth.md
-  - frontend/src/app.ts
-  - .kiro/prompts/spectra-audit.prompt.md
-  - .kiro/prompts/spectra-apply.prompt.md
-  - .kiro/skills/spectra-ask/SKILL.md
+  - README.md
+  - backend/src/runs.rs
+  - skills/reviewer-batch/output-contract.md
+  - backend/src/worker.rs
+  - backend/src/pending_items.rs
+  - backend/src/server.rs
+  - backend/src/report_chat.rs
+  - backend/src/error.rs
+  - backend/migrations/015_run_projects_person.sql
+  - frontend/src/api.ts
+  - backend/src/mr_reviews.rs
   - backend/src/person_trends.rs
-  - .kiro/prompts/spectra-ask.prompt.md
+  - backend/src/summary.rs
 tests:
-  - backend/tests/person_trends.rs
-  - backend/tests/identity.rs
-  - backend/tests/pending_items.rs
-  - backend/tests/report_reader.rs
+  - backend/tests/executor_cancellation.rs
   - backend/tests/runs_execution.rs
+  - frontend/src/pages/PeoplePage.rerun.test.tsx
+  - backend/tests/identity.rs
+  - backend/tests/mr_reviews.rs
+  - backend/tests/run_cancellation.rs
 -->
 
 ---

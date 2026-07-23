@@ -86,14 +86,14 @@ pub async fn ingest_project_summaries(
     Ok(())
 }
 
-/// Re-scan `summary.md` files under each `reports/<project>/<display_name>/` for one person
+/// Re-scan `summary.md` files under each `reports/<project>/<folder_name>/` for one person
 /// and upsert into DB. Preserves existing `run_id` when a report row already exists; for a new
 /// row uses the person's latest `run_id` on that project. Failures are returned as warnings.
 pub async fn reingest_person_summaries(
     pool: &SqlitePool,
     data_root: &Path,
     person_id: i64,
-    display_name: &str,
+    folder_name: &str,
 ) -> Vec<String> {
     let mut warnings = Vec::new();
     let reports_root = data_root.join("reports");
@@ -133,7 +133,7 @@ pub async fn reingest_person_summaries(
             continue;
         }
 
-        let person_dir = entry.path().join(display_name);
+        let person_dir = entry.path().join(folder_name);
         if !person_dir.is_dir() {
             continue;
         }
@@ -163,7 +163,7 @@ pub async fn reingest_person_summaries(
             Ok(files) => files,
             Err(err) => {
                 warnings.push(format!(
-                    "failed to list summaries for {project_name}/{display_name}: {err}"
+                    "failed to list summaries for {project_name}/{folder_name}: {err}"
                 ));
                 continue;
             }
@@ -260,8 +260,10 @@ async fn upsert_summary(
     run_id: i64,
     parsed: &ParsedSummary,
 ) -> Result<(), Error> {
+    // frontmatter `person` carries the immutable folder_name, so ingest resolves
+    // by folder_name and keeps working after a display_name rename.
     let Some(person_id) =
-        identity::resolve_person_id_by_display_name(pool, &parsed.frontmatter.person).await?
+        identity::resolve_person_id_by_folder_name(pool, &parsed.frontmatter.person).await?
     else {
         warn!(
             person = %parsed.frontmatter.person,

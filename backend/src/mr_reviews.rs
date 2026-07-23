@@ -538,13 +538,15 @@ async fn resolve_person_id(pool: &SqlitePool, author_identity: &str) -> Result<O
 
 /// Canonical folder name under `reports/{project}/` for MR observation snippets.
 ///
-/// Returns `Some(people.display_name)` only — never a raw GitLab username / email
-/// identity string. Callers MUST skip the MR when this returns `None` rather than
-/// inventing a folder from `author_identity` (that bug created orphan username dirs).
+/// Returns `Some(people.folder_name)` only — never a raw GitLab username / email
+/// identity string. `folder_name` is the immutable path key, so snippets land in
+/// the same directory the weekly track reads regardless of later renames. Callers
+/// MUST skip the MR when this returns `None` rather than inventing a folder from
+/// `author_identity` (that bug created orphan username dirs).
 ///
 /// Resolution order:
-/// 1. `people.display_name` from `author_identity` (email / gitlab_user / glab_user)
-/// 2. unique `display_name` among bound commit author emails (`git_email`)
+/// 1. `people.folder_name` from `author_identity` (email / gitlab_user / glab_user)
+/// 2. unique person among bound commit author emails (`git_email`)
 /// 3. `None` (ambiguous authors, unbound identity, or empty input)
 pub async fn resolve_observation_person_folder(
     pool: &SqlitePool,
@@ -554,37 +556,37 @@ pub async fn resolve_observation_person_folder(
     let trimmed = author_identity.trim();
     if !trimmed.is_empty() {
         if let Some(person_id) = resolve_person_id(pool, trimmed).await? {
-            if let Some(name) = display_name_for_person(pool, person_id).await? {
+            if let Some(name) = folder_name_for_person(pool, person_id).await? {
                 return Ok(Some(name));
             }
         }
     }
 
-    let mut unique_names: Vec<String> = Vec::new();
+    let mut unique_folders: Vec<(i64, String)> = Vec::new();
     for email in commit_author_emails {
         let Some(person) = identity::resolve_person_by_email(pool, email).await? else {
             continue;
         };
-        let name = person.display_name.trim();
-        if name.is_empty() {
+        let folder = person.folder_name.trim();
+        if folder.is_empty() {
             continue;
         }
-        if !unique_names.iter().any(|existing| existing == name) {
-            unique_names.push(person.display_name);
+        if !unique_folders.iter().any(|(id, _)| *id == person.person_id) {
+            unique_folders.push((person.person_id, person.folder_name));
         }
     }
-    if unique_names.len() == 1 {
-        return Ok(Some(unique_names.remove(0)));
+    if unique_folders.len() == 1 {
+        return Ok(Some(unique_folders.remove(0).1));
     }
 
     Ok(None)
 }
 
-async fn display_name_for_person(
+async fn folder_name_for_person(
     pool: &SqlitePool,
     person_id: i64,
 ) -> Result<Option<String>, Error> {
-    let name: Option<String> = sqlx::query_scalar("SELECT display_name FROM people WHERE id = ?")
+    let name: Option<String> = sqlx::query_scalar("SELECT folder_name FROM people WHERE id = ?")
         .bind(person_id)
         .fetch_optional(pool)
         .await

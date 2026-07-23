@@ -69,11 +69,17 @@ pub fn write_stub_change_materials(out_dir: &Path) -> Result<ChangeMaterialPaths
 }
 
 /// Fetch `origin/<target_branch>` then write log / stat / capped diff under `out_dir`.
+///
+/// `ignore_globs` holds raw patterns from the global review settings. They are
+/// applied **only** to the diff that produces `change.diff`: `--stat` and `log`
+/// stay unfiltered so an ignored file remains visible by name and size, and the
+/// agent can still pull its diff for a single path when it matters.
 pub async fn prepare_change_materials(
     worktree: &Path,
     target_branch: &str,
     out_dir: &Path,
     max_diff_bytes: usize,
+    ignore_globs: &[String],
 ) -> Result<ChangeMaterialPaths, ChangeMaterialsError> {
     let tb = target_branch.trim();
     if tb.is_empty() {
@@ -105,13 +111,7 @@ pub async fn prepare_change_materials(
             stat.stderr.trim().to_string(),
         ));
     }
-    let diff = run_git(worktree, &["diff", &range]).await?;
-    if !diff.success {
-        return Err(ChangeMaterialsError::Git(
-            "diff".into(),
-            diff.stderr.trim().to_string(),
-        ));
-    }
+    let diff = run_filtered_diff(worktree, &range, ignore_globs).await?;
 
     let (diff_bytes, diff_truncated) = truncate_diff(&diff.stdout, max_diff_bytes);
 
@@ -164,13 +164,53 @@ pub async fn list_commit_authors(
     Ok(emails)
 }
 
+/// Run the range diff with exclude pathspecs, falling back to an unfiltered
+/// diff if git rejects them.
+///
+/// The ignore list is operator-entered, so one bad pattern would otherwise make
+/// every MR in the run fail its change materials and get skipped with nothing
+/// but a warning line. A degraded (unfiltered) diff beats a skipped review.
+async fn run_filtered_diff(
+    worktree: &Path,
+    range: &str,
+    ignore_globs: &[String],
+) -> Result<GitCapture, ChangeMaterialsError> {
+    let excludes = crate::review_settings::to_exclude_pathspecs(ignore_globs);
+    if !excludes.is_empty() {
+        let mut args: Vec<String> = vec!["diff".into(), range.to_string(), "--".into(), ".".into()];
+        args.extend(excludes);
+        let filtered = run_git(worktree, &args).await?;
+        if filtered.success {
+            return Ok(filtered);
+        }
+        tracing::warn!(
+            range = %range,
+            ignore_globs = ?ignore_globs,
+            stderr = %filtered.stderr.trim(),
+            "diff with ignore pathspecs failed; retrying unfiltered"
+        );
+    }
+
+    let diff = run_git(worktree, &["diff", range]).await?;
+    if !diff.success {
+        return Err(ChangeMaterialsError::Git(
+            "diff".into(),
+            diff.stderr.trim().to_string(),
+        ));
+    }
+    Ok(diff)
+}
+
 struct GitCapture {
     success: bool,
     stdout: Vec<u8>,
     stderr: String,
 }
 
-async fn run_git(cwd: &Path, args: &[&str]) -> Result<GitCapture, ChangeMaterialsError> {
+async fn run_git<S: AsRef<std::ffi::OsStr>>(
+    cwd: &Path,
+    args: &[S],
+) -> Result<GitCapture, ChangeMaterialsError> {
     let output = Command::new("git")
         .args(args)
         .current_dir(cwd)
@@ -268,7 +308,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("temp");
         let work = fixture_feature_worktree(temp.path());
         let out = temp.path().join("materials");
-        let paths = prepare_change_materials(&work, "main", &out, DEFAULT_DIFF_MAX_BYTES)
+        let paths = prepare_change_materials(&work, "main", &out, DEFAULT_DIFF_MAX_BYTES, &[])
             .await
             .expect("prepare");
 
@@ -315,7 +355,7 @@ mod tests {
         git(&["commit", "-m", "big"], &work);
 
         let out = temp.path().join("materials");
-        let paths = prepare_change_materials(&work, "main", &out, 512)
+        let paths = prepare_change_materials(&work, "main", &out, 512, &[])
             .await
             .expect("prepare");
         assert!(paths.diff_truncated);
@@ -327,9 +367,96 @@ mod tests {
     #[tokio::test]
     async fn prepare_rejects_empty_target() {
         let temp = tempfile::tempdir().expect("temp");
-        let err = prepare_change_materials(temp.path(), "  ", temp.path(), 100)
+        let err = prepare_change_materials(temp.path(), "  ", temp.path(), 100, &[])
             .await
             .expect_err("empty");
         assert!(matches!(err, ChangeMaterialsError::EmptyTargetBranch));
+    }
+
+    /// Feature branch touching both a source file and a lock file, so the
+    /// ignore rule has something to bite on and something to leave alone.
+    fn fixture_with_lock_file(root: &Path) -> PathBuf {
+        let work = fixture_feature_worktree(root);
+        std::fs::create_dir_all(work.join("deps")).expect("deps dir");
+        std::fs::write(work.join("deps/foo.lock"), "lockedcontent\n").expect("lock");
+        std::fs::write(work.join("src.rs"), "fn main() {}\n").expect("src");
+        git(&["add", "-A"], &work);
+        git(&["commit", "-m", "lock and source"], &work);
+        work
+    }
+
+    #[tokio::test]
+    async fn ignored_file_leaves_diff_but_stays_in_stat() {
+        let temp = tempfile::tempdir().expect("temp");
+        let work = fixture_with_lock_file(temp.path());
+        let out = temp.path().join("materials");
+        let globs = vec!["*.lock".to_string()];
+
+        let paths = prepare_change_materials(&work, "main", &out, DEFAULT_DIFF_MAX_BYTES, &globs)
+            .await
+            .expect("prepare");
+
+        let diff = std::fs::read_to_string(&paths.change_diff_path).expect("diff");
+        let stat = std::fs::read_to_string(&paths.change_stat_path).expect("stat");
+        assert!(diff.contains("src.rs"), "source file must stay in diff: {diff}");
+        assert!(
+            !diff.contains("foo.lock"),
+            "ignored file must not appear in diff: {diff}"
+        );
+        assert!(
+            stat.contains("foo.lock"),
+            "ignored file must remain visible in stat: {stat}"
+        );
+        assert!(stat.contains("src.rs"), "stat={stat}");
+    }
+
+    #[tokio::test]
+    async fn empty_ignore_list_matches_unfiltered_diff() {
+        let temp = tempfile::tempdir().expect("temp");
+        let work = fixture_with_lock_file(temp.path());
+
+        let filtered = prepare_change_materials(
+            &work,
+            "main",
+            &temp.path().join("with-empty"),
+            DEFAULT_DIFF_MAX_BYTES,
+            &[],
+        )
+        .await
+        .expect("prepare");
+        let baseline = run_git(&work, &["diff", "origin/main...HEAD"])
+            .await
+            .expect("baseline diff");
+
+        let produced = std::fs::read(&filtered.change_diff_path).expect("diff bytes");
+        assert_eq!(produced, baseline.stdout);
+    }
+
+    #[tokio::test]
+    async fn malformed_pathspec_degrades_to_unfiltered_diff() {
+        let temp = tempfile::tempdir().expect("temp");
+        let work = fixture_with_lock_file(temp.path());
+        // `:(exclude)` + a second magic prefix is what an operator-entered
+        // pattern would produce if it slipped past validation; git rejects it.
+        let globs = vec![":(glob)*.lock".to_string()];
+
+        let paths = prepare_change_materials(
+            &work,
+            "main",
+            &temp.path().join("materials"),
+            DEFAULT_DIFF_MAX_BYTES,
+            &globs,
+        )
+        .await
+        .expect("must not fail the MR over a bad pattern");
+
+        let diff = std::fs::read(&paths.change_diff_path).expect("diff bytes");
+        let baseline = run_git(&work, &["diff", "origin/main...HEAD"])
+            .await
+            .expect("baseline diff");
+        assert_eq!(
+            diff, baseline.stdout,
+            "degraded diff must equal the unfiltered diff"
+        );
     }
 }

@@ -281,6 +281,7 @@ pub fn build_report_chat_command(
     config: &AppConfig,
     working_dir: &Path,
     session_id: Option<&str>,
+    folder_name: &str,
     display_name: &str,
     message: &str,
     agent: ReviewerAgent,
@@ -294,7 +295,7 @@ pub fn build_report_chat_command(
         return Ok(Command::new(program));
     }
 
-    let prompt = report_chat_prompt(config.data_dir(), display_name, message);
+    let prompt = report_chat_prompt(config.data_dir(), folder_name, display_name, message);
 
     match agent {
         ReviewerAgent::Claude => {
@@ -341,6 +342,7 @@ pub async fn execute_report_chat_turn(
     config: &AppConfig,
     working_dir: &Path,
     session_id: Option<&str>,
+    folder_name: &str,
     display_name: &str,
     message: &str,
     agent: ReviewerAgent,
@@ -350,6 +352,7 @@ pub async fn execute_report_chat_turn(
         config,
         working_dir,
         session_id,
+        folder_name,
         display_name,
         message,
         agent,
@@ -387,12 +390,17 @@ pub async fn execute_report_chat_turn(
     Ok((reply, new_session))
 }
 
-fn report_chat_prompt(data_root: &Path, display_name: &str, message: &str) -> String {
+fn report_chat_prompt(
+    data_root: &Path,
+    folder_name: &str,
+    display_name: &str,
+    message: &str,
+) -> String {
     format!(
         "You are helping a manager edit engineer report artifacts for \"{display_name}\".\n\
          Allowed write roots under the data root only:\n\
-         - reports/<project>/{display_name}/\n\
-         - reports/_people/{display_name}/\n\
+         - reports/<project>/{folder_name}/\n\
+         - reports/_people/{folder_name}/\n\
          Do not edit MR drafts, runs/, other people, or call GitLab.\n\
          Do not edit project ADR .notes unless the path is under the allowed roots above.\n\
          Data root: {}\n\n\
@@ -1094,6 +1102,7 @@ mod tests {
             config.data_dir(),
             None,
             "Alice",
+            "Alice",
             "please edit summary",
             ReviewerAgent::Claude,
         )
@@ -1113,6 +1122,7 @@ mod tests {
             &config,
             config.data_dir(),
             Some("report-sess-1"),
+            "Bob",
             "Bob",
             "tweak growth",
             ReviewerAgent::Cursor,

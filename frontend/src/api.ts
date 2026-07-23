@@ -17,6 +17,7 @@ import type {
   ProjectListItem,
   ProjectUpdateInput,
   ReloadProjectsResponse,
+  ReviewSettings,
   RunStatus,
   RunsListResponse,
   ScheduleConfigResponse,
@@ -283,6 +284,18 @@ export function startMrScan(projectId: number, options?: { force?: boolean }): P
 export function updateSchedule(body: ScheduleUpdateInput): Promise<ScheduleConfigResponse> {
   return request('/api/schedule', {
     method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+export function getReviewSettings(): Promise<ReviewSettings> {
+  return request('/api/review-settings')
+}
+
+export function updateReviewSettings(body: ReviewSettings): Promise<ReviewSettings> {
+  return request('/api/review-settings', {
+    method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })

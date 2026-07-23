@@ -11,6 +11,7 @@ pub mod person_trends;
 pub mod projects;
 pub mod report_chat;
 pub mod reports;
+pub mod review_settings;
 pub mod runs;
 pub mod schedule;
 pub mod server;

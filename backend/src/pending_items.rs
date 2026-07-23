@@ -134,13 +134,13 @@ pub async fn resolve_pending_item(
         .await?
         .ok_or(Error::NotFound)?;
 
-    let display_name: String = sqlx::query_scalar("SELECT display_name FROM people WHERE id = ?")
+    let folder_name: String = sqlx::query_scalar("SELECT folder_name FROM people WHERE id = ?")
         .bind(item.person_id)
         .fetch_one(pool)
         .await
         .map_err(Error::Database)?;
 
-    let notes_path = crate::person_trends::person_trends_dir(data_root, &display_name)
+    let notes_path = crate::person_trends::person_trends_dir(data_root, &folder_name)
         .join("_notes.md");
     if let Err(err) = sync_notes_file(&notes_path, &item) {
         warn!(

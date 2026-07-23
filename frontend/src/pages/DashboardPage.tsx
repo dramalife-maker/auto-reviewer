@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import {
   catchUpSchedule,
   fetchDashboard,
+  getReviewSettings,
   startManualRun,
+  updateReviewSettings,
   updateSchedule,
 } from '../api'
 import { Button, Card, Input, ListRow, StatCard, StatusPill } from '../components/ui'
@@ -68,6 +70,8 @@ export function DashboardPage() {
   const [scheduleSaving, setScheduleSaving] = useState(false)
   const [catchUpLoading, setCatchUpLoading] = useState(false)
   const [dismissVersion, setDismissVersion] = useState(0)
+  const [ignoreGlobsText, setIgnoreGlobsText] = useState('')
+  const [ignoreGlobsSaving, setIgnoreGlobsSaving] = useState(false)
   const [scheduleForm, setScheduleForm] = useState<ScheduleUpdateInput>({
     enabled: true,
     weekday: 0,
@@ -100,6 +104,24 @@ export function DashboardPage() {
   useEffect(() => {
     void loadDashboard()
   }, [loadDashboard])
+
+  // Load once. Depending on `toast` would refetch on every toast (its context
+  // value changes with the message) and overwrite whatever is being edited.
+  const toastRef = useRef(toast)
+  toastRef.current = toast
+  useEffect(() => {
+    void (async () => {
+      try {
+        const settings = await getReviewSettings()
+        setIgnoreGlobsText(settings.ignore_globs.join('\n'))
+      } catch (error) {
+        toastRef.current.show(
+          error instanceof Error ? error.message : '無法載入 Review 過濾設定',
+          true,
+        )
+      }
+    })()
+  }, [])
 
   useEffect(() => {
     const schedule = dashboard?.schedule
@@ -209,6 +231,21 @@ export function DashboardPage() {
       toast.show(error instanceof Error ? error.message : '儲存排程失敗', true)
     } finally {
       setScheduleSaving(false)
+    }
+  }
+
+  // Send lines verbatim: trimming, dedupe, and the rejection rules all live in
+  // the backend, so it stays the single authority on what a valid list is.
+  async function handleIgnoreGlobsSave() {
+    setIgnoreGlobsSaving(true)
+    try {
+      const saved = await updateReviewSettings({ ignore_globs: ignoreGlobsText.split('\n') })
+      setIgnoreGlobsText(saved.ignore_globs.join('\n'))
+      toast.show('忽略清單已儲存。下一場 run 生效。')
+    } catch (error) {
+      toast.show(error instanceof Error ? error.message : '儲存忽略清單失敗', true)
+    } finally {
+      setIgnoreGlobsSaving(false)
     }
   }
 
@@ -407,6 +444,32 @@ export function DashboardPage() {
         </div>
         <p className="mt-5 border-t border-border-subtle pt-4 text-xs text-ink-muted">
           影響 cron 的欄位需重啟 reviewer-server；逾時與並發於下一場 run 即生效。
+        </p>
+      </Card>
+
+      <Card className="p-5">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-[16px] font-semibold text-ink">Review 過濾</h2>
+          <Button
+            variant="primary"
+            onClick={handleIgnoreGlobsSave}
+            disabled={ignoreGlobsSaving}
+          >
+            {ignoreGlobsSaving ? '儲存中...' : '儲存忽略清單'}
+          </Button>
+        </div>
+        <p className="mt-2 text-[13px] text-ink-muted">
+          每行一條 git pathspec。符合的檔案不會出現在 MR review 的 diff 內容中，但仍會列在變更統計裡。
+        </p>
+        <textarea
+          aria-label="忽略清單"
+          className="mt-3 h-32 w-full rounded-md border border-border bg-surface px-3 py-2 font-mono text-[13px] text-ink"
+          placeholder={'*.lock\n*.pb.go\nvendor/**'}
+          value={ignoreGlobsText}
+          onChange={(event) => setIgnoreGlobsText(event.target.value)}
+        />
+        <p className="mt-2 text-xs text-ink-muted">
+          留空表示不過濾。變更於下一場 run 生效。
         </p>
       </Card>
     </div>

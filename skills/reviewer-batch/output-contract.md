@@ -12,7 +12,7 @@
 ```
 
 - `{report_root}` ← manifest `report_root`
-- `{person}` ← manifest `authors[].display_name`（canonical 顯示名；與目錄名一致）
+- `{person}` ← manifest `authors[].folder_name`（不可變路徑鍵；即目錄名。**非** `display_name`）
 - `{run_date}` ← manifest `run_date`（與 frontmatter `date` 一致）
 
 同目錄必須另有 `report.md`（完整版，格式自由）。
@@ -52,7 +52,7 @@ commit_count: 18
 
 | 鍵 | 必填 | 型別 | 說明 |
 |----|------|------|------|
-| `person` | 是 | string | 工程師 canonical 顯示名；**必須**等於 manifest `authors[].display_name` 與 `{person}` 目錄名 |
+| `person` | 是 | string | 工程師不可變路徑鍵；**必須**等於 manifest `authors[].folder_name` 與 `{person}` 目錄名。**不可**使用 `display_name`（顯示名可能已改，僅供正文稱呼） |
 | `project` | 是 | string | 必須等於 manifest `project_name` |
 | `date` | 是 | string | `YYYY-MM-DD`；必須等於 manifest `run_date` |
 | `one_line` | 是 | string | 一兩句話摘要 |
@@ -99,7 +99,7 @@ Bullet 規則：
 | 產出 | 寫入 |
 |------|------|
 | frontmatter | `reports.one_line`, `mr_count`, `commit_count`, 路徑 |
-| `person` | 查既有 `people.display_name`；未知則跳過該 summary |
+| `person` | 查既有 `people.folder_name`；未知則跳過該 summary |
 | `## 待確認` bullets | `pending_items`（`raised_date` = `date` 的 `YYYY-MM`） |
 | `## 已釐清` bullets | 匹配 open 列 → `status=resolved` + 同步 `_notes.md` |
 | 檔案路徑 | `reports.summary_md_path`, `reports.report_md_path` |
